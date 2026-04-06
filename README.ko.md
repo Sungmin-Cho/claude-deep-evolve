@@ -18,6 +18,12 @@ Claude Code용 자율 실험 플러그인. 목표를 지정하면 deep-evolve가
 /deep-evolve 50
 ```
 
+## 영감
+
+이 프로젝트는 Andrej Karpathy의 [autoresearch](https://github.com/karpathy/autoresearch)에서 영감을 받았습니다 — LLM이 자율적으로 코드를 수정하고, 모델을 훈련하고, 결과를 평가하고, 변경 사항을 유지하거나 폐기하는 실험입니다.
+
+deep-evolve는 이 방법론을 ML 훈련에서 모든 소프트웨어 프로젝트로 일반화하여, 자동 평가 harness 생성, journal 기반 crash recovery, 다중 도메인 템플릿 지원을 갖춘 Claude Code 플러그인으로 패키징했습니다.
+
 ## 방법론
 
 세 가지 도메인에서 검증됨:

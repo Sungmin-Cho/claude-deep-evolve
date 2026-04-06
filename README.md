@@ -18,6 +18,12 @@ Autonomous experimentation plugin for Claude Code. Specify a goal, and deep-evol
 /deep-evolve 50
 ```
 
+## Inspiration
+
+This project is inspired by [autoresearch](https://github.com/karpathy/autoresearch) by Andrej Karpathy — an experiment to have LLMs do their own research by autonomously modifying code, training models, evaluating results, and keeping or discarding changes.
+
+deep-evolve generalizes this methodology from ML training to any software project, packaging it as a Claude Code plugin with automatic evaluation harness generation, journal-based crash recovery, and multi-domain template support.
+
 ## Methodology
 
 Validated across three domains:
