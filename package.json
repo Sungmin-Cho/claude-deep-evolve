@@ -1,0 +1,26 @@
+{
+  "name": "@deep-evolve/deep-evolve",
+  "version": "1.0.0",
+  "description": "Autonomous Experimentation Plugin for Claude Code — goal-driven experiment loops with autoresearch methodology",
+  "author": "sungmin",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sungmin-Cho/deep-evolve.git"
+  },
+  "keywords": [
+    "claude-code",
+    "claude-code-plugin",
+    "deep-evolve",
+    "autoresearch",
+    "experiment-loop",
+    "autonomous"
+  ],
+  "files": [
+    ".claude-plugin/",
+    "commands/",
+    "hooks/",
+    "skills/",
+    "templates/"
+  ]
+}

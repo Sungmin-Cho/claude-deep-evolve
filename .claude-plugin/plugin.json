@@ -1,0 +1,20 @@
+{
+  "name": "deep-evolve",
+  "version": "1.0.0",
+  "description": "Autonomous Experimentation Protocol — goal-driven experiment loops that systematically improve any project through measured code modifications",
+  "author": {
+    "name": "sungmin"
+  },
+  "repository": "https://github.com/Sungmin-Cho/deep-evolve",
+  "license": "MIT",
+  "keywords": [
+    "autonomous",
+    "experiment",
+    "autoresearch",
+    "optimization",
+    "evolution",
+    "auto-improve",
+    "experiment-loop",
+    "metric-driven"
+  ]
+}
