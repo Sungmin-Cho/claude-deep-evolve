@@ -1,0 +1,17 @@
+{
+  "description": "Protect immutable files during deep-evolve experiment runs (v1.0)",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_TOOL_NAME=$CLAUDE_TOOL_USE_TOOL_NAME bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/protect-readonly.sh",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}
