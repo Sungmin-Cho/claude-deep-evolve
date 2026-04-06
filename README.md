@@ -1,3 +1,5 @@
+**English** | [한국어](./README.ko.md)
+
 # deep-evolve
 
 Autonomous experimentation plugin for Claude Code. Specify a goal, and deep-evolve systematically improves your project through measured experiment loops.

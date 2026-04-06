@@ -1,3 +1,5 @@
+[English](./README.md) | **한국어**
+
 # deep-evolve
 
 Claude Code용 자율 실험 플러그인. 목표를 지정하면 deep-evolve가 측정 기반 실험 루프를 통해 프로젝트를 체계적으로 개선합니다.
