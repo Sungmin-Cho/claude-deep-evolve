@@ -188,12 +188,11 @@ harness는 항상 표준화된 형식으로 출력하여 실험 루프가 도메
 ## 설치
 
 ```bash
-# 로컬 디렉토리에서
-claude plugin add /path/to/deep-evolve
-
-# 또는 로컬 마켓플레이스에 심볼릭 링크
-ln -s /path/to/deep-evolve ~/.claude/local-marketplace/plugins/deep-evolve
+git clone https://github.com/Sungmin-Cho/claude-deep-evolve.git ~/.claude/plugins/deep-evolve
+ln -s ~/.claude/plugins/deep-evolve ~/.claude/local-marketplace/plugins/deep-evolve
 ```
+
+이후 Claude Code를 재시작하거나 `/reload-plugins`를 실행하세요.
 
 ## 라이선스
 

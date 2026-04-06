@@ -189,12 +189,11 @@ Then asks: merge to main, create PR, keep branch, or discard?
 ## Installation
 
 ```bash
-# From local directory
-claude plugin add /path/to/deep-evolve
-
-# Or symlink to local marketplace
-ln -s /path/to/deep-evolve ~/.claude/local-marketplace/plugins/deep-evolve
+git clone https://github.com/Sungmin-Cho/claude-deep-evolve.git ~/.claude/plugins/deep-evolve
+ln -s ~/.claude/plugins/deep-evolve ~/.claude/local-marketplace/plugins/deep-evolve
 ```
+
+Then restart Claude Code or run `/reload-plugins`.
 
 ## License
 
