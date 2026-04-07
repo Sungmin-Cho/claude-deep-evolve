@@ -189,12 +189,29 @@ harness는 항상 표준화된 형식으로 출력하여 실험 루프가 도메
 
 ## 설치
 
+### 사전 요구사항
+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI 설치 및 설정 완료
+
+### Deep Suite 마켓플레이스 (권장)
+
 ```bash
-git clone https://github.com/Sungmin-Cho/claude-deep-evolve.git ~/.claude/plugins/deep-evolve
-ln -s ~/.claude/plugins/deep-evolve ~/.claude/local-marketplace/plugins/deep-evolve
+# 1. 마켓플레이스 추가
+/plugin marketplace add Sungmin-Cho/claude-deep-suite
+
+# 2. 플러그인 설치
+/plugin install deep-evolve@Sungmin-Cho-claude-deep-suite
 ```
 
-이후 Claude Code를 재시작하거나 `/reload-plugins`를 실행하세요.
+### 단독 설치
+
+```bash
+# 1. 이 레포를 마켓플레이스로 추가
+/plugin marketplace add Sungmin-Cho/claude-deep-evolve
+
+# 2. 설치
+/plugin install deep-evolve@Sungmin-Cho-claude-deep-evolve
+```
 
 ## 라이선스
 

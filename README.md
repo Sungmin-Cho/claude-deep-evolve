@@ -190,12 +190,29 @@ Then asks: merge to main, create PR, keep branch, or discard?
 
 ## Installation
 
+### Prerequisites
+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed and configured
+
+### Via Deep Suite marketplace (recommended)
+
 ```bash
-git clone https://github.com/Sungmin-Cho/claude-deep-evolve.git ~/.claude/plugins/deep-evolve
-ln -s ~/.claude/plugins/deep-evolve ~/.claude/local-marketplace/plugins/deep-evolve
+# 1. Add the marketplace
+/plugin marketplace add Sungmin-Cho/claude-deep-suite
+
+# 2. Install the plugin
+/plugin install deep-evolve@Sungmin-Cho-claude-deep-suite
 ```
 
-Then restart Claude Code or run `/reload-plugins`.
+### Standalone
+
+```bash
+# 1. Add this repo as a marketplace
+/plugin marketplace add Sungmin-Cho/claude-deep-evolve
+
+# 2. Install
+/plugin install deep-evolve@Sungmin-Cho-claude-deep-evolve
+```
 
 ## License
 
