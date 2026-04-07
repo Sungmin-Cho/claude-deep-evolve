@@ -18,9 +18,13 @@ The autoresearch methodology revolves around a strict separation of concerns:
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  prepare.py    — Fixed evaluation infrastructure    │
+│  eval harness  — Fixed evaluation infrastructure    │
 │                  The ground truth. Never modified    │
 │                  by the agent during experiments.    │
+│                                                     │
+│  Two forms:                                         │
+│  • prepare.py          — CLI-based metrics          │
+│  • prepare-protocol.md — MCP/tool-based protocol    │
 ├─────────────────────────────────────────────────────┤
 │  target files  — The code being improved            │
 │                  Everything is fair game:            │
@@ -135,7 +139,9 @@ No guessing — every judgment is grounded in actual file reads.
 
 ### 2. Evaluation Harness Generation
 
-Based on the analysis, deep-evolve generates a `prepare.py` tailored to your project:
+Based on the analysis, deep-evolve generates an evaluation harness tailored to your project:
+
+**CLI mode** (`prepare.py`):
 
 | Domain Signal | Template | Example |
 |---|---|---|
@@ -143,7 +149,15 @@ Based on the analysis, deep-evolve generates a `prepare.py` tailored to your pro
 | Test framework detected | test-runner | Web apps (jest), libraries (pytest, cargo test) |
 | Code quality / pattern goals | scenario-based | Plugin hooks, security patterns, lint rules |
 
-The harness always outputs a standardized format, making the experiment loop domain-independent.
+**Protocol mode** (`prepare-protocol.md`):
+
+| Domain Signal | Evaluation Tool | Example |
+|---|---|---|
+| Game engine project | MCP server | Unity replay verification, Unreal automation |
+| GUI / desktop app | Browser/app automation | UI state verification, accessibility testing |
+| External runtime dependency | MCP/HTTP calls | Data pipelines, hardware testing |
+
+Both modes output the same `score: X.XXXXXX` standardized format, making the experiment loop domain-independent.
 
 ### 3. Autonomous Experiment Loop
 
@@ -181,12 +195,24 @@ Then asks: merge to main, create PR, keep branch, or discard?
 
 ## Supported Domains
 
+### CLI mode (prepare.py)
+
 | Domain | Evaluator | Example Metrics |
 |--------|-----------|-----------------|
 | ML / Training | stdout metric parsing | val_bpb, loss, accuracy, perplexity |
 | Testing | Test pass rate + coverage | jest, pytest, vitest, cargo test, go test |
 | Code quality | Custom test scenarios | Security patterns, hook reliability, lint rules |
 | Strategy optimization | Backtest results | Sharpe ratio, max drawdown, composite score |
+
+### Protocol mode (prepare-protocol.md)
+
+| Domain | Evaluation Tool | Example Metrics |
+|--------|----------------|-----------------|
+| Game engines | Unity MCP, Unreal MCP | Replay accuracy, frame time, test pass rate |
+| GUI apps | Browser/app automation | UI state match rate, accessibility score |
+| External systems | MCP/HTTP calls | API accuracy, pipeline success rate |
+
+Protocol mode evaluates projects that cannot be assessed via CLI by using MCP servers, browser automation, external APIs, etc. The appropriate mode is automatically recommended during project analysis.
 
 ## Installation
 

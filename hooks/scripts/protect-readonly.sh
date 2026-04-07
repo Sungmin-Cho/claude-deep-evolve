@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # protect-readonly.sh — PreToolUse hook for deep-evolve (Codex review fix)
-# Blocks edits to prepare.py and program.md during active experiment runs.
+# Blocks edits to prepare.py, prepare-protocol.md, and program.md during active experiment runs.
 # Handles Write/Edit/MultiEdit (file_path) AND Bash (shell file write detection).
 # Exit 0 = allow, Exit 2 = block
 
@@ -47,11 +47,12 @@ TOOL_INPUT="$(cat)"
 # Protected paths (absolute)
 EVOLVE_DIR="$PROJECT_ROOT/.deep-evolve"
 PROTECTED_PREPARE="$EVOLVE_DIR/prepare.py"
+PROTECTED_PROTOCOL="$EVOLVE_DIR/prepare-protocol.md"
 PROTECTED_PROGRAM="$EVOLVE_DIR/program.md"
 
 block_protected() {
   cat <<JSON
-{"decision":"block","reason":"Deep Evolve Guard: 실험 진행 중에는 prepare.py와 program.md를 수정할 수 없습니다.\n\nprepare.py를 변경하려면 먼저 실험을 중단하고 /deep-evolve에서 'prepare.py 확장'을 선택하세요."}
+{"decision":"block","reason":"Deep Evolve Guard: 실험 진행 중에는 평가 harness(prepare.py/prepare-protocol.md)와 program.md를 수정할 수 없습니다.\n\n평가 harness를 변경하려면 먼저 실험을 중단하고 /deep-evolve에서 'prepare 확장'을 선택하세요."}
 JSON
   exit 2
 }
@@ -73,7 +74,7 @@ if [[ "$TOOL_NAME" != "Bash" ]]; then
   fi
 
   case "$FILE_PATH" in
-    "$PROTECTED_PREPARE"|"$PROTECTED_PROGRAM") block_protected ;;
+    "$PROTECTED_PREPARE"|"$PROTECTED_PROTOCOL"|"$PROTECTED_PROGRAM") block_protected ;;
   esac
   exit 0
 fi
@@ -89,7 +90,7 @@ if [[ -z "$COMMAND" ]]; then
 fi
 
 # Check if the bash command references protected files with write operations
-for PROTECTED in "prepare.py" "program.md" ".deep-evolve/prepare.py" ".deep-evolve/program.md"; do
+for PROTECTED in "prepare.py" "prepare-protocol.md" "program.md" ".deep-evolve/prepare.py" ".deep-evolve/prepare-protocol.md" ".deep-evolve/program.md"; do
   if echo "$COMMAND" | grep -qE "(>|>>|sed\s+-i|tee|cp|mv|chmod|chown|perl\s+.*-i)\s*.*$PROTECTED"; then
     block_protected
   fi

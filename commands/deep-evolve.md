@@ -6,7 +6,7 @@ description: |
   Supports init, resume, and completion workflows via state-based auto-routing.
 allowed_tools: all
 # Note: Bash tool is allowed but protect-readonly.sh hook intercepts shell writes
-# to .deep-evolve/prepare.py and program.md during active experiment runs.
+# to .deep-evolve/prepare.py, prepare-protocol.md, and program.md during active experiment runs.
 ---
 
 You are running the **deep-evolve** autonomous experimentation protocol.
@@ -46,17 +46,31 @@ Check if `.deep-evolve/session.yaml` exists in the current project root.
 Perform a 5-stage analysis of the current project. Every judgment must be grounded in actual file reads — no guessing.
 
 **Stage 1 — Structure Scan:**
-- Use Glob `**/*.*` to map the full file tree
-- Detect language/framework from config files (package.json, pyproject.toml, Cargo.toml, go.mod, requirements.txt, Gemfile, etc.)
-- Identify entry point files (main, index, app, train, etc.)
+- Use Glob `**/*` to map the full file tree (NOT `**/*.*` — must include extensionless files like Makefile, Dockerfile, Procfile, etc.)
+- Also use `ls` on the project root to catch marker directories (ProjectSettings/, Assets/, .uproject, etc.)
+- Identify project type, language(s), and framework from ALL available signals:
+  - Package manager configs (package.json, pyproject.toml, Cargo.toml, go.mod, etc.)
+  - Build system files (Makefile, CMakeLists.txt, *.csproj, *.sln, build.gradle, etc.)
+  - Engine/IDE project markers (ProjectSettings/, *.uproject, project.godot, *.xcodeproj, etc.)
+  - Source file extensions and directory conventions
+  - Any other configuration or manifest files present
+- Identify entry point files and key source directories
 - Read .gitignore to distinguish source from generated files
+- NOTE: Do NOT refuse analysis for unfamiliar project types. Use all available signals to understand the project. If the project type is unclear, proceed with what you can determine and confirm with the user in Stage 5.
 
 **Stage 2 — Dependency & Tooling:**
-- Read package manager config for installed dependencies
-- Detect test frameworks (jest, pytest, vitest, cargo test, go test, etc.)
+- Read build system and package manager configs for dependencies
+- Detect available testing infrastructure:
+  - Standard test frameworks (jest, pytest, vitest, cargo test, go test, etc.)
+  - Engine/platform test runners (Unity Test Runner, Unreal Automation, Xcode XCTest, etc.)
+  - Custom test scripts, Makefiles, or CI test commands
 - Detect linter/formatter config (.eslintrc, ruff.toml, clippy, prettier, etc.)
-- Check for CI/CD (GitHub Actions, Makefile, etc.)
-- List available run scripts
+- Check for CI/CD pipelines (GitHub Actions, Makefile, etc.)
+- Check for available MCP servers (.mcp.json or Claude Code MCP config) that could assist evaluation
+- Determine evaluation mode — classify into one of:
+  - **cli**: Tests/metrics obtainable via a single shell command (most projects)
+  - **protocol**: Evaluation requires MCP tools, a running editor/application, or multi-step tool orchestration (e.g., game engines, GUI applications, hardware-dependent systems)
+- List available run/build/test commands
 
 **Stage 3 — Code Deep Analysis:**
 - Read ALL files that are candidates for modification (fully, not just headers)
@@ -66,22 +80,44 @@ Perform a 5-stage analysis of the current project. Every judgment must be ground
 - Assess current code quality level
 
 **Stage 4 — Metric Validation:**
-- If user provided or you identified an eval command, execute it (dry run)
-- Parse the output format
-- Collect baseline metrics
-- Measure execution time (for timeout configuration)
-- Note any failure patterns
+- **If eval_mode is `cli`:**
+  - If user provided or you identified an eval command, execute it (dry run)
+  - Parse the output format
+  - Collect baseline metrics
+  - Measure execution time (for timeout configuration)
+  - Note any failure patterns
+- **If eval_mode is `protocol`:**
+  - Verify that required tools (MCP servers, etc.) are accessible
+  - Perform a dry-run of the evaluation steps (e.g., call a simple read/status tool)
+  - Confirm that tool responses contain the expected data fields
+  - Estimate evaluation time per cycle
+  - Note any connectivity or compatibility issues
 
 **Stage 5 — Analysis Confirmation:**
 Present a summary to the user:
 ```
 프로젝트 분석 결과:
+- 언어/프레임워크: <detected>
+- 테스트: <detected test infrastructure>
+- 수정 대상: <target files>
+- 평가 모드: cli | protocol
+- 평가 방법: <eval command or tool names>
+- 메트릭: <metric name> (현재 <value>)
+- 실행 시간: ~<seconds>초
+```
+Example (cli mode):
+```
 - 언어/프레임워크: Python (PyTorch)
-- 테스트: pytest 42개
-- 수정 대상: train.py (380줄)
+- 평가 모드: cli
 - 평가 명령: uv run train.py
 - 메트릭: val_bpb (현재 0.998)
-- 실행 시간: ~310초
+```
+Example (protocol mode):
+```
+- 언어/프레임워크: C# (Unity 2022.3)
+- 평가 모드: protocol (Unity MCP)
+- 평가 도구: unity-mcp → PlayMode 테스트 실행
+- 메트릭: replay_accuracy (현재 0.65)
 ```
 Wait for user confirmation before proceeding.
 
@@ -92,8 +128,10 @@ If `NEW_GOAL` was set from arguments, use it. Otherwise, ask via AskUserQuestion
 **Q1**: "개선 목표는 무엇인가요?" (자유 텍스트)
 
 **Q2**: "평가 방법은?" — Options based on analysis:
-- If eval command detected: "감지된 명령 사용: `<command>`"
-- "직접 입력"
+- If CLI eval command detected: "감지된 명령 사용: `<command>`" (cli 모드)
+- If MCP/tool-based evaluation recommended: "프로토콜 평가: `<tool names>`" (protocol 모드)
+- "직접 입력 (CLI 명령)"
+- "직접 입력 (프로토콜 — 사용할 MCP/도구 지정)"
 - "AI가 테스트 시나리오 생성"
 
 **Q3** (if target_files not obvious): "수정 가능 파일은?"
@@ -123,12 +161,29 @@ git commit -m "chore: add .deep-evolve/ to gitignore"
 ```
 
 4. Generate `session.yaml` with all collected configuration.
+   Must include `eval_mode` field (`cli` or `protocol`).
+   If `protocol`, also include `protocol_tools` (list of required MCP/tool names).
 
-5. Generate `prepare.py` based on domain detection:
+5. Generate evaluation harness based on eval_mode:
+
+   **If eval_mode is `cli`:**
+   Generate `prepare.py` from appropriate template:
    - If project has stdout-parseable metrics → use `prepare-stdout-parse.py` template
    - If project has test framework → use `prepare-test-runner.py` template
    - If code quality / pattern goal → use `prepare-scenario.py` template
    Customize the template with project-specific metric names, weights, parse patterns.
+
+   **If eval_mode is `protocol`:**
+   Generate `prepare-protocol.md` from the `prepare-protocol.md` template.
+   This defines a fixed evaluation protocol that Claude executes using available tools
+   (MCP servers, browser automation, external APIs, etc.) instead of a shell command.
+   Customize with:
+   - Required tool names and exact call sequences
+   - Parameters for each tool call
+   - How to extract metrics from tool results
+   - Score computation formula with weights
+   - Expected output format (same `score: X.XXXXXX` standard)
+   The protocol file is protected by the same readonly hook as prepare.py.
 
 6. Generate `program.md` with experiment instructions tailored to the project.
 
@@ -136,22 +191,45 @@ git commit -m "chore: add .deep-evolve/ to gitignore"
 
 8. Initialize empty `journal.jsonl`.
 
-9. Show the user a summary of generated `prepare.py`:
-```
-prepare.py 생성 완료:
-- 도메인: stdout 파싱 (ML 훈련)
-- 메트릭: val_bpb (minimize)
-- raw_command: uv run train.py
-- 가중치: val_bpb 100%
-확인하시겠습니까?
-```
-Wait for confirmation.
+9. Show the user a summary of the generated evaluation harness:
+
+   **If eval_mode is `cli`:**
+   ```
+   prepare.py 생성 완료:
+   - 도메인: stdout 파싱 (ML 훈련)
+   - 메트릭: val_bpb (minimize)
+   - raw_command: uv run train.py
+   - 가중치: val_bpb 100%
+   확인하시겠습니까?
+   ```
+
+   **If eval_mode is `protocol`:**
+   ```
+   prepare-protocol.md 생성 완료:
+   - 도메인: 프로토콜 기반 (<description>)
+   - 평가 도구: <tool names>
+   - 메트릭: <metric> (<direction>)
+   - 평가 단계: <N>단계
+   - 예상 평가 시간: ~<seconds>초
+   확인하시겠습니까?
+   ```
+   Wait for confirmation.
 
 10. Run baseline measurement:
-```bash
-python3 .deep-evolve/prepare.py > .deep-evolve/runs/run-000.log 2>&1
-```
-Parse baseline score and record in session.yaml and results.tsv.
+
+    **If eval_mode is `cli`:**
+    ```bash
+    python3 .deep-evolve/prepare.py > .deep-evolve/runs/run-000.log 2>&1
+    ```
+
+    **If eval_mode is `protocol`:**
+    Execute the evaluation protocol defined in `.deep-evolve/prepare-protocol.md`:
+    - Follow each step exactly using the specified tools
+    - Record all tool call results to `.deep-evolve/runs/run-000.log`
+    - Compute score using the protocol's formula
+    - Output in standard format: `score: X.XXXXXX`
+
+    Parse baseline score and record in session.yaml and results.tsv.
 
 → Proceed to **Section C: Experiment Loop**
 
@@ -164,9 +242,10 @@ Display progress summary:
 Deep Evolve 세션 재개
 ━━━━━━━━━━━━━━━━━━━━
 목표: <goal>
+평가 모드: <eval_mode> (<tool/command info>)
 실험: <total>회 완료 (keep <kept>, discard <discarded>, crash <crashed>)
 Score: <baseline> → <current> (best: <best>)
-prepare.py: v<version> (<scenarios>개 시나리오)
+평가 harness: v<version> (<scenarios/steps count>)
 ```
 
 If `REQUESTED_COUNT` is set:
@@ -177,7 +256,7 @@ Otherwise, ask via AskUserQuestion:
 Options:
 - "이어서 실험 (30회 추가)"
 - "이어서 실험 (50회 추가)"
-- "prepare.py 확장" → Go to **Section D: Prepare Expansion**
+- "평가 harness 확장 (더 어려운 시나리오/단계 추가)" → Go to **Section D: Prepare Expansion**
 - "완료 처리" → Go to **Section E: Completion Report**
 
 ## Section C: Experiment Loop
@@ -209,7 +288,7 @@ SAFETY CHECK:
 
 Before starting, check last entry in `journal.jsonl`:
 - If last status is `planned` → discard that plan, start fresh
-- If last status is `committed` → run harness_command, continue from evaluation
+- If last status is `committed` → run evaluation (cli: harness_command / protocol: evaluation steps), continue from evaluation
 - If last status is `evaluated` → apply judgment (compare score), continue
 - If last status is `kept` → fully resolved, start fresh experiment
 - If last status is `discarded` → check if rollback was completed:
@@ -246,8 +325,18 @@ git commit -m "experiment: <idea description>"
 - Append to `journal.jsonl`: `{"id": <id>, "status": "committed", "commit": "<COMMIT>", "timestamp": "<now>"}`
 
 **Step 4 — Evaluation:**
+
+**If eval_mode is `cli`:**
 - Run: `<harness_command> > .deep-evolve/runs/run-<NNN>.log 2>&1`
 - Parse score from output (grep for `^score:` line)
+
+**If eval_mode is `protocol`:**
+- Read `.deep-evolve/prepare-protocol.md` for the fixed evaluation steps
+- Execute each step using the specified tools (MCP, browser, etc.)
+- Record all tool outputs to `.deep-evolve/runs/run-<NNN>.log`
+- Compute score using the protocol's formula
+- IMPORTANT: Follow the protocol EXACTLY as written. Do not deviate, skip steps, or "improve" the evaluation. The protocol is the ground truth — same as prepare.py in cli mode.
+
 - Append to `journal.jsonl`: `{"id": <id>, "status": "evaluated", "score": <score>, "timestamp": "<now>"}`
 
 **Step 5 — Judgment:**
@@ -290,7 +379,7 @@ Check for diminishing returns (from last 10 experiments in results.tsv):
 If diminishing returns detected, ask user via AskUserQuestion:
 Options:
 - "계속 (N회 추가)"
-- "prepare.py 확장 (더 어려운 시나리오 추가)" → Go to **Section D: Prepare Expansion**
+- "평가 harness 확장 (더 어려운 시나리오/단계 추가)" → Go to **Section D: Prepare Expansion**
 - "여기서 완료" → Go to **Section E: Completion Report**
 
 If `experiment_count >= max_count`:
@@ -300,6 +389,7 @@ Otherwise: → Back to Step 1
 
 ## Section D: Prepare Expansion
 
+**If eval_mode is `cli`:**
 1. Read current `.deep-evolve/prepare.py`
 2. Re-analyze the project (Stage 3 only — code has changed since last analysis)
 3. Identify new scenarios or harder test cases based on:
@@ -311,6 +401,20 @@ Otherwise: → Back to Step 1
 6. Append to `session.yaml.prepare.history`: `{version, scenarios, reason}`
 7. Insert separator in `results.tsv`: `--- prepare v<old> -> v<new> (<old_count>-><new_count> scenarios) ---`
 8. Run new baseline with expanded prepare.py
+9. → Go to **Section C: Experiment Loop**
+
+**If eval_mode is `protocol`:**
+1. Read current `.deep-evolve/prepare-protocol.md`
+2. Re-analyze the project (Stage 3 only — code has changed since last analysis)
+3. Identify new evaluation steps or stricter criteria based on:
+   - Areas where score plateaued
+   - Patterns in discarded experiments
+   - Aspects not covered by current protocol steps
+4. Generate updated `prepare-protocol.md` with expanded evaluation
+5. Increment `session.yaml.prepare.version`
+6. Append to `session.yaml.prepare.history`: `{version, steps, reason}`
+7. Insert separator in `results.tsv`: `--- prepare v<old> -> v<new> (<old_steps>-><new_steps> steps) ---`
+8. Run new baseline with expanded protocol
 9. → Go to **Section C: Experiment Loop**
 
 ## Section E: Completion Report
@@ -328,7 +432,7 @@ Read `results.tsv` and `session.yaml` to compile:
 
 ## 실험 통계
 - 총 실험: <total>회 (keep <kept>, discard <discarded>, crash <crashed>)
-- prepare.py 버전: <version> (<history summary>)
+- 평가 harness: v<version> (<history summary>)
 - Score: <baseline> → <best> (<improvement_pct>%)
 
 ## Score 변화
