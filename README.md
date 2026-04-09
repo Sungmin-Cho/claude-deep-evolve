@@ -10,6 +10,10 @@ This project is inspired by [autoresearch](https://github.com/karpathy/autoresea
 
 deep-evolve generalizes this methodology from ML training to **any software project**, packaging it as a Claude Code plugin with automatic evaluation harness generation, journal-based crash recovery, and multi-domain template support.
 
+### Role in Harness Engineering
+
+deep-evolve operates **outside** the standard [Harness Engineering](https://martinfowler.com/articles/harness-engineering.html) framework — it is an autonomous experimentation protocol that iteratively improves code through measured experiment loops. While the framework focuses on guiding and sensing during normal development, deep-evolve represents a complementary approach: using automated experimentation to discover improvements that no guide or sensor would suggest. It is part of the [Deep Suite](https://github.com/Sungmin-Cho/claude-deep-suite) ecosystem but follows its own experiment→evaluate→keep/discard cycle.
+
 ## The Methodology
 
 ### Three Files That Matter

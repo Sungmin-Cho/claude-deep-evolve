@@ -10,6 +10,10 @@ Claude Code용 자율 실험 플러그인. 목표를 지정하면 deep-evolve가
 
 deep-evolve는 이 방법론을 ML 훈련에서 **모든 소프트웨어 프로젝트**로 일반화하여, 자동 평가 harness 생성, journal 기반 crash recovery, 다중 도메인 템플릿 지원을 갖춘 Claude Code 플러그인으로 패키징했습니다.
 
+### 하네스 엔지니어링에서의 역할
+
+deep-evolve는 표준 [Harness Engineering](https://martinfowler.com/articles/harness-engineering.html) 프레임워크 **밖에서** 동작합니다 — 측정 기반 실험 루프를 통해 코드를 반복적으로 개선하는 자율 실험 프로토콜입니다. 프레임워크가 일반 개발 과정에서의 안내와 감지에 집중하는 반면, deep-evolve는 어떤 가이드나 센서도 제안하지 않을 개선점을 자동화된 실험으로 발견하는 보완적 접근법입니다. [Deep Suite](https://github.com/Sungmin-Cho/claude-deep-suite) 생태계의 일부이지만 자체적인 실험→평가→유지/폐기 사이클을 따릅니다.
+
 ## 방법론
 
 ### 중요한 세 가지 파일
