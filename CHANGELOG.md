@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.0.0] - 2026-04-13
+
+### Added
+- Self-Evolutionary Experiment Loop (2-Tier architecture)
+- strategy.yaml: evolvable strategy parameter layer
+- Outer Loop: automatic strategy evolution with Q(v) meta-metric
+- 3-layer self-evolution: parameters + strategy text + evaluation expansion
+- Strategy archive with stepping stones and parent selection
+- Code archive with named-branch-based backtracking
+- Idea ensemble (multi-candidate selection per experiment)
+- Cross-project strategy transfer via meta-archive
+- Evaluation Epoch separation for prepare.py versioning
+- flock-based concurrency safety for meta-archive
+
+### Fixed
+- protect-readonly.sh: grep pipe logic error (P0-1)
+- prepare-stdout-parse.py: minimize metric inversion (P0-2)
+- Unified scoring contract: score is always higher-is-better
+- package.json/plugin.json: repository URL corrected
+
+### Changed
+- Meta Analysis: automatic program.md revision (Phase 1)
+- Section D (Prepare Expansion): manual → auto-triggered on convergence
+
 ## [1.1.0] - 2026-04-07
 
 ### Added

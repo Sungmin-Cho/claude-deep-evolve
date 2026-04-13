@@ -8,11 +8,72 @@ Autonomous experimentation plugin for Claude Code. Specify a goal, and deep-evol
 
 This project is inspired by [autoresearch](https://github.com/karpathy/autoresearch) by Andrej Karpathy — an experiment to have AI agents do their own research autonomously. The core idea: give an AI agent a codebase, let it experiment overnight — modifying code, evaluating results, keeping improvements, discarding regressions — and wake up to a better project.
 
-deep-evolve generalizes this methodology from ML training to **any software project**, packaging it as a Claude Code plugin with automatic evaluation harness generation, journal-based crash recovery, and multi-domain template support.
+The self-evolutionary architecture (v2.0) is inspired by [HyperAgents](https://arxiv.org/abs/2603.19461) — agents that evolve their own strategies through meta-learning, not just the target code.
+
+deep-evolve generalizes this methodology from ML training to **any software project**, packaging it as a Claude Code plugin with automatic evaluation harness generation, journal-based crash recovery, multi-domain template support, and self-evolutionary strategy evolution.
 
 ### Role in Harness Engineering
 
 deep-evolve operates **outside** the standard [Harness Engineering](https://martinfowler.com/articles/harness-engineering.html) framework — it is an autonomous experimentation protocol that iteratively improves code through measured experiment loops. While the framework focuses on guiding and sensing during normal development, deep-evolve represents a complementary approach: using automated experimentation to discover improvements that no guide or sensor would suggest. It is part of the [Deep Suite](https://github.com/Sungmin-Cho/claude-deep-suite) ecosystem but follows its own experiment→evaluate→keep/discard cycle.
+
+With v2.0's Outer Loop, deep-evolve goes further: it not only improves the target code but also evolves the **strategy** that drives experiments — and can even expand the **evaluation harness** itself when convergence is detected. This 3-layer self-evolution (parameters → strategy text → evaluation expansion) makes the system a true meta-optimizer that improves its own improvement process.
+
+## Self-Evolutionary Experiment Loop (v2.0)
+
+v2.0 introduces a self-evolutionary architecture where the system not only improves target code but also evolves the **strategy** that drives experiments.
+
+### 2-Tier Architecture: Outer Loop + Inner Loop
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Outer Loop (Strategy Evolution)                            │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │  strategy.yaml: evolvable strategy parameters       │    │
+│  │  (mutation_rate, idea_bank, focus_areas, ...)       │    │
+│  └───────────────────┬─────────────────────────────────┘    │
+│                      ▼                                      │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │  Inner Loop (Experiment Execution)                  │    │
+│  │  Run N experiments with current strategy            │    │
+│  │  → measure Q(v) meta-metric                         │    │
+│  └───────────────────┬─────────────────────────────────┘    │
+│                      ▼                                      │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │  Evaluate & Evolve Strategy                         │    │
+│  │  Q(v) = (best_score - baseline) / experiments_used  │    │
+│  │  → mutate strategy.yaml for next outer iteration    │    │
+│  └─────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+- **Inner Loop**: The original experiment cycle — modify code, evaluate, keep/discard. Now driven by `strategy.yaml` parameters.
+- **Outer Loop**: Evolves the strategy itself. After each inner loop epoch, measures **Q(v)** (improvement velocity) and mutates strategy parameters to find better experimental approaches.
+
+### 3-Layer Self-Evolution
+
+deep-evolve evolves at three layers simultaneously:
+
+| Layer | File | What Evolves | How |
+|-------|------|-------------|-----|
+| **Parameters** | `strategy.yaml` | Mutation rate, focus areas, idea bank | Outer Loop mutates per epoch |
+| **Strategy Text** | `program.md` | Agent instructions, experiment approach | Meta Analysis auto-revises on convergence |
+| **Evaluation** | `prepare.py` | Scenarios, difficulty, coverage | Section D auto-triggers on plateau |
+
+### Strategy & Code Archives (Stepping Stones)
+
+Every strategy that achieves a new best Q(v) is archived as a **stepping stone**:
+
+- **Strategy Archive**: Stores `strategy.yaml` snapshots with their Q(v) scores and lineage. New strategies are bred from high-performing parents, not just the latest one.
+- **Code Archive**: Named git branches (`archive/<name>`) preserve best-scoring code states. The system can backtrack to any archived state when a new strategy direction fails.
+- **Idea Ensemble**: Each experiment selects from multiple candidate ideas, scored and ranked. This avoids single-point-of-failure in idea generation.
+
+### Cross-Project Transfer
+
+Strategies that work well in one project can transfer to others:
+
+- **Meta-archive** (`~/.deep-evolve/meta-archive/`): A shared, flock-protected archive of proven strategies across all projects.
+- When starting a new project, deep-evolve seeds its initial strategy from the meta-archive, filtered by project domain similarity.
+- Successful strategies are contributed back to the meta-archive after each session.
 
 ## The Methodology
 

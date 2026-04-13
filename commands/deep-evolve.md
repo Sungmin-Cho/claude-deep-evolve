@@ -11,454 +11,106 @@ allowed_tools: all
 
 You are running the **deep-evolve** autonomous experimentation protocol.
 
+## 핵심 불변식
+
+- **Scoring Contract**: score는 항상 higher-is-better. minimize 메트릭은 evaluation harness 내부에서 `score = BASELINE_SCORE / raw_score` 변환 적용 (clamp 없음, >1.0 허용). baseline=1.0, 개선 시 >1.0, 악화 시 <1.0.
+- **보호 파일**: `prepare.py`, `prepare-protocol.md`, `strategy.yaml` — `DEEP_EVOLVE_META_MODE` 설정 없이는 수정 불가 (protect-readonly hook)
+- **상태 파일**: `session.yaml` (세션 설정+진행), `journal.jsonl` (이벤트 로그), `results.tsv` (실험 결과)
+
 ## Step 0: Parse Arguments
 
 Arguments: `$ARGUMENTS`
 
+- If arguments contain `--archive-prune`: → Read `skills/deep-evolve-workflow/protocols/transfer.md`, execute **Section F: Archive Prune**
 - If arguments contain a number (e.g., `50`): set `REQUESTED_COUNT` to that number
 - If arguments contain a quoted string (e.g., `"new goal"`): set `NEW_GOAL` to that string
 - Otherwise: `REQUESTED_COUNT = null`, `NEW_GOAL = null`
 
-## Step 1: State Detection
+## Step 1: State Detection & Routing
 
 Check if `.deep-evolve/session.yaml` exists in the current project root.
 
 **If NO session.yaml exists** (or `NEW_GOAL` is set):
-→ Go to **Section A: Init Flow**
+→ Read `skills/deep-evolve-workflow/protocols/init.md` → Init 실행
 
 **If session.yaml exists**, read the `status` field:
-- `status: active` → Go to **Section B: Resume Flow**
+- `status: active` → Read `skills/deep-evolve-workflow/protocols/inner-loop.md` → Resume Flow
 - `status: paused` → Ask the user via AskUserQuestion:
   "이전 세션이 중단되었습니다. 이어서 진행할까요?"
   Options: "이어서 진행" / "새로 시작"
-  - "이어서 진행" → Go to **Section B: Resume Flow**
-  - "새로 시작" → Delete `.deep-evolve/`, Go to **Section A: Init Flow**
+  - "이어서 진행" → Read `protocols/inner-loop.md` → Resume Flow
+  - "새로 시작" → Delete `.deep-evolve/`, Read `protocols/init.md` → Init Flow
 - `status: completed` → Ask the user:
   "이전 세션이 완료되었습니다. 새 세션을 시작할까요?"
   Options: "새로 시작" / "결과 다시 보기"
-  - "새로 시작" → Delete `.deep-evolve/`, Go to **Section A: Init Flow**
+  - "새로 시작" → Delete `.deep-evolve/`, Read `protocols/init.md` → Init Flow
   - "결과 다시 보기" → Read and display `.deep-evolve/report.md`
 
-## Section A: Init Flow
-
-### A.1: Project Deep Analysis
-
-Perform a 5-stage analysis of the current project. Every judgment must be grounded in actual file reads — no guessing.
-
-**Stage 1 — Structure Scan:**
-- Use Glob `**/*` to map the full file tree (NOT `**/*.*` — must include extensionless files like Makefile, Dockerfile, Procfile, etc.)
-- Also use `ls` on the project root to catch marker directories (ProjectSettings/, Assets/, .uproject, etc.)
-- Identify project type, language(s), and framework from ALL available signals:
-  - Package manager configs (package.json, pyproject.toml, Cargo.toml, go.mod, etc.)
-  - Build system files (Makefile, CMakeLists.txt, *.csproj, *.sln, build.gradle, etc.)
-  - Engine/IDE project markers (ProjectSettings/, *.uproject, project.godot, *.xcodeproj, etc.)
-  - Source file extensions and directory conventions
-  - Any other configuration or manifest files present
-- Identify entry point files and key source directories
-- Read .gitignore to distinguish source from generated files
-- NOTE: Do NOT refuse analysis for unfamiliar project types. Use all available signals to understand the project. If the project type is unclear, proceed with what you can determine and confirm with the user in Stage 5.
-
-**Stage 2 — Dependency & Tooling:**
-- Read build system and package manager configs for dependencies
-- Detect available testing infrastructure:
-  - Standard test frameworks (jest, pytest, vitest, cargo test, go test, etc.)
-  - Engine/platform test runners (Unity Test Runner, Unreal Automation, Xcode XCTest, etc.)
-  - Custom test scripts, Makefiles, or CI test commands
-- Detect linter/formatter config (.eslintrc, ruff.toml, clippy, prettier, etc.)
-- Check for CI/CD pipelines (GitHub Actions, Makefile, etc.)
-- Check for available MCP servers (.mcp.json or Claude Code MCP config) that could assist evaluation
-- Determine evaluation mode — classify into one of:
-  - **cli**: Tests/metrics obtainable via a single shell command (most projects)
-  - **protocol**: Evaluation requires MCP tools, a running editor/application, or multi-step tool orchestration (e.g., game engines, GUI applications, hardware-dependent systems)
-- List available run/build/test commands
-
-**Stage 3 — Code Deep Analysis:**
-- Read ALL files that are candidates for modification (fully, not just headers)
-- Read readonly/reference files' key interfaces and APIs
-- Read existing test files to understand what is already tested
-- Identify architecture patterns, module boundaries, data flow
-- Assess current code quality level
-
-**Stage 4 — Metric Validation:**
-- **If eval_mode is `cli`:**
-  - If user provided or you identified an eval command, execute it (dry run)
-  - Parse the output format
-  - Collect baseline metrics
-  - Measure execution time (for timeout configuration)
-  - Note any failure patterns
-- **If eval_mode is `protocol`:**
-  - Verify that required tools (MCP servers, etc.) are accessible
-  - Perform a dry-run of the evaluation steps (e.g., call a simple read/status tool)
-  - Confirm that tool responses contain the expected data fields
-  - Estimate evaluation time per cycle
-  - Note any connectivity or compatibility issues
-
-**Stage 5 — Analysis Confirmation:**
-Present a summary to the user:
-```
-프로젝트 분석 결과:
-- 언어/프레임워크: <detected>
-- 테스트: <detected test infrastructure>
-- 수정 대상: <target files>
-- 평가 모드: cli | protocol
-- 평가 방법: <eval command or tool names>
-- 메트릭: <metric name> (현재 <value>)
-- 실행 시간: ~<seconds>초
-```
-Example (cli mode):
-```
-- 언어/프레임워크: Python (PyTorch)
-- 평가 모드: cli
-- 평가 명령: uv run train.py
-- 메트릭: val_bpb (현재 0.998)
-```
-Example (protocol mode):
-```
-- 언어/프레임워크: C# (Unity 2022.3)
-- 평가 모드: protocol (Unity MCP)
-- 평가 도구: unity-mcp → PlayMode 테스트 실행
-- 메트릭: replay_accuracy (현재 0.65)
-```
-Wait for user confirmation before proceeding.
-
-### A.2: Goal & Configuration
-
-If `NEW_GOAL` was set from arguments, use it. Otherwise, ask via AskUserQuestion:
-
-**Q1**: "개선 목표는 무엇인가요?" (자유 텍스트)
-
-**Q2**: "평가 방법은?" — Options based on analysis:
-- If CLI eval command detected: "감지된 명령 사용: `<command>`" (cli 모드)
-- If MCP/tool-based evaluation recommended: "프로토콜 평가: `<tool names>`" (protocol 모드)
-- "직접 입력 (CLI 명령)"
-- "직접 입력 (프로토콜 — 사용할 MCP/도구 지정)"
-- "AI가 테스트 시나리오 생성"
-
-**Q3** (if target_files not obvious): "수정 가능 파일은?"
-- AI-suggested list from analysis
-- "직접 지정"
-
-If `REQUESTED_COUNT` was set, use it. Otherwise:
-**Q4**: "실험 횟수는?" — Options: "30회", "50회", "100회", "감소 수익까지 자동"
-
-### A.3: Scaffolding
-
-1. Create git branch:
-```bash
-git checkout -b deep-evolve/$(date +%b%d | tr '[:upper:]' '[:lower:]')
-```
-
-2. Create `.deep-evolve/` directory structure:
-```bash
-mkdir -p .deep-evolve/runs
-```
-
-3. Add `.deep-evolve/` to `.gitignore` (if not already present):
-```bash
-echo ".deep-evolve/" >> .gitignore
-git add .gitignore
-git commit -m "chore: add .deep-evolve/ to gitignore"
-```
-
-4. Generate `session.yaml` with all collected configuration.
-   Must include `eval_mode` field (`cli` or `protocol`).
-   If `protocol`, also include `protocol_tools` (list of required MCP/tool names).
-
-5. Generate evaluation harness based on eval_mode:
-
-   **If eval_mode is `cli`:**
-   Generate `prepare.py` from appropriate template:
-   - If project has stdout-parseable metrics → use `prepare-stdout-parse.py` template
-   - If project has test framework → use `prepare-test-runner.py` template
-   - If code quality / pattern goal → use `prepare-scenario.py` template
-   Customize the template with project-specific metric names, weights, parse patterns.
-
-   **If eval_mode is `protocol`:**
-   Generate `prepare-protocol.md` from the `prepare-protocol.md` template.
-   This defines a fixed evaluation protocol that Claude executes using available tools
-   (MCP servers, browser automation, external APIs, etc.) instead of a shell command.
-   Customize with:
-   - Required tool names and exact call sequences
-   - Parameters for each tool call
-   - How to extract metrics from tool results
-   - Score computation formula with weights
-   - Expected output format (same `score: X.XXXXXX` standard)
-   The protocol file is protected by the same readonly hook as prepare.py.
-
-6. Generate `program.md` with experiment instructions tailored to the project.
-
-7. Initialize `results.tsv` with header: `commit\tscore\tstatus\tdescription`
-
-8. Initialize empty `journal.jsonl`.
-
-9. Show the user a summary of the generated evaluation harness:
-
-   **If eval_mode is `cli`:**
-   ```
-   prepare.py 생성 완료:
-   - 도메인: stdout 파싱 (ML 훈련)
-   - 메트릭: val_bpb (minimize)
-   - raw_command: uv run train.py
-   - 가중치: val_bpb 100%
-   확인하시겠습니까?
-   ```
-
-   **If eval_mode is `protocol`:**
-   ```
-   prepare-protocol.md 생성 완료:
-   - 도메인: 프로토콜 기반 (<description>)
-   - 평가 도구: <tool names>
-   - 메트릭: <metric> (<direction>)
-   - 평가 단계: <N>단계
-   - 예상 평가 시간: ~<seconds>초
-   확인하시겠습니까?
-   ```
-   Wait for confirmation.
-
-10. Run baseline measurement:
-
-    **If eval_mode is `cli`:**
-    ```bash
-    python3 .deep-evolve/prepare.py > .deep-evolve/runs/run-000.log 2>&1
-    ```
-
-    **If eval_mode is `protocol`:**
-    Execute the evaluation protocol defined in `.deep-evolve/prepare-protocol.md`:
-    - Follow each step exactly using the specified tools
-    - Record all tool call results to `.deep-evolve/runs/run-000.log`
-    - Compute score using the protocol's formula
-    - Output in standard format: `score: X.XXXXXX`
-
-    Parse baseline score and record in session.yaml and results.tsv.
-
-→ Proceed to **Section C: Experiment Loop**
-
-## Section B: Resume Flow
-
-Read `session.yaml` and `results.tsv`.
-
-Display progress summary:
-```
-Deep Evolve 세션 재개
-━━━━━━━━━━━━━━━━━━━━
-목표: <goal>
-평가 모드: <eval_mode> (<tool/command info>)
-실험: <total>회 완료 (keep <kept>, discard <discarded>, crash <crashed>)
-Score: <baseline> → <current> (best: <best>)
-평가 harness: v<version> (<scenarios/steps count>)
-```
-
-If `REQUESTED_COUNT` is set:
-- Update `session.yaml.experiments.requested` to current total + REQUESTED_COUNT
-- → Go to **Section C: Experiment Loop**
-
-Otherwise, ask via AskUserQuestion:
-Options:
-- "이어서 실험 (30회 추가)"
-- "이어서 실험 (50회 추가)"
-- "평가 harness 확장 (더 어려운 시나리오/단계 추가)" → Go to **Section D: Prepare Expansion**
-- "완료 처리" → Go to **Section E: Completion Report**
-
-## Section C: Experiment Loop
-
-Read `session.yaml` for configuration. Read `results.tsv` and `journal.jsonl` for history.
-
-Set `experiment_count` to 0. Set `max_count` to `session.yaml.experiments.requested` (or infinity if null).
-
-### Branch & Clean-Tree Guard (Codex review fix)
-
-Before ANY experiment work, verify safety preconditions. This check runs:
-- Once at loop start
-- Before EVERY `git reset --hard HEAD~1`
+## Protocol Routing Summary
 
 ```
-SAFETY CHECK:
-1. Verify current branch matches session.yaml.git_branch:
-   CURRENT=$(git branch --show-current)
-   if CURRENT != session.yaml.git_branch → ABORT with error:
-   "⛔ Branch mismatch: expected <session_branch>, on <current>. /deep-evolve에서 세션을 확인하세요."
-
-2. Verify worktree is clean (excluding .deep-evolve/):
-   DIRTY=$(git status --porcelain | grep -v '^\?\? .deep-evolve/')
-   if DIRTY is not empty → ABORT with error:
-   "⛔ Dirty worktree detected. 실험을 시작하기 전에 uncommitted 변경을 커밋하거나 stash하세요."
+Init           → protocols/init.md
+Inner Loop     → protocols/inner-loop.md  (includes Resume + Section D: Prepare Expansion)
+Outer Loop     → protocols/outer-loop.md  (매 outer_loop_interval 회)
+Archive        → protocols/archive.md     (분기/복원 필요 시)
+Transfer       → protocols/transfer.md    (A.2.5 lookup + E.0 recording + Section F prune)
+Completion     → protocols/completion.md  (세션 완료)
 ```
 
-### Resume Reconciliation (Codex review fix)
+## 상태 관리
 
-Before starting, check last entry in `journal.jsonl`:
-- If last status is `planned` → discard that plan, start fresh
-- If last status is `committed` → run evaluation (cli: harness_command / protocol: evaluation steps), continue from evaluation
-- If last status is `evaluated` → apply judgment (compare score), continue
-- If last status is `kept` → fully resolved, start fresh experiment
-- If last status is `discarded` → check if rollback was completed:
-  - Look for subsequent `{"id": <same_id>, "status": "rollback_completed"}` entry
-  - If NO rollback_completed entry exists:
-    → Run Branch & Clean-Tree Guard
-    → Verify HEAD commit matches the journal's `commit` field
-    → If match: execute `git reset --hard HEAD~1`, then append `{"id": <id>, "status": "rollback_completed"}`
-    → If no match: HEAD was already reset (manual intervention), append `rollback_completed`
-  - If rollback_completed exists → fully resolved, start fresh experiment
+### session.yaml 핵심 스키마
 
-### Loop
-
-Repeat until `experiment_count >= max_count` or diminishing returns detected:
-
-**Step 1 — Idea Selection:**
-- Read `results.tsv` to learn from previous keep/discard history
-- Read current state of all target_files
-- Read `program.md` for experiment strategy guidelines
-- Avoid approaches that were previously discarded (check description column in results.tsv)
-- Select ONE improvement idea
-- Append to `journal.jsonl`: `{"id": <next_id>, "status": "planned", "idea": "<description>", "timestamp": "<now>"}`
-
-**Step 2 — Code Modification:**
-- Modify ONLY files listed in `session.yaml.target_files`
-- Apply one idea per modification
-
-**Step 3 — Git Commit:**
-```bash
-git add <target_files>
-git commit -m "experiment: <idea description>"
-```
-- Get commit hash: `COMMIT=$(git rev-parse --short HEAD)`
-- Append to `journal.jsonl`: `{"id": <id>, "status": "committed", "commit": "<COMMIT>", "timestamp": "<now>"}`
-
-**Step 4 — Evaluation:**
-
-**If eval_mode is `cli`:**
-- Run: `<harness_command> > .deep-evolve/runs/run-<NNN>.log 2>&1`
-- Parse score from output (grep for `^score:` line)
-
-**If eval_mode is `protocol`:**
-- Read `.deep-evolve/prepare-protocol.md` for the fixed evaluation steps
-- Execute each step using the specified tools (MCP, browser, etc.)
-- Record all tool outputs to `.deep-evolve/runs/run-<NNN>.log`
-- Compute score using the protocol's formula
-- IMPORTANT: Follow the protocol EXACTLY as written. Do not deviate, skip steps, or "improve" the evaluation. The protocol is the ground truth — same as prepare.py in cli mode.
-
-- Append to `journal.jsonl`: `{"id": <id>, "status": "evaluated", "score": <score>, "timestamp": "<now>"}`
-
-**Step 5 — Judgment:**
-
-Compare `score` with `session.yaml.metric.current`:
-
-**If score improved** (higher for maximize, lower for minimize):
-- Append to `journal.jsonl`: `{"id": <id>, "status": "kept", "timestamp": "<now>"}`
-- Append to `results.tsv`: `<COMMIT>\t<score>\tkept\t<idea description>`
-- Update `session.yaml`: `metric.current = score`, `metric.best = min/max(best, score)`, increment `experiments.total` and `experiments.kept`
-
-**If score same or worse:**
-- Append to `journal.jsonl`: `{"id": <id>, "status": "discarded", "timestamp": "<now>"}`
-- Append to `results.tsv`: `<COMMIT>\t<score>\tdiscarded\t<idea description>`
-- Update `session.yaml`: increment `experiments.total` and `experiments.discarded`
-- Run **Branch & Clean-Tree Guard** (verify branch + clean worktree)
-- Run: `git reset --hard HEAD~1`
-- Append to `journal.jsonl`: `{"id": <id>, "status": "rollback_completed", "timestamp": "<now>"}`
-
-**If evaluation crashed:**
-- Attempt a simple fix (1 attempt only)
-- If fix works, re-evaluate
-- If fix fails:
-  - Append to `journal.jsonl`: `{"id": <id>, "status": "discarded", "reason": "crash", "timestamp": "<now>"}`
-  - Append to `results.tsv`: `<COMMIT>\t0\tcrash\t<idea description>`
-  - Update `session.yaml`: increment `experiments.total` and `experiments.crashed`
-  - Run **Branch & Clean-Tree Guard** (verify branch + clean worktree)
-  - Run: `git reset --hard HEAD~1`
-  - Append to `journal.jsonl`: `{"id": <id>, "status": "rollback_completed", "timestamp": "<now>"}`
-
-Increment `experiment_count`.
-
-**Step 6 — Continuation Check:**
-
-Check for diminishing returns (from last 10 experiments in results.tsv):
-- 0 keeps in last 10 → report: "10회 연속 discard. Score가 수렴한 것 같습니다."
-- keeps exist but max score delta < 0.001 in last 10 → report: "개선폭이 미미합니다."
-- 3+ crashes in last 10 → report: "안정성 문제가 감지되었습니다."
-
-If diminishing returns detected, ask user via AskUserQuestion:
-Options:
-- "계속 (N회 추가)"
-- "평가 harness 확장 (더 어려운 시나리오/단계 추가)" → Go to **Section D: Prepare Expansion**
-- "여기서 완료" → Go to **Section E: Completion Report**
-
-If `experiment_count >= max_count`:
-→ Go to **Section E: Completion Report**
-
-Otherwise: → Back to Step 1
-
-## Section D: Prepare Expansion
-
-**If eval_mode is `cli`:**
-1. Read current `.deep-evolve/prepare.py`
-2. Re-analyze the project (Stage 3 only — code has changed since last analysis)
-3. Identify new scenarios or harder test cases based on:
-   - Areas where score plateaued
-   - Patterns in discarded experiments
-   - Code regions not covered by current scenarios
-4. Generate updated `prepare.py` with new scenarios
-5. Increment `session.yaml.prepare.version`
-6. Append to `session.yaml.prepare.history`: `{version, scenarios, reason}`
-7. Insert separator in `results.tsv`: `--- prepare v<old> -> v<new> (<old_count>-><new_count> scenarios) ---`
-8. Run new baseline with expanded prepare.py
-9. → Go to **Section C: Experiment Loop**
-
-**If eval_mode is `protocol`:**
-1. Read current `.deep-evolve/prepare-protocol.md`
-2. Re-analyze the project (Stage 3 only — code has changed since last analysis)
-3. Identify new evaluation steps or stricter criteria based on:
-   - Areas where score plateaued
-   - Patterns in discarded experiments
-   - Aspects not covered by current protocol steps
-4. Generate updated `prepare-protocol.md` with expanded evaluation
-5. Increment `session.yaml.prepare.version`
-6. Append to `session.yaml.prepare.history`: `{version, steps, reason}`
-7. Insert separator in `results.tsv`: `--- prepare v<old> -> v<new> (<old_steps>-><new_steps> steps) ---`
-8. Run new baseline with expanded protocol
-9. → Go to **Section C: Experiment Loop**
-
-## Section E: Completion Report
-
-Generate `.deep-evolve/report.md`:
-
-Read `results.tsv` and `session.yaml` to compile:
-
-```markdown
-# Deep Evolve Report
-
-**프로젝트**: <project_path>
-**목표**: <goal>
-**기간**: <created_at> ~ <now>
-
-## 실험 통계
-- 총 실험: <total>회 (keep <kept>, discard <discarded>, crash <crashed>)
-- 평가 harness: v<version> (<history summary>)
-- Score: <baseline> → <best> (<improvement_pct>%)
-
-## Score 변화
-<list top 10 most impactful kept experiments from results.tsv>
-
-## 교훈 (Discard 분석)
-<analyze discard patterns — what approaches didn't work and why>
-
-## 적용 방법
-git diff deep-evolve/<tag>...main
+```yaml
+goal: "<목표>"
+eval_mode: cli | protocol              # 평가 모드
+metric:
+  name: "<메트릭명>"
+  direction: minimize | maximize
+  baseline: <float>
+  current: <float>
+  best: <float>
+experiments:
+  total: <N>
+  kept: <N>
+  discarded: <N>
+  crashed: <N>
+  requested: <N or null>
+target_files: [...]
+program:
+  version: <N>
+  history: [...]
+outer_loop:
+  generation: <N>
+  interval: 20
+  q_history: [{generation, Q, epoch}, ...]
+evaluation_epoch:
+  current: <N>
+  history:
+    - epoch: <N>
+      prepare_version: <N>
+      generations: [...]
+      best_Q: <float or null>
+lineage:
+  current_branch: "<branch name>"
+  forked_from: {commit, keep_id, reason} | null
+  previous_branches: [...]
+transfer:
+  source_id: "<archive_id or null>"
 ```
 
-Display the report to the user.
+### journal.jsonl 이벤트 타입
 
-Then ask via AskUserQuestion:
-"결과를 어떻게 적용할까요?"
-Options:
-- "main에 merge"
-- "PR 생성"
-- "branch 유지 (나중에 결정)"
-- "폐기 (변경사항 삭제)"
-
-Execute the chosen option:
-- **Merge**: `git checkout main && git merge deep-evolve/<tag>`
-- **PR**: `git push -u origin deep-evolve/<tag> && gh pr create --title "deep-evolve: <goal>" --body "<report summary>"`
-- **Keep**: No action, inform user branch name
-- **Discard**: `git checkout main && git branch -D deep-evolve/<tag>`
-
-Update `session.yaml.status` to `completed`.
+| status/event         | 설명 |
+|----------------------|------|
+| planned              | 아이디어 선택됨 |
+| committed            | 코드 커밋됨 |
+| evaluated            | 평가 완료, score 기록 |
+| kept                 | keep 판정 |
+| discarded            | discard 판정 |
+| rollback_completed   | git reset 완료 |
+| outer_loop           | Outer Loop Q(v) 기록 |
+| strategy_update      | strategy.yaml 변경 |
+| strategy_judgment    | 전략 keep/discard 판정 |
+| strategy_stagnation  | Outer Loop 정체 감지 |
+| branch_fork          | Code Archive backtrack |

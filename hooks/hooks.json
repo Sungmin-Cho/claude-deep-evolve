@@ -1,5 +1,5 @@
 {
-  "description": "Protect immutable files during deep-evolve experiment runs (v1.0)",
+  "description": "Protect immutable files during deep-evolve experiment runs (v2.0)",
   "hooks": {
     "PreToolUse": [
       {
