@@ -5,8 +5,10 @@ description: |
   Autonomous experimentation protocol with goal-driven experiment loops.
   Use when: "deep evolve", "deep-evolve", "autonomous experiment", "자율 실험",
   "autoresearch", "auto improve", "자동 개선", "experiment loop", "실험 루프",
-  "자동으로 개선", "프로젝트 개선", "코드 최적화", or tasks that benefit from
-  systematic measured improvements through iterative experimentation.
+  "자동으로 개선", "프로젝트 개선", "코드 최적화", "self-evolution", "자기 진화",
+  "strategy", "전략 진화", "outer loop", "strategy evolution", "meta-archive",
+  "stepping stones", or tasks that benefit from systematic measured improvements
+  through iterative experimentation.
 ---
 
 # Deep Evolve: Autonomous Experimentation Protocol

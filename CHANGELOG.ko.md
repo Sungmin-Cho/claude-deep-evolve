@@ -1,5 +1,29 @@
 # 변경 이력
 
+## [2.0.0] - 2026-04-13
+
+### 추가
+- 자기 진화 실험 루프 (2계층 아키텍처)
+- strategy.yaml: 진화 가능한 전략 파라미터 계층
+- Outer Loop: Q(v) 메타 메트릭을 통한 자동 전략 진화
+- 3계층 자기 진화: 파라미터 + 전략 텍스트 + 평가 확장
+- Stepping stones 기반 전략 아카이브 및 부모 선택
+- 이름 지정 브랜치 기반 코드 아카이브 및 백트래킹
+- 아이디어 앙상블 (실험당 다중 후보 선택)
+- 메타 아카이브를 통한 크로스 프로젝트 전략 전이
+- prepare.py 버전 관리를 위한 Evaluation Epoch 분리
+- 메타 아카이브용 flock 기반 동시성 안전
+
+### 수정
+- protect-readonly.sh: grep 파이프 로직 오류 (P0-1)
+- prepare-stdout-parse.py: minimize 메트릭 반전 오류 (P0-2)
+- 통합 스코어링 계약: score는 항상 higher-is-better
+- package.json/plugin.json: repository URL 수정
+
+### 변경
+- Meta Analysis: program.md 자동 개정 (Phase 1)
+- Section D (Prepare 확장): 수동 → 수렴 시 자동 트리거
+
 ## [1.1.0] - 2026-04-07
 
 ### 추가

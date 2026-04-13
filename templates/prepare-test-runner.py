@@ -12,6 +12,9 @@ Usage: python3 prepare.py [--verbose]
 import subprocess, sys, re, os, json
 from pathlib import Path
 
+# Scoring Contract: score는 항상 higher-is-better.
+# test-runner/scenario 템플릿은 본질적으로 pass rate 기반이므로 방향 반전 불필요.
+
 # ── Configuration (filled by deep-evolve init) ──────────────
 
 TEST_COMMAND = "{{TEST_COMMAND}}"

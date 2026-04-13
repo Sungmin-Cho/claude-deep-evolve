@@ -17,6 +17,7 @@ from pathlib import Path
 RAW_COMMAND = "{{RAW_COMMAND}}"
 TIMEOUT = {{TIMEOUT}}  # seconds
 METRIC_DIRECTION = "{{DIRECTION}}"  # "minimize" or "maximize"
+BASELINE_SCORE = None  # deep-evolve init fills this value
 
 # Metrics to extract from stdout: {name: {pattern: regex, weight: float}}
 METRICS = {
@@ -85,9 +86,12 @@ def main():
     score = compute_score(values)
 
     if METRIC_DIRECTION == "minimize":
-        # For minimize metrics, invert so higher score = better
-        # This normalization depends on the specific metric range
-        pass  # Custom inversion logic filled by deep-evolve init
+        # Invert so higher score = better (scoring contract: always higher-is-better)
+        # baseline → 1.0, improvement → >1.0, regression → <1.0 (no clamp)
+        if BASELINE_SCORE is not None and BASELINE_SCORE > 0 and score > 0:
+            score = BASELINE_SCORE / score
+        elif score == 0:
+            score = 1.0
 
     # Standardized output
     print("\n---")

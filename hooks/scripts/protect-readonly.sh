@@ -49,10 +49,16 @@ EVOLVE_DIR="$PROJECT_ROOT/.deep-evolve"
 PROTECTED_PREPARE="$EVOLVE_DIR/prepare.py"
 PROTECTED_PROTOCOL="$EVOLVE_DIR/prepare-protocol.md"
 PROTECTED_PROGRAM="$EVOLVE_DIR/program.md"
+PROTECTED_STRATEGY="$EVOLVE_DIR/strategy.yaml"
+
+# Meta modes (DEEP_EVOLVE_META_MODE):
+#   program_update — allows program.md writes only (Phase 1 meta analysis)
+#   outer_loop     — allows both program.md and strategy.yaml writes (Phase 2 Outer Loop)
+META_MODE="${DEEP_EVOLVE_META_MODE:-}"
 
 block_protected() {
   cat <<JSON
-{"decision":"block","reason":"Deep Evolve Guard: 실험 진행 중에는 평가 harness(prepare.py/prepare-protocol.md)와 program.md를 수정할 수 없습니다.\n\n평가 harness를 변경하려면 먼저 실험을 중단하고 /deep-evolve에서 'prepare 확장'을 선택하세요."}
+{"decision":"block","reason":"Deep Evolve Guard: 실험 진행 중에는 평가 harness(prepare.py/prepare-protocol.md), program.md, strategy.yaml을 수정할 수 없습니다.\n\n평가 harness를 변경하려면 먼저 실험을 중단하고 /deep-evolve에서 'prepare 확장'을 선택하세요."}
 JSON
   exit 2
 }
@@ -74,7 +80,15 @@ if [[ "$TOOL_NAME" != "Bash" ]]; then
   fi
 
   case "$FILE_PATH" in
-    "$PROTECTED_PREPARE"|"$PROTECTED_PROTOCOL"|"$PROTECTED_PROGRAM") block_protected ;;
+    "$PROTECTED_PREPARE"|"$PROTECTED_PROTOCOL") block_protected ;;
+    "$PROTECTED_PROGRAM")
+      if [[ "$META_MODE" != "program_update" && "$META_MODE" != "outer_loop" ]]; then
+        block_protected
+      fi ;;
+    "$PROTECTED_STRATEGY")
+      if [[ "$META_MODE" != "outer_loop" ]]; then
+        block_protected
+      fi ;;
   esac
   exit 0
 fi
@@ -89,12 +103,21 @@ if [[ -z "$COMMAND" ]]; then
   exit 0
 fi
 
+# Build protected file list (conditional on META_MODE)
+BASH_PROTECTED_FILES=("prepare.py" "prepare-protocol.md" ".deep-evolve/prepare.py" ".deep-evolve/prepare-protocol.md")
+if [[ "$META_MODE" != "program_update" && "$META_MODE" != "outer_loop" ]]; then
+  BASH_PROTECTED_FILES+=("program.md" ".deep-evolve/program.md")
+fi
+if [[ "$META_MODE" != "outer_loop" ]]; then
+  BASH_PROTECTED_FILES+=("strategy.yaml" ".deep-evolve/strategy.yaml")
+fi
+
 # Check if the bash command references protected files with write operations
-for PROTECTED in "prepare.py" "prepare-protocol.md" "program.md" ".deep-evolve/prepare.py" ".deep-evolve/prepare-protocol.md" ".deep-evolve/program.md"; do
+for PROTECTED in "${BASH_PROTECTED_FILES[@]}"; do
   if echo "$COMMAND" | grep -qE "(>|>>|sed\s+-i|tee|cp|mv|chmod|chown|perl\s+.*-i)\s*.*$PROTECTED"; then
     block_protected
   fi
-  if echo "$COMMAND" | grep -qF "$PROTECTED" | grep -qE "(>|>>|sed\s+-i|tee\s|cp\s|mv\s)"; then
+  if echo "$COMMAND" | grep -qF "$PROTECTED" && echo "$COMMAND" | grep -qE "(>|>>|sed\s+-i|tee\s|cp\s|mv\s)"; then
     block_protected
   fi
 done

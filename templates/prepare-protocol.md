@@ -123,6 +123,14 @@ Include only the metrics that your evaluation steps actually produce.
 # ---
 # ```
 
+## Scoring Contract
+
+**Score는 항상 higher-is-better입니다.**
+- `metric_direction: maximize` → raw score를 그대로 사용
+- `metric_direction: minimize` → Score Computation에서 반전하여 높을수록 좋게 변환
+  - 예: `score = max(0, 1 - (raw_value / baseline_value))` 또는 `score = baseline / raw_value`
+- 이 규칙은 deep-evolve 실험 루프의 judgment 단계에서 항상 `score_new > score_old`로 비교하기 위한 불변식입니다.
+
 ## Important Rules
 
 1. Follow each step EXACTLY as written — same tools, same parameters, same order

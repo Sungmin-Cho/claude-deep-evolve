@@ -13,6 +13,9 @@ import subprocess, json, os, sys, tempfile, shutil
 from pathlib import Path
 from dataclasses import dataclass, field
 
+# Scoring Contract: score는 항상 higher-is-better.
+# test-runner/scenario 템플릿은 본질적으로 pass rate 기반이므로 방향 반전 불필요.
+
 # ── Configuration (filled by deep-evolve init) ──────────────
 
 PROJECT_ROOT = Path(__file__).parent.parent

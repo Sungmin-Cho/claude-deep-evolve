@@ -1,0 +1,254 @@
+# Init Flow (Section A)
+
+## A.1: Project Deep Analysis
+
+Perform a 5-stage analysis of the current project. Every judgment must be grounded in actual file reads — no guessing.
+
+**Stage 1 — Structure Scan:**
+- Use Glob `**/*` to map the full file tree (NOT `**/*.*` — must include extensionless files like Makefile, Dockerfile, Procfile, etc.)
+- Also use `ls` on the project root to catch marker directories (ProjectSettings/, Assets/, .uproject, etc.)
+- Identify project type, language(s), and framework from ALL available signals:
+  - Package manager configs (package.json, pyproject.toml, Cargo.toml, go.mod, etc.)
+  - Build system files (Makefile, CMakeLists.txt, *.csproj, *.sln, build.gradle, etc.)
+  - Engine/IDE project markers (ProjectSettings/, *.uproject, project.godot, *.xcodeproj, etc.)
+  - Source file extensions and directory conventions
+  - Any other configuration or manifest files present
+- Identify entry point files and key source directories
+- Read .gitignore to distinguish source from generated files
+- NOTE: Do NOT refuse analysis for unfamiliar project types. Use all available signals to understand the project. If the project type is unclear, proceed with what you can determine and confirm with the user in Stage 5.
+
+**Stage 2 — Dependency & Tooling:**
+- Read build system and package manager configs for dependencies
+- Detect available testing infrastructure:
+  - Standard test frameworks (jest, pytest, vitest, cargo test, go test, etc.)
+  - Engine/platform test runners (Unity Test Runner, Unreal Automation, Xcode XCTest, etc.)
+  - Custom test scripts, Makefiles, or CI test commands
+- Detect linter/formatter config (.eslintrc, ruff.toml, clippy, prettier, etc.)
+- Check for CI/CD pipelines (GitHub Actions, Makefile, etc.)
+- Check for available MCP servers (.mcp.json or Claude Code MCP config) that could assist evaluation
+- Determine evaluation mode — classify into one of:
+  - **cli**: Tests/metrics obtainable via a single shell command (most projects)
+  - **protocol**: Evaluation requires MCP tools, a running editor/application, or multi-step tool orchestration (e.g., game engines, GUI applications, hardware-dependent systems)
+- List available run/build/test commands
+
+**Stage 3 — Code Deep Analysis:**
+- Read ALL files that are candidates for modification (fully, not just headers)
+- Read readonly/reference files' key interfaces and APIs
+- Read existing test files to understand what is already tested
+- Identify architecture patterns, module boundaries, data flow
+- Assess current code quality level
+
+**Stage 4 — Metric Validation:**
+- **If eval_mode is `cli`:**
+  - If user provided or you identified an eval command, execute it (dry run)
+  - Parse the output format
+  - Collect baseline metrics
+  - Measure execution time (for timeout configuration)
+  - Note any failure patterns
+- **If eval_mode is `protocol`:**
+  - Verify that required tools (MCP servers, etc.) are accessible
+  - Perform a dry-run of the evaluation steps (e.g., call a simple read/status tool)
+  - Confirm that tool responses contain the expected data fields
+  - Estimate evaluation time per cycle
+  - Note any connectivity or compatibility issues
+
+**Stage 5 — Analysis Confirmation:**
+Present a summary to the user:
+```
+프로젝트 분석 결과:
+- 언어/프레임워크: <detected>
+- 테스트: <detected test infrastructure>
+- 수정 대상: <target files>
+- 평가 모드: cli | protocol
+- 평가 방법: <eval command or tool names>
+- 메트릭: <metric name> (현재 <value>)
+- 실행 시간: ~<seconds>초
+```
+Example (cli mode):
+```
+- 언어/프레임워크: Python (PyTorch)
+- 평가 모드: cli
+- 평가 명령: uv run train.py
+- 메트릭: val_bpb (현재 0.998)
+```
+Example (protocol mode):
+```
+- 언어/프레임워크: C# (Unity 2022.3)
+- 평가 모드: protocol (Unity MCP)
+- 평가 도구: unity-mcp → PlayMode 테스트 실행
+- 메트릭: replay_accuracy (현재 0.65)
+```
+Wait for user confirmation before proceeding.
+
+## A.2: Goal & Configuration
+
+If `NEW_GOAL` was set from arguments, use it. Otherwise, ask via AskUserQuestion:
+
+**Q1**: "개선 목표는 무엇인가요?" (자유 텍스트)
+
+**Q2**: "평가 방법은?" — Options based on analysis:
+- If CLI eval command detected: "감지된 명령 사용: `<command>`" (cli 모드)
+- If MCP/tool-based evaluation recommended: "프로토콜 평가: `<tool names>`" (protocol 모드)
+- "직접 입력 (CLI 명령)"
+- "직접 입력 (프로토콜 — 사용할 MCP/도구 지정)"
+- "AI가 테스트 시나리오 생성"
+
+**Q3** (if target_files not obvious): "수정 가능 파일은?"
+- AI-suggested list from analysis
+- "직접 지정"
+
+If `REQUESTED_COUNT` was set, use it. Otherwise:
+**Q4**: "실험 횟수는?" — Options: "30회", "50회", "100회", "감소 수익까지 자동"
+
+## A.2.5: Meta Archive Lookup
+
+→ Read `protocols/transfer.md`, execute **Meta Archive Lookup** section.
+
+## A.3: Scaffolding
+
+1. Create git branch:
+```bash
+git checkout -b deep-evolve/$(date +%b%d | tr '[:upper:]' '[:lower:]')
+```
+
+2. Create `.deep-evolve/` directory structure:
+```bash
+mkdir -p .deep-evolve/runs .deep-evolve/strategy-archive .deep-evolve/code-archive
+```
+
+3. Add `.deep-evolve/` to `.gitignore` (if not already present):
+```bash
+echo ".deep-evolve/" >> .gitignore
+git add .gitignore
+git commit -m "chore: add .deep-evolve/ to gitignore"
+```
+
+4. Generate `session.yaml` with all collected configuration.
+   Must include `eval_mode` field (`cli` or `protocol`).
+   If `protocol`, also include `protocol_tools` (list of required MCP/tool names).
+   Include `program` version tracking, `outer_loop` state, and `evaluation_epoch`:
+   ```yaml
+   program:
+     version: 1
+     history:
+       - version: 1
+         experiments: "0-"
+         keep_rate: null
+         reason: "initial"
+   outer_loop:
+     generation: 0
+     interval: 20
+     q_history: []
+   evaluation_epoch:
+     current: 1
+     history:
+       - epoch: 1
+         prepare_version: 1
+         generations: []
+         best_Q: null
+   lineage:
+     current_branch: "deep-evolve/<tag>"
+     forked_from: null
+     previous_branches: []
+   ```
+
+5. Generate evaluation harness based on eval_mode:
+
+   **If eval_mode is `cli`:**
+   Generate `prepare.py` from appropriate template:
+   - If project has stdout-parseable metrics → use `prepare-stdout-parse.py` template
+   - If project has test framework → use `prepare-test-runner.py` template
+   - If code quality / pattern goal → use `prepare-scenario.py` template
+   Customize the template with project-specific metric names, weights, parse patterns.
+
+   **If eval_mode is `protocol`:**
+   Generate `prepare-protocol.md` from the `prepare-protocol.md` template.
+   This defines a fixed evaluation protocol that Claude executes using available tools
+   (MCP servers, browser automation, external APIs, etc.) instead of a shell command.
+   Customize with:
+   - Required tool names and exact call sequences
+   - Parameters for each tool call
+   - How to extract metrics from tool results
+   - Score computation formula with weights
+   - Expected output format (same `score: X.XXXXXX` standard)
+   The protocol file is protected by the same readonly hook as prepare.py.
+
+6. Generate `program.md` with experiment instructions tailored to the project.
+
+7. Initialize `results.tsv` with header: `commit\tscore\tstatus\tdescription`
+
+8. Initialize empty `journal.jsonl`.
+
+9. Generate `.deep-evolve/strategy.yaml` with default parameters:
+   ```yaml
+   # strategy.yaml — Evolving strategy parameters (modified by Outer Loop)
+   version: 1
+
+   idea_selection:
+     method: "weighted"              # random | sequential | weighted
+     weights:
+       parameter_tuning: 0.25
+       structural_change: 0.25
+       algorithm_swap: 0.25
+       simplification: 0.25
+     candidates_per_step: 3          # idea ensemble: generate N candidates, select best 1
+     min_novelty_distance: 2         # skip ideas similar to last N attempts
+
+   judgment:
+     min_delta: 0.001                # minimum improvement threshold
+     crash_tolerance: 3              # N consecutive crashes → strategy review
+     marginal_policy: "discard"      # keep | discard | accumulate
+
+   convergence:
+     consecutive_discard_limit: 10   # N consecutive discards → strategy review
+     plateau_window: 15              # no improvement in last N → convergence
+     plateau_action: "branch"        # branch | meta_analysis | stop
+
+   exploration:
+     radical_threshold: 20           # N consecutive marginal → attempt radical change
+     backtrack_enabled: true         # allow forking from previous keep commits
+     backtrack_strategy: "least_explored"  # least_explored | highest_score | random
+   ```
+   If meta-archive lookup (A.2.5) found a similar project, use its `final_strategy` as initial values.
+
+10. Show the user a summary of the generated evaluation harness:
+
+    **If eval_mode is `cli`:**
+    ```
+    prepare.py 생성 완료:
+    - 도메인: stdout 파싱 (ML 훈련)
+    - 메트릭: val_bpb (minimize)
+    - raw_command: uv run train.py
+    - 가중치: val_bpb 100%
+    확인하시겠습니까?
+    ```
+
+    **If eval_mode is `protocol`:**
+    ```
+    prepare-protocol.md 생성 완료:
+    - 도메인: 프로토콜 기반 (<description>)
+    - 평가 도구: <tool names>
+    - 메트릭: <metric> (<direction>)
+    - 평가 단계: <N>단계
+    - 예상 평가 시간: ~<seconds>초
+    확인하시겠습니까?
+    ```
+    Wait for confirmation.
+
+11. Run baseline measurement:
+
+    **If eval_mode is `cli`:**
+    ```bash
+    python3 .deep-evolve/prepare.py > .deep-evolve/runs/run-000.log 2>&1
+    ```
+
+    **If eval_mode is `protocol`:**
+    Execute the evaluation protocol defined in `.deep-evolve/prepare-protocol.md`:
+    - Follow each step exactly using the specified tools
+    - Record all tool call results to `.deep-evolve/runs/run-000.log`
+    - Compute score using the protocol's formula
+    - Output in standard format: `score: X.XXXXXX`
+
+    Parse baseline score and record in session.yaml and results.tsv.
+
+→ Proceed to Inner Loop: Read `protocols/inner-loop.md`
