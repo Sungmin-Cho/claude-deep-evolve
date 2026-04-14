@@ -75,6 +75,18 @@ Strategies that work well in one project can transfer to others:
 - When starting a new project, deep-evolve seeds its initial strategy from the meta-archive, filtered by project domain similarity.
 - Successful strategies are contributed back to the meta-archive after each session.
 
+### Cross-Plugin Feedback (v2.1)
+
+deep-evolve는 deep-suite 내 다른 플러그인과 양방향 데이터를 교환한다:
+
+**내보내기 (Producer):**
+- `evolve-receipt.json` → deep-dashboard가 수집하여 effectiveness 점수에 evolve 차원 반영
+- `evolve-insights.json` → deep-work Phase 1 Research에서 참고 context로 소비
+- merge/PR 전 deep-review 트리거 제안 (APPROVE/REQUEST_CHANGES/FAILURE 처리)
+
+**소비 (Consumer):**
+- `.deep-review/recurring-findings.json` → init Stage 3.5에서 읽어 실험 방향 조향 (prepare.py 시나리오 + program.md + strategy.yaml 가중치 조정)
+
 ## The Methodology
 
 ### Three Files That Matter
