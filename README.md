@@ -77,15 +77,15 @@ Strategies that work well in one project can transfer to others:
 
 ### Cross-Plugin Feedback (v2.1)
 
-deep-evolve는 deep-suite 내 다른 플러그인과 양방향 데이터를 교환한다:
+deep-evolve exchanges bidirectional data with other plugins in the deep-suite ecosystem:
 
-**내보내기 (Producer):**
-- `evolve-receipt.json` → deep-dashboard가 수집하여 effectiveness 점수에 evolve 차원 반영
-- `evolve-insights.json` → deep-work Phase 1 Research에서 참고 context로 소비
-- merge/PR 전 deep-review 트리거 제안 (APPROVE/REQUEST_CHANGES/FAILURE 처리)
+**Producer (exports):**
+- `evolve-receipt.json` → collected by deep-dashboard for evolve effectiveness dimension
+- `evolve-insights.json` → consumed by deep-work Phase 1 Research as advisory context
+- Deep-review trigger before merge/PR (handles APPROVE/REQUEST_CHANGES/FAILURE)
 
-**소비 (Consumer):**
-- `.deep-review/recurring-findings.json` → init Stage 3.5에서 읽어 실험 방향 조향 (prepare.py 시나리오 + program.md + strategy.yaml 가중치 조정)
+**Consumer (imports):**
+- `.deep-review/recurring-findings.json` → read during init Stage 3.5 to steer experiment direction (prepare.py scenarios + program.md + strategy.yaml weight adjustment)
 
 ## The Methodology
 
