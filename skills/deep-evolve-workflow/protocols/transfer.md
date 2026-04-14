@@ -128,6 +128,48 @@ If either condition is not met, skip recording.
      Display warning: "메타 아카이브 잠금 실패 — .pending-archive.jsonl에 임시 저장됨. 다음 세션에서 자동 병합됩니다."
    - On next session init (A.2.5), check for `.pending-archive.jsonl` and merge (with flock).
 
+## Section E.1: Cross-Plugin Feedback Export
+
+Execute only if the Recording Gate (E.0) was passed.
+
+Analyze the meta-archive for patterns that could benefit other plugins:
+
+1. Read `~/.claude/deep-evolve/meta-archive.jsonl`
+2. Filter for active (non-pruned) entries with similar project characteristics
+3. Extract effective patterns from strategy_evolution data:
+   - Strategies with high keep_rate (> 0.3)
+   - Program.md changes that correlated with Q(v) improvement
+   - Idea selection weight distributions that worked well
+4. Generate `.deep-evolve/evolve-insights.json`:
+
+```json
+{
+  "updated_at": "<ISO 8601 now>",
+  "insights_for_deep_work": [
+    {
+      "pattern": "<pattern name extracted from effective strategies>",
+      "evidence": "<keep_rate X.XX across N projects, Q(v) +X.XX improvement>",
+      "source_archive_ids": ["<archive entry id>"],
+      "suggestion": "<actionable suggestion for Phase 3 implement>"
+    }
+  ],
+  "insights_for_deep_review": [
+    {
+      "pattern": "<pattern name>",
+      "evidence": "<experiment outcome data>",
+      "source_archive_ids": ["<archive entry id>"],
+      "suggestion": "<review criteria enhancement suggestion>"
+    }
+  ]
+}
+```
+
+5. If meta-archive has fewer than 2 active entries, skip this step (insufficient data for pattern extraction).
+6. Each insight's `source_archive_ids` must reference actual archive entry IDs for traceability.
+7. This file is "suggestion-level" — consuming plugins decide independently whether to use it.
+
+---
+
 ## Section F: Archive Prune
 
 Triggered by `/deep-evolve --archive-prune`.
