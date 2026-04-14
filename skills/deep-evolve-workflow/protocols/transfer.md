@@ -134,13 +134,14 @@ Execute only if the Recording Gate (E.0) was passed.
 
 Analyze the meta-archive for patterns that could benefit other plugins:
 
-1. Read `~/.claude/deep-evolve/meta-archive.jsonl`
-2. Filter for active (non-pruned) entries with similar project characteristics
-3. Extract effective patterns from strategy_evolution data:
+1. If meta-archive has fewer than 2 active entries, skip this step (insufficient data for pattern extraction).
+2. Read `~/.claude/deep-evolve/meta-archive.jsonl`
+3. Filter for active (non-pruned) entries with similar project characteristics
+4. Extract effective patterns from strategy_evolution data:
    - Strategies with high keep_rate (> 0.3)
    - Program.md changes that correlated with Q(v) improvement
    - Idea selection weight distributions that worked well
-4. Generate `.deep-evolve/evolve-insights.json`:
+5. Generate `.deep-evolve/evolve-insights.json`:
 
 ```json
 {
@@ -164,7 +165,6 @@ Analyze the meta-archive for patterns that could benefit other plugins:
 }
 ```
 
-5. If meta-archive has fewer than 2 active entries, skip this step (insufficient data for pattern extraction).
 6. Each insight's `source_archive_ids` must reference actual archive entry IDs for traceability.
 7. This file is "suggestion-level" — consuming plugins decide independently whether to use it.
 

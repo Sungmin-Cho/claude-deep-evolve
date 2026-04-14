@@ -65,6 +65,9 @@ If it exists:
    - `naming-convention`, `type-safety` findings → increase `simplification` weight
    - Normalize weights to sum to 1.0 after adjustment
 
+   Note: 이 가중치 조정은 A.2.5 Meta Archive Lookup에서 전이된 strategy의 weights 위에 적용된다.
+   전이된 strategy가 있으면 전이된 weights를 base로 사용하고, findings 기반 조정을 그 위에 overlay한다.
+
 **Stage 4 — Metric Validation:**
 - **If eval_mode is `cli`:**
   - If user provided or you identified an eval command, execute it (dry run)

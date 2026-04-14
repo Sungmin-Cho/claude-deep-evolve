@@ -116,8 +116,8 @@ Options:
 
 Execute the chosen option using `session.yaml.lineage.current_branch` for the branch name:
 
-- **deep-review 실행 후 merge**: Set `outcome = "merged"` in receipt. → See **Deep-Review Integration** section below; on APPROVE auto-merge.
-- **deep-review 실행 후 PR 생성**: Set `outcome = "pr_created"` in receipt. → See **Deep-Review Integration** section below; on APPROVE auto-create PR.
+- **deep-review 실행 후 merge**: outcome remains null until deep-review completes; set based on final action taken. → See **Deep-Review Integration** section below; on APPROVE auto-merge.
+- **deep-review 실행 후 PR 생성**: outcome remains null until deep-review completes; set based on final action taken. → See **Deep-Review Integration** section below; on APPROVE auto-create PR.
 - **main에 merge**: Set `outcome = "merged"` in receipt. `git checkout main && git merge <session.yaml.lineage.current_branch>`
 - **PR 생성**: Set `outcome = "pr_created"` in receipt. `git push -u origin <session.yaml.lineage.current_branch> && gh pr create --title "deep-evolve: <goal>" --body "<report summary>"`
 - **branch 유지 (나중에 결정)**: Set `outcome = "kept"` in receipt. No action; inform user of branch name (`session.yaml.lineage.current_branch`).
@@ -148,7 +148,12 @@ This section applies only when the user chose **"deep-review 실행 후 merge"**
   - "그래도 진행 (review 무시)"
   - "branch 유지 (나중에 결정)"
   - "폐기 (변경사항 삭제)"
-- Execute accordingly (on "그래도 진행" follow the original path's action).
+- Execute accordingly:
+  - "수정 후 재시도" 선택 시:
+    1. 사용자가 코드를 수정하고 커밋
+    2. 다시 deep-review 실행 (동일한 branch diff 대상)
+    3. 결과에 따라 다시 APPROVE/REQUEST_CHANGES/FAILURE 처리
+  - 그 외 선택지는 original path의 action에 따라 처리 (on "그래도 진행" follow the original path's action).
 
 **FAILURE** (deep-review tool itself fails or errors):
 - Inform the user that deep-review encountered an error.
