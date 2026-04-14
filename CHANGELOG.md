@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.1.0] — 2026-04-14
+
+### Added
+- **Cross-plugin feedback (Phase 3A):**
+  - `evolve-receipt.json` generation in completion report for deep-dashboard consumption
+  - Deep-review trigger before merge/PR with failure fallback
+  - `recurring-findings.json` consumption from deep-review during init (Stage 3.5)
+  - `evolve-insights.json` export from meta-archive for deep-work/deep-review (Section E.1)
+  - Unified 6-option completion menu (merge, PR, deep-review+merge, deep-review+PR, keep, discard)
+  - `outcome` field in receipt tracking session disposition (merged/pr_created/kept/discarded)
+
 ## [2.0.0] - 2026-04-13
 
 ### Added
