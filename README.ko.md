@@ -75,6 +75,18 @@ deep-evolve는 세 가지 계층에서 동시에 진화합니다:
 - 새 프로젝트를 시작할 때, deep-evolve는 프로젝트 도메인 유사성으로 필터링된 메타 아카이브에서 초기 전략을 씨앗으로 사용합니다.
 - 성공한 전략은 각 세션 후 메타 아카이브에 기여됩니다.
 
+### 크로스 플러그인 피드백 (v2.1)
+
+deep-evolve는 deep-suite 내 다른 플러그인과 양방향 데이터를 교환한다:
+
+**내보내기 (Producer):**
+- `evolve-receipt.json` → deep-dashboard가 수집하여 effectiveness 점수에 evolve 차원 반영
+- `evolve-insights.json` → deep-work Phase 1 Research에서 참고 context로 소비
+- merge/PR 전 deep-review 트리거 제안 (APPROVE/REQUEST_CHANGES/FAILURE 처리)
+
+**소비 (Consumer):**
+- `.deep-review/recurring-findings.json` → init Stage 3.5에서 읽어 실험 방향 조향 (prepare.py 시나리오 + program.md + strategy.yaml 가중치 조정)
+
 ## 방법론
 
 ### 중요한 세 가지 파일

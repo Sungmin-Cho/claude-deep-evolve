@@ -38,6 +38,36 @@ Perform a 5-stage analysis of the current project. Every judgment must be ground
 - Identify architecture patterns, module boundaries, data flow
 - Assess current code quality level
 
+**Stage 3.5 — Review Findings Integration:**
+
+Check if `.deep-review/recurring-findings.json` exists. If not, skip this stage.
+
+If it exists:
+1. Read the file and parse the `findings` array
+2. For each recurring finding, bias the evaluation harness generation:
+   - `error-handling` category → strengthen error handling test scenarios in prepare.py
+   - `test-coverage` category → add boundary value test scenarios
+   - `security` category → add input validation scenarios
+   - `performance` category → add performance benchmark scenarios
+   - `naming-convention` category → add naming consistency checks (if applicable)
+   - `type-safety` category → strengthen type validation scenarios
+   - `architecture` category → add module boundary/dependency checks
+3. Include findings in program.md generation under a dedicated section:
+   ```markdown
+   ## 알려진 반복 결함 (deep-review 기반)
+   이 프로젝트에서 deep-review가 반복 발견한 패턴:
+   - <category>: <description> (<occurrences>회)
+   이 영역의 개선을 우선적으로 시도하라.
+   ```
+4. Adjust initial `strategy.yaml` `idea_selection.weights` based on findings:
+   - `error-handling`, `security`, `architecture` findings → increase `structural_change` weight
+   - `performance` findings → increase `algorithm_swap` weight
+   - `naming-convention`, `type-safety` findings → increase `simplification` weight
+   - Normalize weights to sum to 1.0 after adjustment
+
+   Note: 이 가중치 조정은 A.2.5 Meta Archive Lookup에서 전이된 strategy의 weights 위에 적용된다.
+   전이된 strategy가 있으면 전이된 weights를 base로 사용하고, findings 기반 조정을 그 위에 overlay한다.
+
 **Stage 4 — Metric Validation:**
 - **If eval_mode is `cli`:**
   - If user provided or you identified an eval command, execute it (dry run)

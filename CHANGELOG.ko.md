@@ -1,5 +1,16 @@
 # 변경 이력
 
+## [2.1.0] — 2026-04-14
+
+### 추가
+- **크로스 플러그인 피드백 (Phase 3A):**
+  - deep-dashboard 연동을 위한 `evolve-receipt.json` 생성
+  - merge/PR 전 deep-review 트리거 및 실패 fallback
+  - deep-review의 `recurring-findings.json` 소비 (init Stage 3.5)
+  - meta-archive 기반 `evolve-insights.json` 내보내기 (Section E.1)
+  - 6개 통합 완료 옵션 메뉴
+  - receipt에 세션 처리 결과 추적용 `outcome` 필드
+
 ## [2.0.0] - 2026-04-13
 
 ### 추가

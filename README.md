@@ -75,6 +75,18 @@ Strategies that work well in one project can transfer to others:
 - When starting a new project, deep-evolve seeds its initial strategy from the meta-archive, filtered by project domain similarity.
 - Successful strategies are contributed back to the meta-archive after each session.
 
+### Cross-Plugin Feedback (v2.1)
+
+deep-evolve exchanges bidirectional data with other plugins in the deep-suite ecosystem:
+
+**Producer (exports):**
+- `evolve-receipt.json` → collected by deep-dashboard for evolve effectiveness dimension
+- `evolve-insights.json` → consumed by deep-work Phase 1 Research as advisory context
+- Deep-review trigger before merge/PR (handles APPROVE/REQUEST_CHANGES/FAILURE)
+
+**Consumer (imports):**
+- `.deep-review/recurring-findings.json` → read during init Stage 3.5 to steer experiment direction (prepare.py scenarios + program.md + strategy.yaml weight adjustment)
+
 ## The Methodology
 
 ### Three Files That Matter
