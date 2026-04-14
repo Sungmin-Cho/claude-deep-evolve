@@ -82,13 +82,14 @@ Generate `.deep-evolve/evolve-receipt.json` from `session.yaml` and `results.tsv
     "received_from": "<session.yaml.transfer.source_id or null>",
     "adopted_patterns_kept": "<ratio of transferred patterns retained in final strategy>"
   },
-  "duration_minutes": "<minutes between session.yaml.created_at and now>",
+  "duration_minutes": "<if session.yaml.created_at exists: minutes between created_at and now, else: null>",
   "quality_score": "<computed below>",
   "outcome": null
 }
 ```
 
 Notes:
+- `duration_minutes`: null if session.yaml lacks created_at (pre-2.1.0 sessions)
 - `improvement_pct` is always positive when `best > baseline`; use 0 if baseline == 0
 - `quality_score` computation (0-100):
   if experiments.total == 0: quality_score = 0
