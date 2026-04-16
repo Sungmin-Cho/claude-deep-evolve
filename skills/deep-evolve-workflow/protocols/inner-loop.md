@@ -28,7 +28,9 @@ Options:
 
 ## Section C: Experiment Loop
 
-Read `session.yaml` for configuration. Read `.deep-evolve/strategy.yaml` for strategy parameters.
+> **$SESSION_ROOT resolution**: The dispatcher or resume.md has already resolved the active session via `session-helper.sh resolve_current`. All `.deep-evolve/` paths in this protocol refer to `$SESSION_ROOT/`.
+
+Read `session.yaml` for configuration. Read `$SESSION_ROOT/strategy.yaml` for strategy parameters.
 Read `results.tsv` and `journal.jsonl` for history.
 
 Set `experiment_count` to 0. Set `max_count` to `session.yaml.experiments.requested` (or infinity if null).
@@ -104,13 +106,13 @@ git commit -m "experiment: <idea description>"
 **Step 4 — Evaluation:**
 
 **If eval_mode is `cli`:**
-- Run: `<harness_command> > .deep-evolve/runs/run-<NNN>.log 2>&1`
+- Run: `<harness_command> > $SESSION_ROOT/runs/run-<NNN>.log 2>&1`
 - Parse score from output (grep for `^score:` line)
 
 **If eval_mode is `protocol`:**
-- Read `.deep-evolve/prepare-protocol.md` for the fixed evaluation steps
+- Read `$SESSION_ROOT/prepare-protocol.md` for the fixed evaluation steps
 - Execute each step using the specified tools (MCP, browser, etc.)
-- Record all tool outputs to `.deep-evolve/runs/run-<NNN>.log`
+- Record all tool outputs to `$SESSION_ROOT/runs/run-<NNN>.log`
 - Compute score using the protocol's formula
 - IMPORTANT: Follow the protocol EXACTLY as written. Do not deviate, skip steps, or "improve" the evaluation. The protocol is the ground truth — same as prepare.py in cli mode.
 
@@ -132,7 +134,7 @@ judgment는 항상 단일 규칙을 따릅니다: **score_new > score_old + min_
 - Append to `journal.jsonl`: `{"id": <id>, "status": "kept", "timestamp": "<now>"}`
 - Append to `results.tsv`: `<COMMIT>\t<score>\tkept\t<idea description>`
 - Update `session.yaml`: `metric.current = score`, `metric.best = max(best, score)`, increment `experiments.total` and `experiments.kept`
-- **Code Archive**: Record the kept commit in `.deep-evolve/code-archive/`:
+- **Code Archive**: Record the kept commit in `$SESSION_ROOT/code-archive/`:
   Create or update `keep_<NNN>/` with:
   ```yaml
   commit: <COMMIT>
@@ -224,7 +226,7 @@ Otherwise: → Back to Step 1
 ## Section D: Prepare Expansion
 
 **If eval_mode is `cli`:**
-1. Read current `.deep-evolve/prepare.py`
+1. Read current `$SESSION_ROOT/prepare.py`
 2. Re-analyze the project (Stage 3 only — code has changed since last analysis)
 3. Identify new scenarios or harder test cases based on:
    - Areas where score plateaued
@@ -238,7 +240,7 @@ Otherwise: → Back to Step 1
 9. → Resume Loop
 
 **If eval_mode is `protocol`:**
-1. Read current `.deep-evolve/prepare-protocol.md`
+1. Read current `$SESSION_ROOT/prepare-protocol.md`
 2. Re-analyze the project (Stage 3 only — code has changed since last analysis)
 3. Identify new evaluation steps or stricter criteria based on:
    - Areas where score plateaued
