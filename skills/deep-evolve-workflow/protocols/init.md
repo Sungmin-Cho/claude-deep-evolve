@@ -168,6 +168,8 @@ git commit -m "chore: add .deep-evolve/ to gitignore"
    outer_loop:
      generation: 0
      interval: 20
+     inner_count: 0
+     auto_trigger: true
      q_history: []
    evaluation_epoch:
      current: 1
@@ -204,6 +206,23 @@ git commit -m "chore: add .deep-evolve/ to gitignore"
    The protocol file is protected by the same readonly hook as prepare.py.
 
 6. Generate `program.md` with experiment instructions tailored to the project.
+
+   **program.md must start with the following sentinel-wrapped section (always present):**
+
+   ```markdown
+   <!-- automation-policy-v1 -->
+   ## Automation Policy
+
+   - Outer Loop는 diminishing-returns 감지 시 session.yaml.outer_loop.auto_trigger가
+     true면 자동 실행. AskUserQuestion은 outer 완료 후 Q(v) 악화 또는 세션 종료 기준
+     충족 시에만.
+   - 사용자 초기 브리프에 "ask before outer loop" 류 지시가 있으면 auto_trigger=false로
+     명시 설정하고 program.md에 override 기록.
+
+   <!-- /automation-policy-v1 -->
+   ```
+
+   Then generate the project-specific experiment instructions below the sentinel block.
 
 7. Initialize `results.tsv` with header: `commit\tscore\tstatus\tdescription`
 

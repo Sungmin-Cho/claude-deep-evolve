@@ -2,12 +2,14 @@
 
 The Outer Loop governs strategy evolution across the 3-tier hierarchy. It fires after every `outer_interval` (default 20) inner iterations, evaluating and adjusting the experimental strategy.
 
+**Auto-trigger gate**: If `session.yaml.outer_loop.auto_trigger` is false, the caller (inner-loop.md Step 6.c) will have already asked the user before entering this protocol. If true, this protocol executes without user confirmation.
+
 The 3-tier self-evolution hierarchy:
 1. **Tier 1** — `strategy.yaml` parameter tuning (low freedom, quantitative adjustment)
 2. **Tier 2** — `program.md` strategy text revision (medium freedom, natural language)
 3. **Tier 3** — `prepare.py` scenario expansion (high freedom, raises quality ceiling)
 
-Reset `inner_count` to 0. Increment `session.yaml.outer_loop.generation`.
+Reset `inner_count` to 0. **Persist**: update `session.yaml.outer_loop.inner_count` to 0. Increment `session.yaml.outer_loop.generation`.
 
 ## Step 6.5.1 — Meta Analysis
 

@@ -32,7 +32,7 @@ Read `session.yaml` for configuration. Read `.deep-evolve/strategy.yaml` for str
 Read `results.tsv` and `journal.jsonl` for history.
 
 Set `experiment_count` to 0. Set `max_count` to `session.yaml.experiments.requested` (or infinity if null).
-Set `inner_count` to 0 (resets each Outer Loop generation).
+Set `inner_count` to `session.yaml.outer_loop.inner_count` (0 for new sessions, restored value for resume).
 Set `outer_interval` to `session.yaml.outer_loop.interval` (default 20).
 
 ### Branch & Clean-Tree Guard
@@ -165,26 +165,56 @@ Increment `experiment_count`.
 
 **Step 6 — Continuation Check** (uses `strategy.yaml.convergence` parameters):
 
-Increment `inner_count`.
+**6.a** Increment `inner_count`. Persist: update `session.yaml.outer_loop.inner_count` to the new value.
 
-Check for diminishing returns using strategy.yaml thresholds:
+**6.b** Check for **interval-based Outer Loop trigger**:
+If `inner_count >= outer_interval`:
+  If `session.yaml.outer_loop.auto_trigger` is **false**: AskUserQuestion "주기적 Outer Loop 실행할까요?" → "실행" / "건너뛰기 (→ 6.d)"
+  If approved (or auto_trigger=true): execute Step 6.5.
+  After Step 6.5 returns, **skip 6.c** (outer loop already ran this cycle — do not run twice) → go to 6.d.
+If interval not reached → continue to 6.c.
+
+**6.c** Check for diminishing returns using strategy.yaml thresholds (only reached if 6.b did NOT trigger outer loop):
 - 0 keeps in last `consecutive_discard_limit` (default 10) → report: "<N>회 연속 discard. Score가 수렴한 것 같습니다."
 - keeps exist but max score delta < `min_delta` in last `plateau_window` (default 15) → report: "개선폭이 미미합니다."
 - `crash_tolerance`+ crashes in last 10 → report: "안정성 문제가 감지되었습니다."
 
-If diminishing returns detected AND `strategy.yaml.convergence.plateau_action` is `"branch"` AND `strategy.yaml.exploration.backtrack_enabled` is true:
-→ **Code Archive Backtrack**: Read `protocols/archive.md`, execute **Code Archive Backtrack** section.
+If any diminishing-returns signal triggered:
 
-If diminishing returns detected but backtrack not applicable (disabled or no keep entries), ask user via AskUserQuestion:
-Options:
-- "계속 (N회 추가)"
-- "평가 harness 확장 (더 어려운 시나리오/단계 추가)" → Go to **Section D: Prepare Expansion** (below)
-- "여기서 완료" → Read `protocols/completion.md`
+  First, check **Code Archive Backtrack**: If `strategy.yaml.convergence.plateau_action` is `"branch"` AND `strategy.yaml.exploration.backtrack_enabled` is true AND code-archive has eligible entries:
+  → Execute backtrack (Read `protocols/archive.md`). Then proceed to Outer Loop below.
+
+  If backtrack not applicable (disabled or no eligible entries), proceed directly to Outer Loop:
+
+  If `session.yaml.outer_loop.auto_trigger` is **true** (default):
+  → **IMMEDIATELY** run Step 6.5 (Outer Loop Evaluation). Do NOT AskUserQuestion before Outer Loop completes. → go to 6.d.
+
+  If `session.yaml.outer_loop.auto_trigger` is **false**:
+  → AskUserQuestion first: "diminishing returns 감지됨. Outer Loop를 실행할까요?"
+    - "실행" → Step 6.5 → go to 6.d
+    - "건너뛰기" → go to 6.d (user declined outer loop)
+
+**6.d** Continuation decision:
+
+  If Outer Loop was NOT run (no trigger, or user declined in 6.b/6.c):
+  If diminishing returns were detected but outer loop was skipped:
+  → AskUserQuestion: "계속 (N회 추가)" / "평가 harness 확장" / "여기서 완료"
+  Otherwise (no signal at all):
+  → auto-continue to Step 1.
+
+  If Outer Loop ran:
+  - Q(v) improved and no convergence flag → auto-continue to Step 1
+  - Q(v) degraded or session-level stop criteria met → AskUserQuestion:
+    Options:
+    - "계속 (N회 추가)"
+    - "평가 harness 확장 (더 어려운 시나리오/단계 추가)" → Go to **Section D: Prepare Expansion** (below)
+    - "여기서 완료" → Read `protocols/completion.md`
 
 **Step 6.5 — Outer Loop Evaluation** (triggers: `inner_count >= outer_interval` OR diminishing returns detected in Step 6):
-→ Read `protocols/outer-loop.md`, execute Outer Loop.
 
-If neither trigger condition is met, skip Outer Loop.
+Approval has already been resolved by the caller (Step 6.b or 6.c). Execute without additional confirmation.
+
+→ Read `protocols/outer-loop.md`, execute Outer Loop.
 
 If `experiment_count >= max_count`:
 → Read `protocols/completion.md`
