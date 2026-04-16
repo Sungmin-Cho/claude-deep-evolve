@@ -232,9 +232,9 @@ If at least one completed session exists:
 
    **If eval_mode is `cli`:**
    Generate `prepare.py` from appropriate template:
-   - If project has stdout-parseable metrics → use `prepare-stdout-parse.py` template
-   - If project has test framework → use `prepare-test-runner.py` template
-   - If code quality / pattern goal → use `prepare-scenario.py` template
+   - If project has stdout-parseable metrics → use `templates/prepare-stdout-parse.py` template
+   - If project has test framework → use `templates/prepare-test-runner.py` template
+   - If code quality / pattern goal → use `templates/prepare-scenario.py` template
    Customize the template with project-specific metric names, weights, parse patterns.
 
    **If eval_mode is `protocol`:**

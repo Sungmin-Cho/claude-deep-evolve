@@ -71,7 +71,7 @@ Every strategy that achieves a new best Q(v) is archived as a **stepping stone**
 
 Strategies that work well in one project can transfer to others:
 
-- **Meta-archive** (`~/.deep-evolve/meta-archive/`): A shared, flock-protected archive of proven strategies across all projects.
+- **Meta-archive** (`~/.claude/deep-evolve/meta-archive.jsonl`): A shared, flock-protected archive of proven strategies across all projects.
 - When starting a new project, deep-evolve seeds its initial strategy from the meta-archive, filtered by project domain similarity.
 - Successful strategies are contributed back to the meta-archive after each session.
 

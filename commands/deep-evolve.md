@@ -82,6 +82,7 @@ History        → protocols/history.md     (세션 목록/lineage/통계)
 
 ```yaml
 goal: "<목표>"
+created_at: "<ISO 8601>"               # 세션 생성 시각 (duration_minutes 계산용)
 eval_mode: cli | protocol              # 평가 모드
 metric:
   name: "<메트릭명>"
@@ -102,6 +103,8 @@ program:
 outer_loop:
   generation: <N>
   interval: 20
+  inner_count: <N>
+  auto_trigger: true
   q_history: [{generation, Q, epoch}, ...]
 evaluation_epoch:
   current: <N>
