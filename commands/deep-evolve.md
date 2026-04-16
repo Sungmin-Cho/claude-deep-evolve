@@ -136,3 +136,4 @@ transfer:
 | strategy_judgment    | 전략 keep/discard 판정 |
 | strategy_stagnation  | Outer Loop 정체 감지 |
 | branch_fork          | Code Archive backtrack |
+| notable_marked       | Notable keep 자동/수동 마킹 |
