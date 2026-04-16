@@ -292,10 +292,15 @@ EOF
 
 ### Task 5: session-helper.sh — 코어 유틸리티
 
+> **리뷰 반영 (P1/P2/P3/P4)**: 함수 기반 아키텍처, lock 소유권 추적, jq 기반 JSON 생성, migrate 안전성 강화.
+
 **Files:**
 - Create: `hooks/scripts/session-helper.sh`
 
 - [ ] **Step 1: 기본 구조 + 유틸 함수 작성**
+
+**P1 반영**: 모든 서브커맨드를 함수로 정의. `local`은 함수 안에서만 사용. case dispatch는 함수 호출만.
+**P3 반영**: cleanup은 `_LOCK_OWNER` PID를 확인해 현재 프로세스가 lock 소유자일 때만 해제. 재귀 호출(`cmd_*` 함수 직접 호출)은 lock 내부에서 `$0`를 쓰지 않음.
 
 ```bash
 #!/usr/bin/env bash
@@ -313,17 +318,18 @@ command -v flock >/dev/null 2>&1 && FLOCK_AVAILABLE=1 || FLOCK_AVAILABLE=0
 # === Globals ===
 PROJECT_ROOT=""
 DRY_RUN=0
+_LOCK_OWNER=""  # PID of process that acquired the lock
 
 # === Utility Functions ===
 
 cleanup() {
-  local exit_code="${1:-0}"
-  # Remove stray lock dirs and tmp files
-  [ -n "$PROJECT_ROOT" ] && rmdir "$PROJECT_ROOT/.deep-evolve/.session-lock" 2>/dev/null || true
+  # P3: Only release lock if THIS process owns it
+  if [ "$_LOCK_OWNER" = "$$" ] && [ -n "$PROJECT_ROOT" ]; then
+    rmdir "$PROJECT_ROOT/.deep-evolve/.session-lock" 2>/dev/null || true
+  fi
   rm -f /tmp/session-helper-*.tmp 2>/dev/null || true
-  return "$exit_code"
 }
-trap 'cleanup $?' EXIT
+trap 'cleanup' EXIT
 
 iso_now() {
   date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || gdate -u +"%Y-%m-%dT%H:%M:%SZ"
@@ -366,10 +372,12 @@ acquire_project_lock() {
     fi
     sleep 0.5
   done
+  _LOCK_OWNER="$$"  # P3: Track ownership
 }
 
 release_project_lock() {
   rmdir "$PROJECT_ROOT/.deep-evolve/.session-lock" 2>/dev/null || true
+  _LOCK_OWNER=""
 }
 
 dry_run_guard() {
@@ -394,18 +402,35 @@ PROJECT_ROOT="$(find_project_root)" || { echo "session-helper: .deep-evolve/ not
 
 EVOLVE_DIR="$PROJECT_ROOT/.deep-evolve"
 
-# === Subcommand dispatch (filled in subsequent tasks) ===
+# === Subcommand functions (P1: all `local` usage inside functions) ===
+# Each cmd_* function is defined in subsequent tasks.
+
+cmd_help() {
+  echo "session-helper.sh v$HELPER_VERSION"
+  echo "Subcommands: compute_session_id, resolve_current, list_sessions,"
+  echo "  start_new_session, mark_session_status, append_sessions_jsonl,"
+  echo "  migrate_legacy, check_branch_alignment, detect_orphan_experiment,"
+  echo "  append_meta_archive_local, render_inherited_context, lineage_tree"
+}
+
+# === Dispatch ===
 SUBCMD="${1:-help}"
 shift || true
 
 case "$SUBCMD" in
-  help)
-    echo "session-helper.sh v$HELPER_VERSION"
-    echo "Subcommands: compute_session_id, resolve_current, list_sessions,"
-    echo "  start_new_session, mark_session_status, append_sessions_jsonl,"
-    echo "  migrate_legacy, check_branch_alignment, detect_orphan_experiment,"
-    echo "  append_meta_archive_local, render_inherited_context, lineage_tree"
-    ;;
+  help) cmd_help ;;
+  compute_session_id) cmd_compute_session_id "$@" ;;
+  resolve_current) cmd_resolve_current "$@" ;;
+  list_sessions) cmd_list_sessions "$@" ;;
+  start_new_session) cmd_start_new_session "$@" ;;
+  mark_session_status) cmd_mark_session_status "$@" ;;
+  append_sessions_jsonl) cmd_append_sessions_jsonl "$@" ;;
+  migrate_legacy) cmd_migrate_legacy "$@" ;;
+  check_branch_alignment) cmd_check_branch_alignment "$@" ;;
+  detect_orphan_experiment) cmd_detect_orphan_experiment "$@" ;;
+  append_meta_archive_local) cmd_append_meta_archive_local "$@" ;;
+  render_inherited_context) cmd_render_inherited_context "$@" ;;
+  lineage_tree) cmd_lineage_tree "$@" ;;
   *) echo "session-helper: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
 esac
 ```
@@ -436,83 +461,82 @@ slug normalization, dry-run support, cleanup trap."
 **Files:**
 - Modify: `hooks/scripts/session-helper.sh`
 
-- [ ] **Step 1: compute_session_id 서브커맨드 구현**
+- [ ] **Step 1: cmd_compute_session_id 함수 구현 (P1: 함수로 정의)**
 
-dispatch case에 추가:
+dispatch case 위에 함수 정의:
 
 ```bash
-  compute_session_id)
-    local goal="${1:-}"
-    local slug
-    slug=$(compute_slug "$goal")
-    local today
-    today=$(date -u +"%Y-%m-%d")
-    local base_id="${today}_${slug}"
-    local candidate="$base_id"
-    local suffix=2
+cmd_compute_session_id() {
+  local goal="${1:-}"
+  local slug
+  slug=$(compute_slug "$goal")
+  local today
+  today=$(date -u +"%Y-%m-%d")
+  local base_id="${today}_${slug}"
+  local candidate="$base_id"
+  local suffix=2
 
-    # Collision check against sessions.jsonl
-    if [ -f "$EVOLVE_DIR/sessions.jsonl" ]; then
-      while grep -q "\"session_id\":\"$candidate\"" "$EVOLVE_DIR/sessions.jsonl" 2>/dev/null; do
-        candidate="${base_id}-${suffix}"
-        suffix=$((suffix + 1))
-      done
-    fi
+  # Collision check against sessions.jsonl
+  if [ -f "$EVOLVE_DIR/sessions.jsonl" ]; then
+    while grep -q "\"session_id\":\"$candidate\"" "$EVOLVE_DIR/sessions.jsonl" 2>/dev/null; do
+      candidate="${base_id}-${suffix}"
+      suffix=$((suffix + 1))
+    done
+  fi
 
-    printf '%s' "$candidate"
-    ;;
+  printf '%s' "$candidate"
+}
 ```
 
-- [ ] **Step 2: resolve_current 서브커맨드 구현**
+- [ ] **Step 2: cmd_resolve_current 함수 구현 (P1 + P2)**
 
 ```bash
-  resolve_current)
-    local current_json="$EVOLVE_DIR/current.json"
+cmd_resolve_current() {
+  local current_json="$EVOLVE_DIR/current.json"
 
-    if [ ! -f "$current_json" ]; then
-      echo "session-helper: no active session (current.json missing)" >&2
-      exit 1
+  if [ ! -f "$current_json" ]; then
+    echo "session-helper: no active session (current.json missing)" >&2
+    exit 1
+  fi
+
+  local session_id
+  session_id=$(jq -r '.session_id // empty' "$current_json" 2>/dev/null)
+  if [ -z "$session_id" ]; then
+    echo "session-helper: no active session (session_id null)" >&2
+    exit 1
+  fi
+
+  local session_root="$EVOLVE_DIR/$session_id"
+  if [ ! -d "$session_root" ]; then
+    echo "session-helper: orphan pointer — session dir missing: $session_root" >&2
+    echo "session-helper: run 'list_sessions' to find available sessions" >&2
+    exit 1
+  fi
+
+  if [ ! -f "$session_root/session.yaml" ]; then
+    echo "session-helper: session dir exists but session.yaml missing: $session_root" >&2
+    exit 1
+  fi
+
+  # AH2: Status reconciliation (P2: use jq for JSON generation)
+  if [ -f "$EVOLVE_DIR/sessions.jsonl" ]; then
+    local actual_status
+    actual_status=$(grep '^status:' "$session_root/session.yaml" 2>/dev/null | head -1 | sed 's/^status:[[:space:]]*//')
+    local jsonl_status
+    jsonl_status=$(grep "\"session_id\":\"$session_id\"" "$EVOLVE_DIR/sessions.jsonl" \
+      | grep -E '"event":"(status_change|finished|created)"' \
+      | tail -1 \
+      | jq -r '.status // empty' 2>/dev/null || true)
+
+    if [ -n "$jsonl_status" ] && [ -n "$actual_status" ] && [ "$jsonl_status" != "$actual_status" ]; then
+      jq -nc --arg sid "$session_id" --arg from "$jsonl_status" --arg to "$actual_status" --arg ts "$(iso_now)" \
+        '{event:"reconciled", ts:$ts, session_id:$sid, from:$from, to:$to}' \
+        >> "$EVOLVE_DIR/sessions.jsonl"
     fi
+  fi
 
-    local session_id
-    session_id=$(jq -r '.session_id // empty' "$current_json" 2>/dev/null)
-    if [ -z "$session_id" ]; then
-      echo "session-helper: no active session (session_id null)" >&2
-      exit 1
-    fi
-
-    local session_root="$EVOLVE_DIR/$session_id"
-    if [ ! -d "$session_root" ]; then
-      echo "session-helper: orphan pointer — session dir missing: $session_root" >&2
-      echo "session-helper: run 'list_sessions' to find available sessions" >&2
-      exit 1
-    fi
-
-    if [ ! -f "$session_root/session.yaml" ]; then
-      echo "session-helper: session dir exists but session.yaml missing: $session_root" >&2
-      exit 1
-    fi
-
-    # AH2: Status reconciliation
-    if [ -f "$EVOLVE_DIR/sessions.jsonl" ]; then
-      local actual_status
-      actual_status=$(grep '^status:' "$session_root/session.yaml" 2>/dev/null | head -1 | sed 's/^status:[[:space:]]*//')
-      local jsonl_status
-      jsonl_status=$(grep "\"session_id\":\"$session_id\"" "$EVOLVE_DIR/sessions.jsonl" \
-        | grep -E '"event":"(status_change|finished|created)"' \
-        | tail -1 \
-        | jq -r '.status // empty' 2>/dev/null)
-
-      if [ -n "$jsonl_status" ] && [ -n "$actual_status" ] && [ "$jsonl_status" != "$actual_status" ]; then
-        printf '{"event":"reconciled","ts":"%s","session_id":"%s","from":"%s","to":"%s"}\n' \
-          "$(iso_now)" "$session_id" "$jsonl_status" "$actual_status" \
-          >> "$EVOLVE_DIR/sessions.jsonl"
-      fi
-    fi
-
-    # Output: session_id and session_root
-    printf '%s\t%s\n' "$session_id" "$session_root"
-    ;;
+  printf '%s\t%s\n' "$session_id" "$session_root"
+}
 ```
 
 - [ ] **Step 3: 검증**
@@ -544,103 +568,130 @@ resolve_current: current.json → session_id + dir validation + AH2 status recon
 **Files:**
 - Modify: `hooks/scripts/session-helper.sh`
 
-- [ ] **Step 1: append_sessions_jsonl 구현**
+- [ ] **Step 1: cmd_append_sessions_jsonl 구현 (P2: jq 기반 JSON 생성)**
 
 ```bash
-  append_sessions_jsonl)
-    local event="$1" session_id="$2" extra_json="${3:-{\}}"
-    local line
-    line=$(printf '{"event":"%s","ts":"%s","session_id":"%s",%s}' \
-      "$event" "$(iso_now)" "$session_id" \
-      "$(echo "$extra_json" | sed 's/^{//; s/}$//')")
+cmd_append_sessions_jsonl() {
+  local event="$1" session_id="$2"
+  shift 2
+  # Remaining args are --key=value pairs for extra fields
+  local jq_args=()
+  jq_args+=(--arg event "$event" --arg ts "$(iso_now)" --arg sid "$session_id")
+  local jq_extra=""
 
-    if dry_run_guard "append to sessions.jsonl: $line"; then
-      return 0
-    fi
+  for arg in "$@"; do
+    case "$arg" in
+      --*=*)
+        local key="${arg%%=*}" val="${arg#*=}"
+        key="${key#--}"
+        jq_args+=(--arg "$key" "$val")
+        jq_extra="$jq_extra + {($key): \$$key}"
+        ;;
+    esac
+  done
 
-    printf '%s\n' "$line" >> "$EVOLVE_DIR/sessions.jsonl"
-    ;;
+  local line
+  line=$(jq -nc "${jq_args[@]}" "{event:\$event, ts:\$ts, session_id:\$sid} $jq_extra")
+
+  if dry_run_guard "append to sessions.jsonl: $line"; then
+    return 0
+  fi
+
+  printf '%s\n' "$line" >> "$EVOLVE_DIR/sessions.jsonl"
+}
 ```
 
-- [ ] **Step 2: start_new_session 구현**
+- [ ] **Step 2: cmd_start_new_session 구현 (P2 + P3: 직접 함수 호출, jq 기반)**
 
 ```bash
-  start_new_session)
-    local goal="${1:-}"
-    local parent_id=""
-    shift || true
-    for arg in "$@"; do
-      case "$arg" in --parent=*) parent_id="${arg#--parent=}" ;; esac
-    done
+cmd_start_new_session() {
+  local goal="${1:-}"
+  local parent_id=""
+  shift || true
+  for arg in "$@"; do
+    case "$arg" in --parent=*) parent_id="${arg#--parent=}" ;; esac
+  done
 
-    acquire_project_lock || exit 1
+  acquire_project_lock || exit 1
 
-    local session_id
-    session_id=$("$0" compute_session_id "$goal")
-    local session_root="$EVOLVE_DIR/$session_id"
+  # P3: 직접 함수 호출 (재귀 $0 제거 → lock 해제 방지)
+  local session_id
+  session_id=$(cmd_compute_session_id "$goal")
+  local session_root="$EVOLVE_DIR/$session_id"
 
-    if dry_run_guard "create session $session_id at $session_root"; then
-      release_project_lock
-      printf '%s\t%s\n' "$session_id" "$session_root"
-      return 0
-    fi
-
-    # Create namespace dir
-    mkdir -p "$session_root"/{runs,code-archive,strategy-archive,meta-analyses} || {
-      rm -rf "$session_root"
-      release_project_lock
-      echo "session-helper: failed to create session dir" >&2
-      exit 1
-    }
-
-    # Append created event to sessions.jsonl
-    local parent_field=""
-    [ -n "$parent_id" ] && parent_field="\"parent_session_id\":\"$parent_id\","
-    "$0" append_sessions_jsonl "created" "$session_id" \
-      "{\"goal\":\"$goal\",$parent_field\"status\":\"active\"}" || {
-      rm -rf "$session_root"
-      release_project_lock
-      echo "session-helper: failed to append sessions.jsonl" >&2
-      exit 1
-    }
-
-    # Write current.json (atomic via tmp+mv)
-    local tmp_current
-    tmp_current=$(mktemp "$EVOLVE_DIR/current.json.XXXXXX")
-    printf '{"session_id":"%s","started_at":"%s"}\n' "$session_id" "$(iso_now)" > "$tmp_current"
-    mv "$tmp_current" "$EVOLVE_DIR/current.json"
-
+  if dry_run_guard "create session $session_id at $session_root"; then
     release_project_lock
     printf '%s\t%s\n' "$session_id" "$session_root"
-    ;;
+    return 0
+  fi
+
+  # Create namespace dir
+  mkdir -p "$session_root"/{runs,code-archive,strategy-archive,meta-analyses} || {
+    rm -rf "$session_root"
+    release_project_lock
+    echo "session-helper: failed to create session dir" >&2
+    exit 1
+  }
+
+  # P2+P3: 직접 함수 호출 + jq 기반 JSON
+  local jq_args=(--arg goal "$goal" --arg status "active")
+  local jq_extra='+ {goal:$goal, status:$status}'
+  if [ -n "$parent_id" ]; then
+    jq_args+=(--arg pid "$parent_id")
+    jq_extra="$jq_extra + {parent_session_id:\$pid}"
+  fi
+  local line
+  line=$(jq -nc --arg event "created" --arg ts "$(iso_now)" --arg sid "$session_id" \
+    "${jq_args[@]}" \
+    "{event:\$event, ts:\$ts, session_id:\$sid} $jq_extra")
+  printf '%s\n' "$line" >> "$EVOLVE_DIR/sessions.jsonl" || {
+    rm -rf "$session_root"
+    release_project_lock
+    echo "session-helper: failed to append sessions.jsonl" >&2
+    exit 1
+  }
+
+  # Write current.json (atomic via tmp+mv, P2: jq for JSON)
+  local tmp_current
+  tmp_current=$(mktemp "$EVOLVE_DIR/current.json.XXXXXX")
+  jq -nc --arg sid "$session_id" --arg ts "$(iso_now)" \
+    '{session_id:$sid, started_at:$ts}' > "$tmp_current"
+  mv "$tmp_current" "$EVOLVE_DIR/current.json"
+
+  release_project_lock
+  printf '%s\t%s\n' "$session_id" "$session_root"
+}
 ```
 
-- [ ] **Step 3: mark_session_status 구현**
+- [ ] **Step 3: cmd_mark_session_status 구현 (P1+P2+P3)**
 
 ```bash
-  mark_session_status)
-    local session_id="$1" new_status="$2"
-    local session_root="$EVOLVE_DIR/$session_id"
+cmd_mark_session_status() {
+  local session_id="$1" new_status="$2"
+  local session_root="$EVOLVE_DIR/$session_id"
 
-    acquire_project_lock || exit 1
+  acquire_project_lock || exit 1
 
-    if dry_run_guard "mark $session_id as $new_status"; then
-      release_project_lock
-      return 0
-    fi
-
-    # Update session.yaml status (sed-based, simple)
-    if [ -f "$session_root/session.yaml" ]; then
-      sed -i.bak "s/^status:.*/status: $new_status/" "$session_root/session.yaml"
-      rm -f "$session_root/session.yaml.bak"
-    fi
-
-    # Append status_change to sessions.jsonl
-    "$0" append_sessions_jsonl "status_change" "$session_id" \
-      "{\"status\":\"$new_status\"}"
-
+  if dry_run_guard "mark $session_id as $new_status"; then
     release_project_lock
-    ;;
+    return 0
+  fi
+
+  # Update session.yaml status (portable sed: tmp+mv)
+  if [ -f "$session_root/session.yaml" ]; then
+    local tmp_yaml
+    tmp_yaml=$(mktemp "$session_root/session.yaml.XXXXXX")
+    sed "s/^status:.*/status: $new_status/" "$session_root/session.yaml" > "$tmp_yaml"
+    mv "$tmp_yaml" "$session_root/session.yaml"
+  fi
+
+  # P2+P3: jq for JSON, 직접 append (재귀 호출 제거)
+  jq -nc --arg event "status_change" --arg ts "$(iso_now)" --arg sid "$session_id" --arg s "$new_status" \
+    '{event:$event, ts:$ts, session_id:$sid, status:$s}' \
+    >> "$EVOLVE_DIR/sessions.jsonl"
+
+  release_project_lock
+}
 ```
 
 - [ ] **Step 4: 검증**
@@ -680,71 +731,117 @@ append_sessions_jsonl: O_APPEND atomic, --dry-run support."
 **Files:**
 - Modify: `hooks/scripts/session-helper.sh`
 
-- [ ] **Step 1: migrate_legacy 구현**
+- [ ] **Step 1: cmd_migrate_legacy 구현 (P4: 오류 미무시 + 완전 매니페스트 검증)**
 
 ```bash
-  migrate_legacy)
-    # Detect flat layout
-    if [ ! -f "$EVOLVE_DIR/session.yaml" ] || [ -f "$EVOLVE_DIR/current.json" ]; then
-      echo "session-helper: no legacy layout to migrate" >&2
-      exit 1
-    fi
+cmd_migrate_legacy() {
+  # Detect flat layout
+  if [ ! -f "$EVOLVE_DIR/session.yaml" ] || [ -f "$EVOLVE_DIR/current.json" ]; then
+    echo "session-helper: no legacy layout to migrate" >&2
+    exit 1
+  fi
 
-    local ts
-    ts=$(iso_now | tr ':' '-')
-    local goal
-    goal=$(grep '^goal:' "$EVOLVE_DIR/session.yaml" 2>/dev/null | head -1 | sed 's/^goal:[[:space:]]*//' | tr -d '"' || echo "unknown")
-    local slug
-    slug=$(compute_slug "$goal")
-    local legacy_id="legacy-${ts}_${slug}"
-    local legacy_dir="$EVOLVE_DIR/${legacy_id}"
+  local ts
+  ts=$(iso_now | tr ':' '-')
+  local goal
+  goal=$(grep '^goal:' "$EVOLVE_DIR/session.yaml" 2>/dev/null | head -1 | sed 's/^goal:[[:space:]]*//' | tr -d '"')
+  goal="${goal:-unknown}"
+  local slug
+  slug=$(compute_slug "$goal")
+  local legacy_id="legacy-${ts}_${slug}"
+  local legacy_dir="$EVOLVE_DIR/${legacy_id}"
 
-    if dry_run_guard "migrate flat layout to $legacy_dir"; then
-      return 0
-    fi
-
-    # 1) Create namespace dir
-    mkdir -p "$legacy_dir/meta-analyses" || return 1
-
-    # 2) COPY (not move) — keep originals until verified
-    local files_to_copy=(session.yaml strategy.yaml program.md prepare.py prepare-protocol.md results.tsv journal.jsonl)
-    local dirs_to_copy=(runs code-archive strategy-archive)
-
-    for f in "${files_to_copy[@]}"; do
-      [ -f "$EVOLVE_DIR/$f" ] && cp "$EVOLVE_DIR/$f" "$legacy_dir/" 2>/dev/null || true
-    done
-    for d in "${dirs_to_copy[@]}"; do
-      [ -d "$EVOLVE_DIR/$d" ] && cp -R "$EVOLVE_DIR/$d" "$legacy_dir/" 2>/dev/null || true
-    done
-    # meta-analysis.md → meta-analyses/gen-legacy.md
-    [ -f "$EVOLVE_DIR/meta-analysis.md" ] && cp "$EVOLVE_DIR/meta-analysis.md" "$legacy_dir/meta-analyses/gen-legacy.md" 2>/dev/null || true
-
-    # 3) Verify: check that session.yaml exists in legacy dir
-    if [ ! -f "$legacy_dir/session.yaml" ]; then
-      echo "session-helper: migrate verification failed — cleaning up" >&2
+  # P4 idempotency: check if legacy dir already exists (partial previous run)
+  if [ -d "$legacy_dir" ]; then
+    if [ -f "$legacy_dir/session.yaml" ]; then
+      echo "session-helper: legacy dir already exists and looks complete, skipping copy" >&2
+      # Jump to step 4 (registry + cleanup)
+    else
+      echo "session-helper: incomplete legacy dir found, removing and retrying" >&2
       rm -rf "$legacy_dir"
-      return 1
     fi
+  fi
 
-    # 4) Write registry (sessions.jsonl)
-    local status
-    status=$(grep '^status:' "$legacy_dir/session.yaml" 2>/dev/null | head -1 | sed 's/^status:[[:space:]]*//' || echo "legacy")
-    "$0" append_sessions_jsonl "migrated" "$legacy_id" \
-      "{\"from\":\"flat_layout\",\"status\":\"$status\",\"goal\":\"$goal\",\"legacy_recovery\":\"unavailable\"}"
+  if dry_run_guard "migrate flat layout to $legacy_dir"; then
+    return 0
+  fi
 
-    # Do NOT create current.json — legacy is treated as completed
+  acquire_project_lock || exit 1
 
-    # 5) Remove originals
-    for f in "${files_to_copy[@]}"; do
-      rm -f "$EVOLVE_DIR/$f" 2>/dev/null || true
-    done
-    for d in "${dirs_to_copy[@]}"; do
-      rm -rf "$EVOLVE_DIR/$d" 2>/dev/null || true
-    done
-    rm -f "$EVOLVE_DIR/meta-analysis.md" "$EVOLVE_DIR/report.md" "$EVOLVE_DIR/evolve-receipt.json" 2>/dev/null || true
+  # 1) Create namespace dir
+  mkdir -p "$legacy_dir/meta-analyses" || { release_project_lock; return 1; }
 
-    echo "session-helper: migrated to $legacy_dir"
-    ;;
+  # 2) COPY (not move) — P4: FAIL on any copy error (no || true)
+  local files_to_copy=(session.yaml strategy.yaml program.md prepare.py prepare-protocol.md results.tsv journal.jsonl)
+  local dirs_to_copy=(runs code-archive strategy-archive)
+  local copy_failed=0
+
+  for f in "${files_to_copy[@]}"; do
+    if [ -f "$EVOLVE_DIR/$f" ]; then
+      cp "$EVOLVE_DIR/$f" "$legacy_dir/" || { copy_failed=1; break; }
+    fi
+  done
+  for d in "${dirs_to_copy[@]}"; do
+    if [ "$copy_failed" -eq 1 ]; then break; fi
+    if [ -d "$EVOLVE_DIR/$d" ]; then
+      cp -R "$EVOLVE_DIR/$d" "$legacy_dir/" || { copy_failed=1; break; }
+    fi
+  done
+  [ -f "$EVOLVE_DIR/meta-analysis.md" ] && \
+    cp "$EVOLVE_DIR/meta-analysis.md" "$legacy_dir/meta-analyses/gen-legacy.md" || true
+
+  if [ "$copy_failed" -eq 1 ]; then
+    echo "session-helper: copy failed — rolling back" >&2
+    rm -rf "$legacy_dir"
+    release_project_lock
+    return 1
+  fi
+
+  # 3) P4: Complete manifest verification (not just session.yaml)
+  local verify_ok=1
+  for f in "${files_to_copy[@]}"; do
+    if [ -f "$EVOLVE_DIR/$f" ] && [ ! -f "$legacy_dir/$f" ]; then
+      echo "session-helper: verification failed: $f missing in destination" >&2
+      verify_ok=0
+    fi
+  done
+  for d in "${dirs_to_copy[@]}"; do
+    if [ -d "$EVOLVE_DIR/$d" ] && [ ! -d "$legacy_dir/$d" ]; then
+      echo "session-helper: verification failed: $d/ missing in destination" >&2
+      verify_ok=0
+    fi
+  done
+
+  if [ "$verify_ok" -eq 0 ]; then
+    echo "session-helper: manifest verification failed — rolling back" >&2
+    rm -rf "$legacy_dir"
+    release_project_lock
+    return 1
+  fi
+
+  # 4) Write registry (P2: jq for JSON, P3: 직접 append)
+  local status
+  status=$(grep '^status:' "$legacy_dir/session.yaml" 2>/dev/null | head -1 | sed 's/^status:[[:space:]]*//')
+  status="${status:-legacy}"
+  jq -nc --arg event "migrated" --arg ts "$(iso_now)" --arg sid "$legacy_id" \
+    --arg from "flat_layout" --arg s "$status" --arg g "$goal" --arg lr "unavailable" \
+    '{event:$event, ts:$ts, session_id:$sid, from:$from, status:$s, goal:$g, legacy_recovery:$lr}' \
+    >> "$EVOLVE_DIR/sessions.jsonl"
+
+  # Do NOT create current.json — legacy is treated as completed
+
+  # 5) Remove originals (only after registry update succeeded)
+  for f in "${files_to_copy[@]}"; do
+    rm -f "$EVOLVE_DIR/$f" 2>/dev/null
+  done
+  for d in "${dirs_to_copy[@]}"; do
+    rm -rf "$EVOLVE_DIR/$d" 2>/dev/null
+  done
+  rm -f "$EVOLVE_DIR/meta-analysis.md" "$EVOLVE_DIR/report.md" "$EVOLVE_DIR/evolve-receipt.json" 2>/dev/null
+
+  release_project_lock
+  echo "session-helper: migrated to $legacy_dir"
+}
 ```
 
 - [ ] **Step 2: 커밋**
@@ -764,11 +861,11 @@ Idempotent: re-run skips if legacy_dir already exists and verifies."
 **Files:**
 - Modify: `hooks/scripts/session-helper.sh`
 
-- [ ] **Step 1: check_branch_alignment 구현**
+- [ ] **Step 1: cmd_check_branch_alignment 함수 구현 (P1)**
 
 ```bash
-  check_branch_alignment)
-    local session_dir="$1"
+cmd_check_branch_alignment() {
+  local session_dir="$1"
     local expected
     expected=$(grep 'current_branch:' "$session_dir/session.yaml" 2>/dev/null | head -1 | sed 's/.*current_branch:[[:space:]]*//' | tr -d '"')
     local actual
@@ -780,42 +877,52 @@ Idempotent: re-run skips if legacy_dir already exists and verifies."
 
     echo "branch mismatch: expected '$expected', actual '$actual'" >&2
     exit 1
-    ;;
+}
 ```
 
-- [ ] **Step 2: detect_orphan_experiment 구현**
+- [ ] **Step 2: cmd_detect_orphan_experiment 함수 구현 (P1, tac → tail -r fallback)**
 
 ```bash
-  detect_orphan_experiment)
-    local session_dir="$1"
-    local journal="$session_dir/journal.jsonl"
+cmd_detect_orphan_experiment() {
+  local session_dir="$1"
+  local journal="$session_dir/journal.jsonl"
 
-    if [ ! -f "$journal" ]; then
-      exit 0
-    fi
+  if [ ! -f "$journal" ]; then
+    return 0
+  fi
 
-    # Find last committed event without matching evaluated
-    local last_committed_n
-    last_committed_n=$(tac "$journal" | grep '"status":"committed"' | head -1 | jq -r '.id // empty' 2>/dev/null)
+  # Portable reverse (tac not on all macOS)
+  local reversed
+  if command -v tac >/dev/null 2>&1; then
+    reversed=$(tac "$journal")
+  else
+    reversed=$(tail -r "$journal" 2>/dev/null || cat "$journal")
+  fi
 
-    if [ -z "$last_committed_n" ]; then
-      exit 0
-    fi
+  # Find last committed event without matching evaluated
+  local last_committed_n
+  last_committed_n=$(printf '%s\n' "$reversed" \
+    | grep '"status":"committed"' \
+    | head -1 \
+    | jq -r '.id // empty' 2>/dev/null || true)
 
-    # Check if there's a matching evaluated/kept/discarded/rollback_completed
-    local has_resolution
-    has_resolution=$(grep "\"id\":$last_committed_n" "$journal" \
-      | grep -cE '"status":"(evaluated|kept|discarded|rollback_completed)"' 2>/dev/null || echo 0)
+  if [ -z "$last_committed_n" ]; then
+    return 0
+  fi
 
-    if [ "$has_resolution" -eq 0 ]; then
-      # Orphan: committed but no evaluation
-      local commit_hash
-      commit_hash=$(grep "\"id\":$last_committed_n" "$journal" \
-        | grep '"status":"committed"' \
-        | jq -r '.commit // empty' 2>/dev/null | head -1)
-      printf '%s' "$commit_hash"
-    fi
-    ;;
+  # Check if there's a matching evaluated/kept/discarded/rollback_completed
+  local has_resolution
+  has_resolution=$(grep "\"id\":$last_committed_n" "$journal" \
+    | grep -cE '"status":"(evaluated|kept|discarded|rollback_completed)"' 2>/dev/null || echo 0)
+
+  if [ "$has_resolution" -eq 0 ]; then
+    local commit_hash
+    commit_hash=$(grep "\"id\":$last_committed_n" "$journal" \
+      | grep '"status":"committed"' \
+      | jq -r '.commit // empty' 2>/dev/null | head -1)
+    printf '%s' "$commit_hash"
+  fi
+}
 ```
 
 - [ ] **Step 3: 커밋**
@@ -1035,9 +1142,20 @@ fi
 
 SESSION_FILE="$SESSION_ROOT/session.yaml"
 
-# Helper bypass
+# P6: Helper bypass — scoped to registry files only (not blanket)
 if [[ "${DEEP_EVOLVE_HELPER:-}" == "1" ]]; then
-  exit 0
+  # Only allow writes to: current.json, sessions.jsonl, session.yaml (status updates)
+  # Still block: prepare.py, prepare-protocol.md, program.md, strategy.yaml
+  FILE_PATH=""
+  if echo "$TOOL_INPUT" | grep -q '"file_path"'; then
+    FILE_PATH="$(echo "$TOOL_INPUT" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+  fi
+  case "$FILE_PATH" in
+    */current.json|*/sessions.jsonl|*/session.yaml) exit 0 ;;
+    # For Bash commands, allow if command targets only registry files
+    "") exit 0 ;;  # Bash tool — let normal detection handle it
+  esac
+  # Fall through to normal protection for non-registry files
 fi
 ```
 
@@ -1297,21 +1415,41 @@ Read `$SESSION_ROOT/results.tsv` and `$SESSION_ROOT/journal.jsonl` for history.
 > **$SESSION_ROOT resolution**: The dispatcher or resume.md has already resolved the active session via `session-helper.sh resolve_current`. All `.deep-evolve/` paths in this protocol refer to `$SESSION_ROOT/`.
 ```
 
-- [ ] **Step 2: 전수 경로 치환**
+- [ ] **Step 2: 경로 치환 (P5: targeted edit, blind sed 금지)**
 
+> **P5 반영**: `sed -i 's|\.deep-evolve/|$SESSION_ROOT/|g'` 사용 금지. 이유: git status 패턴 `grep -v '^\?\? .deep-evolve/'` (line 53)이 오염됨. 대신 Edit tool로 개별 치환.
+
+`.deep-evolve/` → `$SESSION_ROOT/` 로 치환해야 하는 위치 (검색으로 확인):
 ```bash
-# 모든 .deep-evolve/ 참조를 $SESSION_ROOT/로 교체
-sed -i '' 's|\.deep-evolve/|$SESSION_ROOT/|g' skills/deep-evolve-workflow/protocols/inner-loop.md
+grep -n '\.deep-evolve/' skills/deep-evolve-workflow/protocols/inner-loop.md
 ```
+
+**치환 대상** (protocol 내 파일 경로 참조):
+- `.deep-evolve/strategy.yaml` → `$SESSION_ROOT/strategy.yaml`
+- `.deep-evolve/program.md` → `$SESSION_ROOT/program.md`
+- `.deep-evolve/results.tsv` → `$SESSION_ROOT/results.tsv`
+- `.deep-evolve/journal.jsonl` → `$SESSION_ROOT/journal.jsonl`
+- `.deep-evolve/runs/` → `$SESSION_ROOT/runs/`
+- `.deep-evolve/prepare.py` → `$SESSION_ROOT/prepare.py`
+- `.deep-evolve/prepare-protocol.md` → `$SESSION_ROOT/prepare-protocol.md`
+- `.deep-evolve/code-archive/` → `$SESSION_ROOT/code-archive/`
+
+**치환 제외** (파일시스템 리터럴 경로로서 `.deep-evolve/`가 정확히 필요한 곳):
+- `grep -v '^\?\? .deep-evolve/'` (line ~53) — git status 제외 패턴
+- `.gitignore` 언급 (`echo ".deep-evolve/" >> .gitignore` 등)
+
+Edit tool을 사용해 각 라인을 개별적으로 교체. 총 ~15개 치환 예상.
 
 - [ ] **Step 3: 검증**
 
 ```bash
-grep -c '\.deep-evolve/' skills/deep-evolve-workflow/protocols/inner-loop.md
-# Expected: 0
+# protocol 내 파일 참조에는 .deep-evolve/ 없어야 함
+grep '\.deep-evolve/' skills/deep-evolve-workflow/protocols/inner-loop.md | grep -v 'grep\|gitignore\|git status'
+# Expected: 0 matches
 
-grep -c '\$SESSION_ROOT/' skills/deep-evolve-workflow/protocols/inner-loop.md
-# Expected: 10+ matches
+# git status 패턴은 .deep-evolve/가 그대로 남아 있어야 함
+grep 'deep-evolve/' skills/deep-evolve-workflow/protocols/inner-loop.md | grep 'grep\|gitignore'
+# Expected: 1+ matches (line 53 등)
 ```
 
 - [ ] **Step 4: 커밋**
@@ -1328,11 +1466,9 @@ git commit -m "refactor(inner-loop): replace .deep-evolve/ with \$SESSION_ROOT/ 
 **Files:**
 - Modify: `skills/deep-evolve-workflow/protocols/outer-loop.md`
 
-- [ ] **Step 1: $SESSION_ROOT 경로 치환**
+- [ ] **Step 1: $SESSION_ROOT 경로 치환 (P5: targeted edit)**
 
-```bash
-sed -i '' 's|\.deep-evolve/|$SESSION_ROOT/|g' skills/deep-evolve-workflow/protocols/outer-loop.md
-```
+개별 Edit으로 `.deep-evolve/` → `$SESSION_ROOT/` 치환. 문서 내 리터럴 설명(예: "Tier 3 raises quality ceiling")은 치환 대상이 아님.
 
 - [ ] **Step 2: meta-analysis 저장을 세대별 append로 변경**
 
@@ -1375,25 +1511,17 @@ Tier 2: optional notable keep marking in journal."
 - Modify: `skills/deep-evolve-workflow/protocols/transfer.md`
 - Modify: `skills/deep-evolve-workflow/protocols/completion.md`
 
-- [ ] **Step 1: archive.md 경로 치환**
+- [ ] **Step 1: archive.md 경로 치환 (P5: targeted edit)**
 
-```bash
-sed -i '' 's|\.deep-evolve/|$SESSION_ROOT/|g' skills/deep-evolve-workflow/protocols/archive.md
-```
+개별 Edit으로 `.deep-evolve/code-archive/`, `.deep-evolve/strategy-archive/` 등 파일 참조만 치환.
 
-- [ ] **Step 2: transfer.md 경로 치환**
+- [ ] **Step 2: transfer.md 경로 치환 (P5: targeted edit)**
 
-```bash
-sed -i '' 's|\.deep-evolve/|$SESSION_ROOT/|g' skills/deep-evolve-workflow/protocols/transfer.md
-```
+개별 Edit으로 `session.yaml` 참조만 치환. **`~/.claude/deep-evolve/meta-archive.jsonl`은 절대 치환 금지** — 이는 글로벌 경로.
 
-글로벌 `~/.claude/deep-evolve/meta-archive.jsonl` 경로는 치환하면 안 됨 — sed 후 수동 확인하여 `~/.claude/`로 시작하는 경로가 손상되지 않았는지 확인.
+- [ ] **Step 3: completion.md 경로 치환 (P5: targeted edit)**
 
-- [ ] **Step 3: completion.md 경로 치환**
-
-```bash
-sed -i '' 's|\.deep-evolve/|$SESSION_ROOT/|g' skills/deep-evolve-workflow/protocols/completion.md
-```
+개별 Edit. "Preserve `.deep-evolve/code-archive/`" 같은 **디렉터리 보존 설명**은 치환 대상이 아님 (리터럴 on-disk 경로 설명).
 
 - [ ] **Step 4: completion.md에 receipt v2.2.0 확장 지시 추가**
 
