@@ -29,7 +29,7 @@ Analyze experiment results for the current generation's interval:
       - Identify common traits of experiments with the largest positive delta
       - Characterize score plateau intervals
 
-2. **메타 분석 기록**: Write to `.deep-evolve/meta-analysis.md`:
+2. **메타 분석 기록**: Write to `$SESSION_ROOT/meta-analyses/gen-<N>.md` where N = `session.yaml.outer_loop.generation`. Write to per-generation file (do not overwrite previous generations).
    ```markdown
    # Meta Analysis — Generation <g>, Experiments <start>-<end>
    **Generated**: <timestamp>
@@ -116,23 +116,26 @@ Based on meta analysis, propose program.md revision:
    "메타 분석 완료 (Q(v)=<value>) — 실험 전략을 업데이트할까요?"
    Options:
    - "자동 업데이트 적용" → proceed with update
-   - "내용 확인 후 결정" → Display `.deep-evolve/meta-analysis.md`, then re-ask with "적용" / "유지"
+   - "내용 확인 후 결정" → Display `$SESSION_ROOT/meta-analyses/gen-<N>.md`, then re-ask with "적용" / "유지"
    - "현재 전략 유지" → skip program.md update
 
 2. **If approved** — Program Update:
    a. Set `DEEP_EVOLVE_META_MODE=outer_loop` (allows both strategy.yaml and program.md writes past protect-readonly hook).
-   b. Read current `.deep-evolve/program.md`.
+   b. Read current `$SESSION_ROOT/program.md`.
    c. Generate updated `program.md`:
       - Preserve overall structure and project-specific context
       - Strengthen sections for effective strategies (high keep-rate categories)
       - Add explicit "avoid" list from discard pattern analysis
       - Add new exploration directions as suggestions
       - Append version footer: `<!-- program v<new_version> — meta_analysis at experiment <N> -->`
-   d. Write updated `.deep-evolve/program.md`.
+   d. Write updated `$SESSION_ROOT/program.md`.
    e. Unset `DEEP_EVOLVE_META_MODE` (restore protection for both strategy.yaml and program.md).
    f. Update `session.yaml.program`: increment version, append to history with keep_rate and reason.
       Close previous history entry's experiment range: `"<start>-<end>"`.
    g. Insert separator in `results.tsv`: `--- program v<old> -> v<new> (meta_analysis: <reason>) ---`
+
+(Optional, v2.3에서 의무화 예정) 이 keep이 다른 세션에 전이할 가치가 있다면
+journal.jsonl에 {"event": "outer_loop", "notable": true, "n": <experiment_number>, "reason": "<brief>", "timestamp": "<now>"} 형태로 기록.
 
 ## Step 6.5.5 — Strategy Keep/Discard Judgment
 

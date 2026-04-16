@@ -141,10 +141,17 @@ If `REQUESTED_COUNT` was set, use it. Otherwise:
 git checkout -b deep-evolve/$(date +%b%d | tr '[:upper:]' '[:lower:]')
 ```
 
-2. Create `.deep-evolve/` directory structure:
+1.5. **Legacy layout migration** (v2.2.0):
+If `.deep-evolve/session.yaml` exists at root and `.deep-evolve/current.json` does not exist:
+→ This is a pre-v2.2.0 flat layout. The dispatcher should have already offered migration.
+   If reached here, run `session-helper.sh migrate_legacy`.
+
+2. Create session via helper:
 ```bash
-mkdir -p .deep-evolve/runs .deep-evolve/strategy-archive .deep-evolve/code-archive
+session-helper.sh start_new_session "<goal>" [--parent=<parent_id>]
 ```
+This creates `.deep-evolve/<session-id>/` with subdirs: `runs/`, `code-archive/`, `strategy-archive/`, `meta-analyses/`.
+Sets `$SESSION_ROOT` to the created directory. Writes `current.json` and `sessions.jsonl`.
 
 3. Add `.deep-evolve/` to `.gitignore` (if not already present):
 ```bash
@@ -153,11 +160,48 @@ git add .gitignore
 git commit -m "chore: add .deep-evolve/ to gitignore"
 ```
 
+3.5. **Lineage Decision** (v2.2.0):
+
+**AH3 주의**: Lineage는 Step 2 (start_new_session) 이후에 결정되지만, `--parent=<id>` 인자는 Step 2에서 전달된다. 따라서 실제 흐름은:
+1. Step 3.5에서 lineage 결정 (AskUserQuestion)
+2. 결정이 "continue"이면 parent_id 확보
+3. Step 2에서 `start_new_session "<goal>" --parent=<parent_id>` 호출 (Step 2가 3.5 뒤에 실행됨)
+
+**대안 (순서 문제 해소)**: Step 2를 먼저 실행(parent 없이)하고, Step 3.5에서 parent 결정 후 sessions.jsonl에 lineage 이벤트를 추가 append:
+```bash
+# parent 결정 후
+session-helper.sh append_sessions_jsonl "lineage_set" "<session_id>" --parent_session_id="<parent_id>"
+```
+그리고 `cmd_list_sessions`의 jq reduce에서 `lineage_set` 이벤트를 처리하도록 추가.
+
+Run `session-helper.sh list_sessions --status=completed`.
+If at least one completed session exists:
+  AskUserQuestion: "이 프로젝트에는 완료된 세션 N개가 있습니다. 어떻게 시작할까요?"
+    - "fresh: 빈 상태로 시작" → parent_session = null
+    - "continue from <last-completed>" → parent_session.id = last
+    - "continue from ...: 특정 세션 선택" → list + pick
+    - "transfer from other project" → 기존 transfer.md 경로
+  If continue selected:
+    - `session-helper.sh append_sessions_jsonl "lineage_set" "<session_id>" --parent_session_id="<parent_id>"`
+    - Copy parent's final strategy.yaml to $SESSION_ROOT/strategy.yaml
+    - Record parent_session in session.yaml (Step 4에서)
+    - Read parent receipt for Step 6 Inherited Context generation
+
 4. Generate `session.yaml` with all collected configuration.
    Must include `eval_mode` field (`cli` or `protocol`).
    If `protocol`, also include `protocol_tools` (list of required MCP/tool names).
    Include `program` version tracking, `outer_loop` state, and `evaluation_epoch`:
    ```yaml
+   session_id: "<computed>"
+   deep_evolve_version: "2.2.0"
+   parent_session:    # null for root sessions; populated if continue selected
+     id: "<parent_id or null>"
+     parent_receipt_schema_version: <N>
+     seed_source:
+       strategy_version: <N>
+       program_version: <N>
+       notable_keep_commit_refs: [...]
+     inherited_at: "<now>"
    program:
      version: 1
      history:
@@ -188,9 +232,9 @@ git commit -m "chore: add .deep-evolve/ to gitignore"
 
    **If eval_mode is `cli`:**
    Generate `prepare.py` from appropriate template:
-   - If project has stdout-parseable metrics → use `prepare-stdout-parse.py` template
-   - If project has test framework → use `prepare-test-runner.py` template
-   - If code quality / pattern goal → use `prepare-scenario.py` template
+   - If project has stdout-parseable metrics → use `templates/prepare-stdout-parse.py` template
+   - If project has test framework → use `templates/prepare-test-runner.py` template
+   - If code quality / pattern goal → use `templates/prepare-scenario.py` template
    Customize the template with project-specific metric names, weights, parse patterns.
 
    **If eval_mode is `protocol`:**
@@ -222,13 +266,17 @@ git commit -m "chore: add .deep-evolve/ to gitignore"
    <!-- /automation-policy-v1 -->
    ```
 
+   **If continue was selected in Step 3.5**, also insert Inherited Context:
+   Run: `session-helper.sh render_inherited_context <parent_id>`
+   Insert the output between the automation policy and the project-specific body.
+
    Then generate the project-specific experiment instructions below the sentinel block.
 
 7. Initialize `results.tsv` with header: `commit\tscore\tstatus\tdescription`
 
 8. Initialize empty `journal.jsonl`.
 
-9. Generate `.deep-evolve/strategy.yaml` with default parameters:
+9. Generate `$SESSION_ROOT/strategy.yaml` with default parameters:
    ```yaml
    # strategy.yaml — Evolving strategy parameters (modified by Outer Loop)
    version: 1
@@ -288,13 +336,13 @@ git commit -m "chore: add .deep-evolve/ to gitignore"
 
     **If eval_mode is `cli`:**
     ```bash
-    python3 .deep-evolve/prepare.py > .deep-evolve/runs/run-000.log 2>&1
+    python3 $SESSION_ROOT/prepare.py > $SESSION_ROOT/runs/run-000.log 2>&1
     ```
 
     **If eval_mode is `protocol`:**
-    Execute the evaluation protocol defined in `.deep-evolve/prepare-protocol.md`:
+    Execute the evaluation protocol defined in `$SESSION_ROOT/prepare-protocol.md`:
     - Follow each step exactly using the specified tools
-    - Record all tool call results to `.deep-evolve/runs/run-000.log`
+    - Record all tool call results to `$SESSION_ROOT/runs/run-000.log`
     - Compute score using the protocol's formula
     - Output in standard format: `score: X.XXXXXX`
 

@@ -89,7 +89,7 @@ Execute these steps IN ORDER for each evaluation cycle. Record all outputs.
 ## Output Format
 
 After computing the score, output results in this EXACT format
-(write to `.deep-evolve/runs/run-<NNN>.log` AND print to conversation):
+(write to `$SESSION_ROOT/runs/run-<NNN>.log` AND print to conversation):
 
 ```
 ---

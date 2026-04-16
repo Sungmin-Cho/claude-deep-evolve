@@ -23,27 +23,32 @@ find_evolve_root() {
 
 PROJECT_ROOT="$(find_evolve_root 2>/dev/null || echo "")"
 
-# v2.2.0+ layout forward-compat (X16)
-# If current.json exists, this project uses v2.2.0 namespace layout.
-# v2.1.2 hook cannot safely protect the right files — block mutating tools, allow reads.
-if [[ -n "$PROJECT_ROOT" ]] && [[ -f "$PROJECT_ROOT/.deep-evolve/current.json" ]]; then
-  # Allow read-only tools (Read, Grep, Glob, LS) — no file mutation risk
-  if [[ "$TOOL_NAME" == "Read" ]] || [[ "$TOOL_NAME" == "Grep" ]] || [[ "$TOOL_NAME" == "Glob" ]] || [[ "$TOOL_NAME" == "LS" ]]; then
-    exit 0
-  fi
-  echo "deep-evolve: v2.2.0+ 레이아웃이 감지되었습니다. 플러그인을 v2.2.0으로 업그레이드하세요." >&2
-  cat <<JSON
-{"decision":"block","reason":"Deep Evolve Guard: v2.2.0+ 레이아웃 감지. 쓰기 작업은 플러그인 업그레이드 후 가능합니다."}
-JSON
-  exit 2
-fi
-
 # No .deep-evolve/ directory → allow everything
 if [[ -z "$PROJECT_ROOT" ]]; then
   exit 0
 fi
 
-SESSION_FILE="$PROJECT_ROOT/.deep-evolve/session.yaml"
+# === Session root resolution (v2.2.0) ===
+CURRENT_JSON="$PROJECT_ROOT/.deep-evolve/current.json"
+SESSION_ROOT=""
+
+if [[ -f "$CURRENT_JSON" ]]; then
+  # v2.2.0 namespace layout
+  SESSION_ID="$(jq -r '.session_id // empty' "$CURRENT_JSON" 2>/dev/null)"
+  if [[ -n "$SESSION_ID" ]] && [[ -d "$PROJECT_ROOT/.deep-evolve/$SESSION_ID" ]]; then
+    SESSION_ROOT="$PROJECT_ROOT/.deep-evolve/$SESSION_ID"
+  fi
+elif [[ -f "$PROJECT_ROOT/.deep-evolve/session.yaml" ]]; then
+  # Legacy flat layout fallback
+  SESSION_ROOT="$PROJECT_ROOT/.deep-evolve"
+fi
+
+# No session root resolved → allow everything
+if [[ -z "$SESSION_ROOT" ]]; then
+  exit 0
+fi
+
+SESSION_FILE="$SESSION_ROOT/session.yaml"
 
 # No session file or not active → allow
 if [[ ! -f "$SESSION_FILE" ]]; then
@@ -59,12 +64,24 @@ fi
 # Read tool input from stdin
 TOOL_INPUT="$(cat)"
 
+# DEEP_EVOLVE_HELPER=1 bypass — scoped to registry files only
+if [[ "${DEEP_EVOLVE_HELPER:-}" == "1" ]]; then
+  FILE_PATH=""
+  if echo "$TOOL_INPUT" | grep -q '"file_path"'; then
+    FILE_PATH="$(echo "$TOOL_INPUT" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+  fi
+  case "$FILE_PATH" in
+    */current.json|*/sessions.jsonl|*/session.yaml) exit 0 ;;
+    "") exit 0 ;;  # Bash tool — let normal detection handle
+  esac
+  # Fall through to normal protection for non-registry files
+fi
+
 # Protected paths (absolute)
-EVOLVE_DIR="$PROJECT_ROOT/.deep-evolve"
-PROTECTED_PREPARE="$EVOLVE_DIR/prepare.py"
-PROTECTED_PROTOCOL="$EVOLVE_DIR/prepare-protocol.md"
-PROTECTED_PROGRAM="$EVOLVE_DIR/program.md"
-PROTECTED_STRATEGY="$EVOLVE_DIR/strategy.yaml"
+PROTECTED_PREPARE="$SESSION_ROOT/prepare.py"
+PROTECTED_PROTOCOL="$SESSION_ROOT/prepare-protocol.md"
+PROTECTED_PROGRAM="$SESSION_ROOT/program.md"
+PROTECTED_STRATEGY="$SESSION_ROOT/strategy.yaml"
 
 # Meta modes (DEEP_EVOLVE_META_MODE):
 #   program_update — allows program.md writes only (Phase 1 meta analysis)
@@ -119,12 +136,12 @@ if [[ -z "$COMMAND" ]]; then
 fi
 
 # Build protected file list (conditional on META_MODE)
-BASH_PROTECTED_FILES=("prepare.py" "prepare-protocol.md" ".deep-evolve/prepare.py" ".deep-evolve/prepare-protocol.md")
+BASH_PROTECTED_FILES=("prepare.py" "prepare-protocol.md" "$SESSION_ROOT/prepare.py" "$SESSION_ROOT/prepare-protocol.md")
 if [[ "$META_MODE" != "program_update" && "$META_MODE" != "outer_loop" ]]; then
-  BASH_PROTECTED_FILES+=("program.md" ".deep-evolve/program.md")
+  BASH_PROTECTED_FILES+=("program.md" "$SESSION_ROOT/program.md")
 fi
 if [[ "$META_MODE" != "outer_loop" ]]; then
-  BASH_PROTECTED_FILES+=("strategy.yaml" ".deep-evolve/strategy.yaml")
+  BASH_PROTECTED_FILES+=("strategy.yaml" "$SESSION_ROOT/strategy.yaml")
 fi
 
 # Check if the bash command references protected files with write operations
