@@ -15,7 +15,7 @@ Arguments from dispatcher (HISTORY_ARGS):
 Primary source: `sessions.jsonl` (via `session-helper.sh list_sessions`)
 - Includes active/paused sessions (X10)
 
-For detail mode: also read `$EVOLVE_DIR/<TARGET>/evolve-receipt.json`
+For detail mode: also read `.deep-evolve/<TARGET>/evolve-receipt.json`
 - Check `receipt_schema_version` (X14): if unknown version, warn and proceed best-effort
 
 ## Step 2 — Render
@@ -52,5 +52,5 @@ Read receipt. Display sections:
 
 ### EXPORT
 
-- `--export=md`: Write history table + aggregate to `$EVOLVE_DIR/history-<ISO>.md`
-- `--export=json`: Write sessions array + receipts to `$EVOLVE_DIR/history-<ISO>.json`
+- `--export=md`: Write history table + aggregate to `.deep-evolve/history-<ISO>.md`
+- `--export=json`: Write sessions array + receipts to `.deep-evolve/history-<ISO>.json`
