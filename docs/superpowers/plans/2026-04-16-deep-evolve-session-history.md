@@ -398,9 +398,14 @@ for arg in "$@"; do
 done
 set -- "${ARGS[@]}"
 
-PROJECT_ROOT="$(find_project_root)" || { echo "session-helper: .deep-evolve/ not found" >&2; exit 1; }
-
+# Codex review fix: find_project_root 실패 시 PWD 사용 (최초 프로젝트 init 지원)
+PROJECT_ROOT="$(find_project_root 2>/dev/null)" || PROJECT_ROOT="$PWD"
 EVOLVE_DIR="$PROJECT_ROOT/.deep-evolve"
+
+# start_new_session은 .deep-evolve/가 없어도 동작해야 함 → mkdir -p로 보장
+ensure_evolve_dir() {
+  mkdir -p "$EVOLVE_DIR"
+}
 
 # === Subcommand functions (P1: all `local` usage inside functions) ===
 # Each cmd_* function is defined in subsequent tasks.
@@ -612,6 +617,9 @@ cmd_start_new_session() {
     case "$arg" in --parent=*) parent_id="${arg#--parent=}" ;; esac
   done
 
+  # Codex review fix: .deep-evolve/ 자체가 없을 수 있음 (최초 init)
+  ensure_evolve_dir
+
   acquire_project_lock || exit 1
 
   # P3: 직접 함수 호출 (재귀 $0 제거 → lock 해제 방지)
@@ -772,7 +780,8 @@ cmd_migrate_legacy() {
   mkdir -p "$legacy_dir/meta-analyses" || { release_project_lock; return 1; }
 
   # 2) COPY (not move) — P4: FAIL on any copy error (no || true)
-  local files_to_copy=(session.yaml strategy.yaml program.md prepare.py prepare-protocol.md results.tsv journal.jsonl)
+  # Codex review fix: report.md + evolve-receipt.json도 복사 대상에 포함
+  local files_to_copy=(session.yaml strategy.yaml program.md prepare.py prepare-protocol.md results.tsv journal.jsonl report.md evolve-receipt.json)
   local dirs_to_copy=(runs code-archive strategy-archive)
   local copy_failed=0
 
@@ -831,13 +840,14 @@ cmd_migrate_legacy() {
   # Do NOT create current.json — legacy is treated as completed
 
   # 5) Remove originals (only after registry update succeeded)
+  # report.md, evolve-receipt.json은 이미 files_to_copy에 포함
   for f in "${files_to_copy[@]}"; do
     rm -f "$EVOLVE_DIR/$f" 2>/dev/null
   done
   for d in "${dirs_to_copy[@]}"; do
     rm -rf "$EVOLVE_DIR/$d" 2>/dev/null
   done
-  rm -f "$EVOLVE_DIR/meta-analysis.md" "$EVOLVE_DIR/report.md" "$EVOLVE_DIR/evolve-receipt.json" 2>/dev/null
+  rm -f "$EVOLVE_DIR/meta-analysis.md" 2>/dev/null
 
   release_project_lock
   echo "session-helper: migrated to $legacy_dir"
@@ -942,45 +952,39 @@ X1: orphan detection uses real journal events (committed without evaluated)."
 **Files:**
 - Modify: `hooks/scripts/session-helper.sh`
 
-- [ ] **Step 1: list_sessions 구현**
+- [ ] **Step 1: cmd_list_sessions 함수 구현 (P1 + I2: jq --slurp 한번에 처리 + reconciled 이벤트 수정)**
 
 ```bash
-  list_sessions)
-    local filter_status=""
-    for arg in "$@"; do
-      case "$arg" in --status=*) filter_status="${arg#--status=}" ;; esac
-    done
+cmd_list_sessions() {
+  local filter_status=""
+  for arg in "$@"; do
+    case "$arg" in --status=*) filter_status="${arg#--status=}" ;; esac
+  done
 
-    if [ ! -f "$EVOLVE_DIR/sessions.jsonl" ]; then
-      echo "[]"
-      exit 0
-    fi
+  if [ ! -f "$EVOLVE_DIR/sessions.jsonl" ]; then
+    echo "[]"
+    return 0
+  fi
 
-    # Replay sessions.jsonl to derive current state
-    # Output: JSON array of session objects
-    local result="[]"
-    while IFS= read -r line; do
-      local event session_id
-      event=$(printf '%s' "$line" | jq -r '.event' 2>/dev/null)
-      session_id=$(printf '%s' "$line" | jq -r '.session_id' 2>/dev/null)
-      [ -z "$session_id" ] && continue
-
-      case "$event" in
-        created|migrated)
-          result=$(printf '%s' "$result" | jq --argjson entry "$line" '. + [$entry]')
-          ;;
-        status_change|reconciled)
-          local new_status
-          new_status=$(printf '%s' "$line" | jq -r '.status // empty')
-          result=$(printf '%s' "$result" | jq --arg id "$session_id" --arg s "$new_status" \
-            '[.[] | if .session_id == $id then .status = $s else . end]')
-          ;;
-        finished)
-          result=$(printf '%s' "$result" | jq --argjson entry "$line" --arg id "$session_id" \
-            '[.[] | if .session_id == $id then . + ($entry | del(.event, .ts)) else . end]')
-          ;;
-      esac
-    done < "$EVOLVE_DIR/sessions.jsonl"
+  # I2: jq --slurp로 한번에 처리 (O(N) 한 프로세스, per-line jq 호출 제거)
+  # Codex review fix: reconciled 이벤트는 .to 필드로 status 갱신 (.status 아님)
+  local result
+  result=$(jq -s '
+    reduce .[] as $e ([];
+      if $e.event == "created" or $e.event == "migrated" then
+        . + [$e]
+      elif $e.event == "status_change" then
+        [.[] | if .session_id == $e.session_id then .status = $e.status else . end]
+      elif $e.event == "reconciled" then
+        # Codex review fix: reconciled 이벤트는 .to 필드에 실제 status가 있음
+        [.[] | if .session_id == $e.session_id then .status = $e.to else . end]
+      elif $e.event == "finished" then
+        [.[] | if .session_id == $e.session_id then . + ($e | del(.event, .ts)) else . end]
+      else
+        .
+      end
+    )
+  ' "$EVOLVE_DIR/sessions.jsonl")
 
     if [ -n "$filter_status" ]; then
       result=$(printf '%s' "$result" | jq --arg s "$filter_status" '[.[] | select(.status == $s)]')
@@ -1168,7 +1172,27 @@ PROTECTED_PROGRAM="$SESSION_ROOT/program.md"
 PROTECTED_STRATEGY="$SESSION_ROOT/strategy.yaml"
 ```
 
-나머지 로직(META_MODE, Bash write detection)은 그대로 유지.
+나머지 로직(META_MODE 분기)은 그대로 유지.
+
+**Codex review fix: BASH_PROTECTED_FILES 배열도 동적화**:
+
+기존 Bash-write detection 부분의 하드코딩된 파일명 배열을 `$SESSION_ROOT` 기반으로 갱신:
+
+```bash
+# BEFORE (하드코딩):
+# BASH_PROTECTED_FILES=("prepare.py" "prepare-protocol.md" ".deep-evolve/prepare.py" ...)
+
+# AFTER (동적):
+BASH_PROTECTED_FILES=("prepare.py" "prepare-protocol.md" "$SESSION_ROOT/prepare.py" "$SESSION_ROOT/prepare-protocol.md")
+if [[ "$META_MODE" != "program_update" && "$META_MODE" != "outer_loop" ]]; then
+  BASH_PROTECTED_FILES+=("program.md" "$SESSION_ROOT/program.md")
+fi
+if [[ "$META_MODE" != "outer_loop" ]]; then
+  BASH_PROTECTED_FILES+=("strategy.yaml" "$SESSION_ROOT/strategy.yaml")
+fi
+```
+
+파일명만의 매칭(예: `program.md`)은 유지 — 상대 경로 우회 방지.
 
 - [ ] **Step 2: 검증**
 
