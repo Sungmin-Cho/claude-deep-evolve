@@ -6,17 +6,32 @@
 
 set -euo pipefail
 
-TOOL_NAME="${CLAUDE_TOOL_NAME:-}"
+# Read tool name from Claude Code native env var with backwards-compatible fallback
+TOOL_NAME="${CLAUDE_TOOL_USE_TOOL_NAME:-${CLAUDE_TOOL_NAME:-}}"
+
+# Normalize path separators for cross-platform checks (Windows \ → /)
+normalize_path() {
+  local p="$1"
+  p="${p//\\//}"
+  while [[ "$p" == *"//"* ]]; do
+    p="${p//\/\//\/}"
+  done
+  printf '%s' "$p"
+}
 
 # Find project root (walk up looking for .deep-evolve/)
 find_evolve_root() {
-  local dir="$PWD"
-  while [[ "$dir" != "/" ]]; do
+  local dir
+  dir="$(normalize_path "$PWD")"
+  local prev=""
+  while [[ "$dir" != "$prev" ]]; do
     if [[ -d "$dir/.deep-evolve" ]]; then
       echo "$dir"
       return 0
     fi
+    prev="$dir"
     dir="$(dirname "$dir")"
+    dir="$(normalize_path "$dir")"
   done
   return 1
 }
@@ -106,9 +121,12 @@ if [[ "$TOOL_NAME" != "Bash" ]]; then
     exit 0
   fi
 
-  # Normalize to absolute path
-  if [[ "$FILE_PATH" != /* ]]; then
-    FILE_PATH="$PROJECT_ROOT/$FILE_PATH"
+  # Normalize path separators and resolve absolute path
+  FILE_PATH="$(normalize_path "$FILE_PATH")"
+  if [[ "$FILE_PATH" =~ ^[A-Za-z]:/ ]] || [[ "$FILE_PATH" == /* ]]; then
+    : # already absolute
+  else
+    FILE_PATH="$(normalize_path "$PROJECT_ROOT/$FILE_PATH")"
   fi
 
   case "$FILE_PATH" in
