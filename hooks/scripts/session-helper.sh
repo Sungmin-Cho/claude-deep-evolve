@@ -300,10 +300,11 @@ cmd_migrate_legacy() {
   local legacy_dir="$EVOLVE_DIR/${legacy_id}"
 
   # P4 idempotency: check if legacy dir already exists (partial previous run)
+  local skip_copy=0
   if [ -d "$legacy_dir" ]; then
     if [ -f "$legacy_dir/session.yaml" ]; then
       echo "session-helper: legacy dir already exists and looks complete, skipping copy" >&2
-      # Jump to step 4 (registry + cleanup)
+      skip_copy=1
     else
       echo "session-helper: incomplete legacy dir found, removing and retrying" >&2
       rm -rf "$legacy_dir"
@@ -316,6 +317,7 @@ cmd_migrate_legacy() {
 
   acquire_project_lock || exit 1
 
+  if [ "$skip_copy" -eq 0 ]; then
   # 1) Create namespace dir
   mkdir -p "$legacy_dir/meta-analyses" || { release_project_lock; return 1; }
 
@@ -336,8 +338,9 @@ cmd_migrate_legacy() {
       cp -R "$EVOLVE_DIR/$d" "$legacy_dir/" || { copy_failed=1; break; }
     fi
   done
-  [ -f "$EVOLVE_DIR/meta-analysis.md" ] && \
-    cp "$EVOLVE_DIR/meta-analysis.md" "$legacy_dir/meta-analyses/gen-legacy.md" || true
+  if [ -f "$EVOLVE_DIR/meta-analysis.md" ]; then
+    cp "$EVOLVE_DIR/meta-analysis.md" "$legacy_dir/meta-analyses/gen-legacy.md" || { copy_failed=1; }
+  fi
 
   if [ "$copy_failed" -eq 1 ]; then
     echo "session-helper: copy failed — rolling back" >&2
@@ -367,6 +370,8 @@ cmd_migrate_legacy() {
     release_project_lock
     return 1
   fi
+
+  fi  # end skip_copy guard
 
   # 4) Write registry (P2: jq for JSON, P3: 직접 append)
   local status
@@ -437,12 +442,12 @@ cmd_detect_orphan_experiment() {
 
   # Check if there's a matching evaluated/kept/discarded/rollback_completed
   local has_resolution
-  has_resolution=$(grep "\"id\":$last_committed_n" "$journal" \
+  has_resolution=$(grep "\"id\":${last_committed_n}[,}]" "$journal" \
     | grep -cE '"status":"(evaluated|kept|discarded|rollback_completed)"' 2>/dev/null || echo 0)
 
   if [ "$has_resolution" -eq 0 ]; then
     local commit_hash
-    commit_hash=$(grep "\"id\":$last_committed_n" "$journal" \
+    commit_hash=$(grep "\"id\":${last_committed_n}[,}]" "$journal" \
       | grep '"status":"committed"' \
       | jq -r '.commit // empty' 2>/dev/null | head -1)
     printf '%s' "$commit_hash"
@@ -589,7 +594,7 @@ for arg in "$@"; do
     *) ARGS+=("$arg") ;;
   esac
 done
-set -- "${ARGS[@]}"
+set -- ${ARGS[@]+"${ARGS[@]}"}
 
 # Codex review fix: find_project_root 실패 시 PWD 사용 (최초 프로젝트 init 지원)
 PROJECT_ROOT="$(find_project_root 2>/dev/null)" || PROJECT_ROOT="$PWD"

@@ -71,7 +71,7 @@ If non-empty (orphan found):
 ### 3.e Counter consistency
 
 ```bash
-sess_inner=$(yq '.outer_loop.inner_count' "$SESSION_ROOT/session.yaml")
+sess_inner=$(grep 'inner_count:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/.*inner_count:[[:space:]]*//')
 tsv_rows=$(($(wc -l < "$SESSION_ROOT/results.tsv") - 1))  # minus header
 ```
 

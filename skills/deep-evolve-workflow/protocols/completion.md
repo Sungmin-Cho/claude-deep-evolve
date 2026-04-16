@@ -44,7 +44,7 @@ Generate `$SESSION_ROOT/evolve-receipt.json` from `session.yaml` and `results.ts
 ```json
 {
   "plugin": "deep-evolve",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "timestamp": "<ISO 8601 now>",
   "goal": "<session.yaml.goal>",
   "eval_mode": "<session.yaml.eval_mode>",
@@ -199,4 +199,4 @@ Before finalizing, clean up fork branches:
 3. Preserve `$SESSION_ROOT/code-archive/` metadata files (useful for analysis).
 4. Preserve `$SESSION_ROOT/strategy-archive/` (useful for cross-project transfer).
 
-Update `session.yaml.status` to `completed`.
+Run `session-helper.sh mark_session_status <session_id> completed` (updates both session.yaml and sessions.jsonl atomically).
