@@ -1,5 +1,27 @@
 # 변경 이력
 
+## v2.2.1
+
+### 개선
+- **Notable keep 마킹 의무화**: Outer Loop Step 6.5.4a — generation별 top-3 kept 실험을 자동으로 notable 마킹. receipt의 notable_keeps 데이터 품질 향상
+- **README v2.2 기능 반영**: Session Management, Resume, History, Lineage 기능을 README에 문서화
+- **SKILL.md 사용법 확장**: resume/history 커맨드를 사용법 섹션에 추가
+
+## v2.2.0
+
+### 추가
+- **세션 네임스페이스**: `.deep-evolve/<session-id>/` 세션별 격리, 세션 간 데이터 보존
+- **`/deep-evolve resume`**: 중단된 세션 재개, integrity check, orphan experiment 감지
+- **`/deep-evolve history`**: 프로젝트 내 세션 목록, lineage tree, aggregate 통계
+- **Session lineage**: 선행 세션의 strategy/program/notable keeps를 새 세션에 상속
+- **Inherited Context**: program.md에 선행 세션 결론 자동 삽입
+- **Immutable receipt v2.2.0**: experiments_table, generation_snapshots, notable_keeps, runtime_warnings, parent_session
+- **Shell helper**: `hooks/scripts/session-helper.sh` 12개 서브커맨드, --dry-run 지원
+
+### 호환성 변경
+- `.deep-evolve/` 디렉터리 구조 변경: flat → per-session namespace
+- 기존 flat layout 프로젝트는 첫 실행 시 자동 migration 프롬프트
+
 ## [2.1.0] — 2026-04-14
 
 ### 추가

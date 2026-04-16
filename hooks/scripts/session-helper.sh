@@ -3,7 +3,7 @@
 # Usage: session-helper.sh <subcommand> [args...]
 set -Eeuo pipefail
 
-HELPER_VERSION="2.2.0"
+HELPER_VERSION="2.2.1"
 export DEEP_EVOLVE_HELPER=1
 
 # === Dependencies ===

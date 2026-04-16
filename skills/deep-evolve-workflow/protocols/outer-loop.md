@@ -145,8 +145,8 @@ Based on meta analysis, propose program.md revision:
    ```
    score_delta = experiment_score - previous_kept_score
    ```
-   - `previous_kept_score`: 해당 실험 직전에 keep된 실험의 score
-   - generation 내 첫 keep이면: generation 시작 시점의 `session.yaml.metric.current` 사용
+   - `previous_kept_score`: results.tsv에서 해당 실험 직전에 keep된 실험의 score 값
+   - generation 내 첫 keep이면: results.tsv에서 현재 generation 구간 시작 직전의 마지막 kept 행의 score 사용 (generation 시작 전 score를 반영. `session.yaml.metric.current`는 inner-loop에서 매 keep마다 갱신되므로 사용하지 않는다)
 3. **Top-3 선정**: score_delta 상위 3개 선정 (kept가 3개 미만이면 전부)
 4. **Journal 기록**: 각각 journal.jsonl에 기록:
    ```json
