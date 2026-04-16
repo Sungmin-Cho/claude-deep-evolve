@@ -7,7 +7,7 @@ Before generating the report, record this session's strategy evolution:
 
 ## Completion Report
 
-Generate `.deep-evolve/report.md`:
+Generate `$SESSION_ROOT/report.md`:
 
 Read `results.tsv` and `session.yaml` to compile:
 
@@ -39,7 +39,7 @@ Display the report to the user.
 
 ## Evolve Receipt Generation
 
-Generate `.deep-evolve/evolve-receipt.json` from `session.yaml` and `results.tsv`:
+Generate `$SESSION_ROOT/evolve-receipt.json` from `session.yaml` and `results.tsv`:
 
 ```json
 {
@@ -105,6 +105,21 @@ Notes:
 - `outcome` is set to the user's chosen action after the menu selection below (e.g., `"merged"`, `"pr_created"`, `"kept"`, `"discarded"`)
 - Write the file before presenting the menu; update `outcome` after the user selects
 
+**v2.2.0 receipt 확장 필드** (기존 필드 유지 + 아래 추가):
+
+- `"receipt_schema_version": 2`
+- `"experiments_table"`: $SESSION_ROOT/results.tsv 전체 dump (각 행에 generation 번호 매핑)
+- `"generation_snapshots"`: $SESSION_ROOT/meta-analyses/gen-*.md 로드. 최대 10개; 초과 시 오래된 것부터 summary_only=true
+- `"notable_keeps"`: journal.jsonl에서 notable=true 항목 (source="marked") + top-5 score_delta (source="top_n")
+- `"runtime_warnings"`: journal.jsonl에서 branch_mismatch_accepted, branch_rebound 등 수집
+- `"parent_session"`: session.yaml.parent_session 복사
+
+**Receipt write sequence**: write with outcome=null → user selection → outcome update → freeze.
+
+**Completion hooks**:
+- `session-helper.sh append_sessions_jsonl finished <id> --status=completed --outcome=<outcome> ...`
+- `session-helper.sh append_meta_archive_local <id>`
+
 Then ask via AskUserQuestion:
 "결과를 어떻게 적용할까요?"
 Options:
@@ -124,7 +139,7 @@ Execute the chosen option using `session.yaml.lineage.current_branch` for the br
 - **branch 유지 (나중에 결정)**: Set `outcome = "kept"` in receipt. No action; inform user of branch name (`session.yaml.lineage.current_branch`).
 - **폐기 (변경사항 삭제)**: Set `outcome = "discarded"` in receipt. `git checkout main && git branch -D <session.yaml.lineage.current_branch>`
 
-After executing, write the updated `outcome` value back to `.deep-evolve/evolve-receipt.json`.
+After executing, write the updated `outcome` value back to `$SESSION_ROOT/evolve-receipt.json`.
 
 ## Deep-Review Integration
 
@@ -181,7 +196,7 @@ Before finalizing, clean up fork branches:
    git branch -d evolve/<session-id>/fork-* 2>/dev/null || true
    ```
    Only use `-d` (safe delete, merged branches only). Do NOT use `-D` (force delete).
-3. Preserve `.deep-evolve/code-archive/` metadata files (useful for analysis).
-4. Preserve `.deep-evolve/strategy-archive/` (useful for cross-project transfer).
+3. Preserve `$SESSION_ROOT/code-archive/` metadata files (useful for analysis).
+4. Preserve `$SESSION_ROOT/strategy-archive/` (useful for cross-project transfer).
 
 Update `session.yaml.status` to `completed`.

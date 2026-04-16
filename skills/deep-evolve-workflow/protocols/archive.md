@@ -4,7 +4,7 @@
 
 Fork from a previous keep commit when plateau is detected in Inner Loop.
 
-1. Read `.deep-evolve/code-archive/` to find all keep entries with their `children_explored` counts.
+1. Read `$SESSION_ROOT/code-archive/` to find all keep entries with their `children_explored` counts.
 2. Compute backtrack score for each keep entry:
    ```
    backtrack_score(keep) = score × exp(-(children_explored / 6)^3)
@@ -42,7 +42,7 @@ Fork from a previous keep commit when plateau is detected in Inner Loop.
 
 ## Strategy Archive Save
 
-Save a generation snapshot to `.deep-evolve/strategy-archive/gen_<g>/`:
+Save a generation snapshot to `$SESSION_ROOT/strategy-archive/gen_<g>/`:
 ```
 strategy.yaml          — current strategy.yaml copy
 program.md.snapshot    — current program.md copy
@@ -56,13 +56,13 @@ Log: `{"event": "strategy_judgment", "result": "kept", "Q_old": <v>, "Q_new": <v
 Revert strategy.yaml and program.md to a previous generation's versions:
 
 1. Set `DEEP_EVOLVE_META_MODE=outer_loop` (allows writes past protect-readonly hook).
-2. Copy `strategy.yaml` from `.deep-evolve/strategy-archive/gen_<target>/strategy.yaml` → `.deep-evolve/strategy.yaml`
-3. Copy `program.md.snapshot` from `.deep-evolve/strategy-archive/gen_<target>/program.md.snapshot` → `.deep-evolve/program.md`
+2. Copy `strategy.yaml` from `$SESSION_ROOT/strategy-archive/gen_<target>/strategy.yaml` → `$SESSION_ROOT/strategy.yaml`
+3. Copy `program.md.snapshot` from `$SESSION_ROOT/strategy-archive/gen_<target>/program.md.snapshot` → `$SESSION_ROOT/program.md`
 4. Unset `DEEP_EVOLVE_META_MODE`.
 
 ## Strategy Archive Fork
 
-Select a parent generation from `.deep-evolve/strategy-archive/` and fork when 3 consecutive generations show no Q improvement:
+Select a parent generation from `$SESSION_ROOT/strategy-archive/` and fork when 3 consecutive generations show no Q improvement:
 
 1. Collect all archived generations' Q(v) and `children_count` (same epoch only).
 2. Compute candidate score for each:

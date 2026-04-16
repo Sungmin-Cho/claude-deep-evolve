@@ -141,7 +141,7 @@ Analyze the meta-archive for patterns that could benefit other plugins:
    - Strategies with high keep_rate (> 0.3)
    - Program.md changes that correlated with Q(v) improvement
    - Idea selection weight distributions that worked well
-5. Generate `.deep-evolve/evolve-insights.json`:
+5. Generate `$SESSION_ROOT/evolve-insights.json`:
 
 ```json
 {
