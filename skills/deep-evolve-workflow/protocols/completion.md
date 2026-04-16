@@ -44,7 +44,7 @@ Generate `$SESSION_ROOT/evolve-receipt.json` from `session.yaml` and `results.ts
 ```json
 {
   "plugin": "deep-evolve",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "timestamp": "<ISO 8601 now>",
   "goal": "<session.yaml.goal>",
   "eval_mode": "<session.yaml.eval_mode>",
@@ -110,7 +110,7 @@ Notes:
 - `"receipt_schema_version": 2`
 - `"experiments_table"`: $SESSION_ROOT/results.tsv 전체 dump (각 행에 generation 번호 매핑)
 - `"generation_snapshots"`: $SESSION_ROOT/meta-analyses/gen-*.md 로드. 최대 10개; 초과 시 오래된 것부터 summary_only=true
-- `"notable_keeps"`: journal.jsonl에서 notable=true 항목 (source="marked") + top-5 score_delta (source="top_n")
+- `"notable_keeps"`: journal.jsonl에서 `event: "notable_marked"` 항목 수집 (source="auto_top_n" 또는 "marked") + session 전체 top-5 score_delta (source="top_n"). 중복 제거: experiment id 기준, auto_top_n이 top_n보다 우선. 기존 v2.2.0의 `event: "outer_loop", notable: true` 형태는 무시한다 (하위 호환 불필요).
 - `"runtime_warnings"`: journal.jsonl에서 branch_mismatch_accepted, branch_rebound 등 수집
 - `"parent_session"`: session.yaml.parent_session 복사
 
