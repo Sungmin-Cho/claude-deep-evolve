@@ -32,6 +32,13 @@ If exit 1 (mismatch):
   Options:
   - "checkout and continue": `git checkout <expected_branch>`, then continue
   - "proceed on current (branch rebind)":
+    **AH1 safety gate**: Before rebinding, verify that HEAD contains the last experiment commit:
+    ```bash
+    last_exp_commit=$(grep -v '^---' "$SESSION_ROOT/results.tsv" | tail -n1 | cut -f1)
+    git merge-base --is-ancestor "$last_exp_commit" HEAD
+    ```
+    If the last experiment commit is NOT an ancestor of HEAD: **block rebind** — "현재 브랜치에 세션의 마지막 실험이 포함되어 있지 않습니다. checkout을 사용하세요." → abort or checkout only.
+    If verified:
     1. Update `session.yaml.lineage.current_branch` to current branch
     2. Append to journal.jsonl: `{"event": "branch_mismatch_accepted", ...}` and `{"event": "branch_rebound", "from": "<expected>", "to": "<actual>", ...}`
     3. Record in runtime_warnings for receipt (X13)
@@ -49,7 +56,8 @@ If non-empty: warn user → AskUserQuestion: [stash 후 계속 / abort]
 ### 3.c HEAD vs last experiment
 
 ```bash
-last_commit=$(tail -n1 "$SESSION_ROOT/results.tsv" | cut -f1)
+# CR2: tail -n1은 separator 행일 수 있으므로, 마지막 실제 실험 행을 찾음
+last_commit=$(grep -v '^---' "$SESSION_ROOT/results.tsv" | tail -n1 | cut -f1)
 head_commit=$(git rev-parse HEAD)
 ```
 
@@ -72,10 +80,18 @@ If non-empty (orphan found):
 
 ```bash
 sess_inner=$(grep 'inner_count:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/.*inner_count:[[:space:]]*//')
-tsv_rows=$(($(wc -l < "$SESSION_ROOT/results.tsv") - 1))  # minus header
+# CR1: inner_count는 세대별 카운터. results.tsv 전체 행이 아닌 현재 generation의 실험 수와 비교.
+# 현재 generation 시작 실험 번호는 outer_loop.q_history의 마지막 entry 또는 0.
+# 간이 방법: session.yaml.experiments.total - (이전 generation들의 총 실험 수)
+# 실용적 접근: inner_count가 outer_interval보다 크면 이미 이상 → 경고만 표시
+if [ "$sess_inner" -gt "$(grep 'interval:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/.*interval:[[:space:]]*//')" ] 2>/dev/null; then
+  echo "inner_count($sess_inner) > interval — counter may be stale" >&2
+  # Reset to 0, outer loop will re-evaluate
+  # Update session.yaml and journal
+fi
 ```
 
-If mismatch: adopt results.tsv count as truth, update session.yaml, append `counter_reconciled` event to journal.
+If counter appears inconsistent: warn and adopt safe default (0 if generation just changed, or tsv-derived if not). Append `counter_reconciled` event to journal.
 
 ## Step 4 — Display resume summary
 

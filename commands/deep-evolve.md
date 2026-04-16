@@ -21,8 +21,8 @@ You are running the **deep-evolve** autonomous experimentation protocol.
 
 Arguments: `$ARGUMENTS`
 
-- If arguments contain `resume`: → set RESUME=true
-- If arguments start with `history`: → set HISTORY=true, HISTORY_ARGS=<rest of args>
+- If the **first token** of arguments is exactly `resume`: → set RESUME=true (not substring — "resume flaky tests" is a goal, not a resume command)
+- If the **first token** of arguments is exactly `history`: → set HISTORY=true, HISTORY_ARGS=<rest of args>
 - If arguments contain `--archive-prune`: → Read `skills/deep-evolve-workflow/protocols/transfer.md`, execute **Section F: Archive Prune**
 - If arguments contain a number (e.g., `50`): set `REQUESTED_COUNT` to that number
 - If arguments contain a quoted string (e.g., `"new goal"`): set `NEW_GOAL` to that string

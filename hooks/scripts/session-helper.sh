@@ -374,9 +374,14 @@ cmd_migrate_legacy() {
   fi  # end skip_copy guard
 
   # 4) Write registry (P2: jq for JSON, P3: 직접 append)
+  # CR3: migrated sessions are always terminal — active/paused → "archived"
+  local orig_status
+  orig_status=$(grep '^status:' "$legacy_dir/session.yaml" 2>/dev/null | head -1 | sed 's/^status:[[:space:]]*//')
   local status
-  status=$(grep '^status:' "$legacy_dir/session.yaml" 2>/dev/null | head -1 | sed 's/^status:[[:space:]]*//')
-  status="${status:-legacy}"
+  case "${orig_status:-legacy}" in
+    completed|aborted) status="$orig_status" ;;
+    *) status="archived" ;;  # active/paused/legacy → terminal
+  esac
   jq -nc --arg event "migrated" --arg ts "$(iso_now)" --arg sid "$legacy_id" \
     --arg from "flat_layout" --arg s "$status" --arg g "$goal" --arg lr "unavailable" \
     '{event:$event, ts:$ts, session_id:$sid, from:$from, status:$s, goal:$g, legacy_recovery:$lr}' \
@@ -440,17 +445,18 @@ cmd_detect_orphan_experiment() {
     return 0
   fi
 
-  # Check if there's a matching evaluated/kept/discarded/rollback_completed
+  # AH2: Use jq for exact numeric id matching (not grep substring)
   local has_resolution
-  has_resolution=$(grep "\"id\":${last_committed_n}[,}]" "$journal" \
-    | grep -cE '"status":"(evaluated|kept|discarded|rollback_completed)"' 2>/dev/null || echo 0)
+  has_resolution=$(jq -s --argjson id "$last_committed_n" \
+    '[.[] | select(.id == $id and (.status == "evaluated" or .status == "kept" or .status == "discarded" or .status == "rollback_completed"))] | length' \
+    "$journal" 2>/dev/null || echo 0)
 
   if [ "$has_resolution" -eq 0 ]; then
     local commit_hash
-    commit_hash=$(grep "\"id\":${last_committed_n}[,}]" "$journal" \
-      | grep '"status":"committed"' \
-      | jq -r '.commit // empty' 2>/dev/null | head -1)
-    printf '%s' "$commit_hash"
+    commit_hash=$(jq -s --argjson id "$last_committed_n" \
+      '[.[] | select(.id == $id and .status == "committed")] | .[0].commit // empty' \
+      "$journal" 2>/dev/null)
+    [ -n "$commit_hash" ] && [ "$commit_hash" != "null" ] && printf '%s' "$commit_hash"
   fi
 }
 
@@ -477,6 +483,8 @@ cmd_list_sessions() {
       elif $e.event == "reconciled" then
         # Codex review fix: reconciled 이벤트는 .to 필드에 실제 status가 있음
         [.[] | if .session_id == $e.session_id then .status = $e.to else . end]
+      elif $e.event == "lineage_set" then
+        [.[] | if .session_id == $e.session_id then .parent_session_id = $e.parent_session_id else . end]
       elif $e.event == "finished" then
         [.[] | if .session_id == $e.session_id then . + ($e | del(.event, .ts)) else . end]
       else
