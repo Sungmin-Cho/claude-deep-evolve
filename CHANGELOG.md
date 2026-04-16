@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.1.2
+
+### Improvements
+- **3.A** inner-loop Step 6 재구조화: outer loop 자동 트리거 우선, AskUserQuestion은 outer 완료 후 조건부
+- **3.B** `session.yaml.outer_loop.auto_trigger` 플래그 (default true)
+- **3.C** program.md 템플릿에 Automation Policy 단락 자동 삽입 (sentinel 주석 포함)
+- inner_count를 session.yaml에 persist (향후 resume 지원 기반)
+
+### Fixes
+- v2.2.0 forward-compat shim: v2.2.0 layout 감지 시 업그레이드 안내 (X16)
+
 ## [2.1.0] — 2026-04-14
 
 ### Added
