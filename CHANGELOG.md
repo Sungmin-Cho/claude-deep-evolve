@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.2.1
+
+### Improvements
+- **Notable keep 마킹 의무화**: Outer Loop Step 6.5.4a — generation별 top-3 kept 실험을 자동으로 notable 마킹. receipt의 notable_keeps 데이터 품질 향상. (originally planned for v2.3)
+- **README v2.2 feature 반영**: Session Management, Resume, History, Lineage 기능을 README에 문서화
+- **SKILL.md 사용법 확장**: resume/history 커맨드를 사용법 섹션에 추가
+
 ## v2.2.0
 
 ### Features
