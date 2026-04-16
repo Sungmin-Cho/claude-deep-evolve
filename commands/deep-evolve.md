@@ -21,6 +21,8 @@ You are running the **deep-evolve** autonomous experimentation protocol.
 
 Arguments: `$ARGUMENTS`
 
+- If arguments contain `resume`: → set RESUME=true
+- If arguments start with `history`: → set HISTORY=true, HISTORY_ARGS=<rest of args>
 - If arguments contain `--archive-prune`: → Read `skills/deep-evolve-workflow/protocols/transfer.md`, execute **Section F: Archive Prune**
 - If arguments contain a number (e.g., `50`): set `REQUESTED_COUNT` to that number
 - If arguments contain a quoted string (e.g., `"new goal"`): set `NEW_GOAL` to that string
@@ -28,23 +30,38 @@ Arguments: `$ARGUMENTS`
 
 ## Step 1: State Detection & Routing
 
-Check if `.deep-evolve/session.yaml` exists in the current project root.
+**If HISTORY** is set:
+→ Read `skills/deep-evolve-workflow/protocols/history.md` → execute with HISTORY_ARGS
 
-**If NO session.yaml exists** (or `NEW_GOAL` is set):
-→ Read `skills/deep-evolve-workflow/protocols/init.md` → Init 실행
+**If RESUME** is set:
+→ Read `skills/deep-evolve-workflow/protocols/resume.md` → execute Resume Flow
 
-**If session.yaml exists**, read the `status` field:
-- `status: active` → Read `skills/deep-evolve-workflow/protocols/inner-loop.md` → Resume Flow
-- `status: paused` → Ask the user via AskUserQuestion:
-  "이전 세션이 중단되었습니다. 이어서 진행할까요?"
-  Options: "이어서 진행" / "새로 시작"
-  - "이어서 진행" → Read `protocols/inner-loop.md` → Resume Flow
-  - "새로 시작" → Delete `.deep-evolve/`, Read `protocols/init.md` → Init Flow
-- `status: completed` → Ask the user:
-  "이전 세션이 완료되었습니다. 새 세션을 시작할까요?"
-  Options: "새로 시작" / "결과 다시 보기"
-  - "새로 시작" → Delete `.deep-evolve/`, Read `protocols/init.md` → Init Flow
-  - "결과 다시 보기" → Read and display `.deep-evolve/report.md`
+**Otherwise:**
+
+Run `session-helper.sh resolve_current` to get the active session.
+
+**If exit 1 (no active session):**
+- Check if `.deep-evolve/session.yaml` exists at root (legacy layout):
+  - If yes → AskUserQuestion: "구 레이아웃(v2.1.x)이 감지되었습니다. 마이그레이션할까요?"
+    - "archive": Run `session-helper.sh migrate_legacy` → then continue to Init
+    - "abort": Stop
+  - If no → Read `protocols/init.md` → Init Flow
+
+**If session found**, read `$SESSION_ROOT/session.yaml` status:
+- `status: active` → AskUserQuestion:
+  "활성 세션이 있습니다. 어떻게 하시겠습니까?"
+  - "이어서 진행 (resume)" → Read `protocols/resume.md` → Resume Flow
+  - "완료 처리 (completion)" → Read `protocols/completion.md`
+  - "중단 후 새로 시작" → `session-helper.sh mark_session_status <id> aborted` → Read `protocols/init.md`
+
+- `status: paused` → AskUserQuestion:
+  - "이어서 진행 (resume)" → Read `protocols/resume.md`
+  - "중단 후 새로 시작" → `session-helper.sh mark_session_status <id> aborted` → Read `protocols/init.md`
+
+- `status: completed` or `status: aborted` → AskUserQuestion:
+  - "새 세션 시작" → Read `protocols/init.md`
+  - "이력 보기" → Read `protocols/history.md`
+  - "마지막 보고서 보기" → Read and display `$SESSION_ROOT/report.md`
 
 ## Protocol Routing Summary
 
@@ -55,6 +72,8 @@ Outer Loop     → protocols/outer-loop.md  (매 outer_loop_interval 회)
 Archive        → protocols/archive.md     (분기/복원 필요 시)
 Transfer       → protocols/transfer.md    (A.2.5 lookup + E.0 recording + Section F prune)
 Completion     → protocols/completion.md  (세션 완료)
+Resume         → protocols/resume.md      (중단된 세션 재개)
+History        → protocols/history.md     (세션 목록/lineage/통계)
 ```
 
 ## 상태 관리
