@@ -110,7 +110,7 @@ Notes:
 - `"receipt_schema_version": 2`
 - `"experiments_table"`: $SESSION_ROOT/results.tsv 전체 dump (각 행에 generation 번호 매핑)
 - `"generation_snapshots"`: $SESSION_ROOT/meta-analyses/gen-*.md 로드. 최대 10개; 초과 시 오래된 것부터 summary_only=true
-- `"notable_keeps"`: journal.jsonl에서 `event: "notable_marked"` 항목 수집 (source="auto_top_n" 또는 "marked") + session 전체 top-5 score_delta (source="top_n"). 중복 제거: experiment id 기준, auto_top_n이 top_n보다 우선. **하위 호환 fallback**: `notable_marked` 이벤트가 0건이면 legacy `event: "outer_loop", notable: true` 형태도 수집한다 (v2.2.0에서 시작하여 v2.2.1에서 completion하는 세션 지원).
+- `"notable_keeps"`: journal.jsonl에서 `event: "notable_marked"` 항목 수집 (source="auto_top_n" 또는 "marked") + legacy `event: "outer_loop", notable: true` 항목도 항상 수집 (source="legacy") + session 전체 top-5 score_delta (source="top_n"). 세 source를 merge 후 중복 제거: experiment id 기준, 우선순위 auto_top_n > marked > legacy > top_n. (v2.2.0에서 시작하여 v2.2.1에서 completion하는 mixed-version 세션에서도 데이터 손실 없음)
 - `"runtime_warnings"`: journal.jsonl에서 branch_mismatch_accepted, branch_rebound 등 수집
 - `"parent_session"`: session.yaml.parent_session 복사
 
