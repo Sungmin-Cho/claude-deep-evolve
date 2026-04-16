@@ -9,7 +9,7 @@ The 3-tier self-evolution hierarchy:
 2. **Tier 2** — `program.md` strategy text revision (medium freedom, natural language)
 3. **Tier 3** — `prepare.py` scenario expansion (high freedom, raises quality ceiling)
 
-Reset `inner_count` to 0. Increment `session.yaml.outer_loop.generation`.
+Reset `inner_count` to 0. **Persist**: update `session.yaml.outer_loop.inner_count` to 0. Increment `session.yaml.outer_loop.generation`.
 
 ## Step 6.5.1 — Meta Analysis
 

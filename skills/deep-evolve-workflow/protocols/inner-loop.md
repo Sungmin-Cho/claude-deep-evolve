@@ -169,11 +169,12 @@ Increment `experiment_count`.
 
 **6.b** Check for **interval-based Outer Loop trigger**:
 If `inner_count >= outer_interval`:
-  If `session.yaml.outer_loop.auto_trigger` is **false**: AskUserQuestion "주기적 Outer Loop 실행할까요?" → "실행" / "건너뛰기"
+  If `session.yaml.outer_loop.auto_trigger` is **false**: AskUserQuestion "주기적 Outer Loop 실행할까요?" → "실행" / "건너뛰기 (→ 6.d)"
   If approved (or auto_trigger=true): execute Step 6.5.
-  After Step 6.5 returns, continue to 6.c (diminishing returns may still apply within same check).
+  After Step 6.5 returns, **skip 6.c** (outer loop already ran this cycle — do not run twice) → go to 6.d.
+If interval not reached → continue to 6.c.
 
-**6.c** Check for diminishing returns using strategy.yaml thresholds:
+**6.c** Check for diminishing returns using strategy.yaml thresholds (only reached if 6.b did NOT trigger outer loop):
 - 0 keeps in last `consecutive_discard_limit` (default 10) → report: "<N>회 연속 discard. Score가 수렴한 것 같습니다."
 - keeps exist but max score delta < `min_delta` in last `plateau_window` (default 15) → report: "개선폭이 미미합니다."
 - `crash_tolerance`+ crashes in last 10 → report: "안정성 문제가 감지되었습니다."
@@ -186,16 +187,19 @@ If any diminishing-returns signal triggered:
   If backtrack not applicable (disabled or no eligible entries), proceed directly to Outer Loop:
 
   If `session.yaml.outer_loop.auto_trigger` is **true** (default):
-  → **IMMEDIATELY** run Step 6.5 (Outer Loop Evaluation). Do NOT AskUserQuestion before Outer Loop completes.
+  → **IMMEDIATELY** run Step 6.5 (Outer Loop Evaluation). Do NOT AskUserQuestion before Outer Loop completes. → go to 6.d.
 
   If `session.yaml.outer_loop.auto_trigger` is **false**:
   → AskUserQuestion first: "diminishing returns 감지됨. Outer Loop를 실행할까요?"
-    - "실행" → Step 6.5
-    - "건너뛰기" → Step 6.d로 이동
+    - "실행" → Step 6.5 → go to 6.d
+    - "건너뛰기" → go to 6.d (user declined outer loop)
 
 **6.d** Continuation decision:
 
-  If Outer Loop was NOT run (no trigger in 6.b or 6.c):
+  If Outer Loop was NOT run (no trigger, or user declined in 6.b/6.c):
+  If diminishing returns were detected but outer loop was skipped:
+  → AskUserQuestion: "계속 (N회 추가)" / "평가 harness 확장" / "여기서 완료"
+  Otherwise (no signal at all):
   → auto-continue to Step 1.
 
   If Outer Loop ran:
