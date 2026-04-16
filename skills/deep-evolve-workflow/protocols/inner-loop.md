@@ -32,7 +32,7 @@ Read `session.yaml` for configuration. Read `.deep-evolve/strategy.yaml` for str
 Read `results.tsv` and `journal.jsonl` for history.
 
 Set `experiment_count` to 0. Set `max_count` to `session.yaml.experiments.requested` (or infinity if null).
-Set `inner_count` to 0 (resets each Outer Loop generation).
+Set `inner_count` to `session.yaml.outer_loop.inner_count` (0 for new sessions, restored value for resume).
 Set `outer_interval` to `session.yaml.outer_loop.interval` (default 20).
 
 ### Branch & Clean-Tree Guard
@@ -165,23 +165,41 @@ Increment `experiment_count`.
 
 **Step 6 — Continuation Check** (uses `strategy.yaml.convergence` parameters):
 
-Increment `inner_count`.
+**6.a** Increment `inner_count`. Persist: update `session.yaml.outer_loop.inner_count` to the new value.
 
-Check for diminishing returns using strategy.yaml thresholds:
+**6.b** Check for diminishing returns using strategy.yaml thresholds:
 - 0 keeps in last `consecutive_discard_limit` (default 10) → report: "<N>회 연속 discard. Score가 수렴한 것 같습니다."
 - keeps exist but max score delta < `min_delta` in last `plateau_window` (default 15) → report: "개선폭이 미미합니다."
 - `crash_tolerance`+ crashes in last 10 → report: "안정성 문제가 감지되었습니다."
 
-If diminishing returns detected AND `strategy.yaml.convergence.plateau_action` is `"branch"` AND `strategy.yaml.exploration.backtrack_enabled` is true:
-→ **Code Archive Backtrack**: Read `protocols/archive.md`, execute **Code Archive Backtrack** section.
+**6.c** If any diminishing-returns signal triggered:
 
-If diminishing returns detected but backtrack not applicable (disabled or no keep entries), ask user via AskUserQuestion:
-Options:
-- "계속 (N회 추가)"
-- "평가 harness 확장 (더 어려운 시나리오/단계 추가)" → Go to **Section D: Prepare Expansion** (below)
-- "여기서 완료" → Read `protocols/completion.md`
+  If `session.yaml.outer_loop.auto_trigger` is **true** (default):
+  → **IMMEDIATELY** run Step 6.5 (Outer Loop Evaluation). Do NOT AskUserQuestion before Outer Loop completes.
+
+  If `session.yaml.outer_loop.auto_trigger` is **false**:
+  → AskUserQuestion first: "diminishing returns 감지됨. Outer Loop를 실행할까요?"
+    - "실행" → Step 6.5
+    - "건너뛰기" → Step 6.d로 이동
+
+  If diminishing returns detected AND `strategy.yaml.convergence.plateau_action` is `"branch"` AND `strategy.yaml.exploration.backtrack_enabled` is true:
+  → **Code Archive Backtrack**: Read `protocols/archive.md`, execute **Code Archive Backtrack** section.
+
+**6.d** After Outer Loop returns (or if no trigger):
+  - Q(v) improved and no convergence flag → auto-continue to Step 1
+  - Q(v) degraded or session-level stop criteria met → AskUserQuestion:
+    Options:
+    - "계속 (N회 추가)"
+    - "평가 harness 확장 (더 어려운 시나리오/단계 추가)" → Go to **Section D: Prepare Expansion** (below)
+    - "여기서 완료" → Read `protocols/completion.md`
+
+Increment `experiment_count`.
 
 **Step 6.5 — Outer Loop Evaluation** (triggers: `inner_count >= outer_interval` OR diminishing returns detected in Step 6):
+
+If `session.yaml.outer_loop.auto_trigger` is false, AskUserQuestion before entering.
+Otherwise execute immediately without user confirmation.
+
 → Read `protocols/outer-loop.md`, execute Outer Loop.
 
 If neither trigger condition is met, skip Outer Loop.
