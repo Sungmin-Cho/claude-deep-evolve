@@ -23,6 +23,17 @@ find_evolve_root() {
 
 PROJECT_ROOT="$(find_evolve_root 2>/dev/null || echo "")"
 
+# v2.2.0+ layout forward-compat (X16)
+# If current.json exists, this project uses v2.2.0 namespace layout.
+# v2.1.2 hook cannot handle it — block all and warn.
+if [[ -n "$PROJECT_ROOT" ]] && [[ -f "$PROJECT_ROOT/.deep-evolve/current.json" ]]; then
+  echo "deep-evolve: v2.2.0+ 레이아웃이 감지되었습니다. 플러그인을 v2.2.0으로 업그레이드하세요." >&2
+  cat <<JSON
+{"decision":"block","reason":"Deep Evolve Guard: v2.2.0+ 레이아웃 감지. 플러그인 업그레이드 필요."}
+JSON
+  exit 2
+fi
+
 # No .deep-evolve/ directory → allow everything
 if [[ -z "$PROJECT_ROOT" ]]; then
   exit 0
