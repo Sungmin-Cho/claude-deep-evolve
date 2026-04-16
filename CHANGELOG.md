@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.2.0
+
+### Features
+- **Session namespace**: `.deep-evolve/<session-id>/` per-session 격리, 세션 간 데이터 보존
+- **`/deep-evolve resume`**: 중단된 세션 재개, integrity check, orphan experiment 감지
+- **`/deep-evolve history`**: 프로젝트 내 세션 목록, lineage tree, aggregate 통계
+- **Session lineage**: 선행 세션의 strategy/program/notable keeps를 새 세션에 상속 (informational only)
+- **Inherited Context**: program.md에 선행 세션 결론 자동 삽입
+- **Immutable receipt v2.2.0**: experiments_table, generation_snapshots(cap 10), notable_keeps, runtime_warnings, parent_session
+- **Shell helper**: `hooks/scripts/session-helper.sh` with 12 subcommands, --dry-run support
+
+### Breaking Changes
+- `.deep-evolve/` 디렉터리 구조 변경: flat → per-session namespace
+- 기존 flat layout 프로젝트는 첫 실행 시 자동 migration 프롬프트
+- `Delete .deep-evolve/` 동작 제거 — 세션은 보존됨 (cleanup은 v2.3+)
+- `sessions.json` → `sessions.jsonl` (event-sourced)
+- receipt schema: `receipt_schema_version: 2` 필드 추가
+
+### Migration
+- **자동**: `/deep-evolve` 실행 시 legacy layout 감지 → archive 이관 프롬프트
+- **수동 rollback 불가**: v2.2.0 layout은 v2.1.x hook과 호환 불가 (v2.1.2 shim이 경고)
+
 ## v2.1.2
 
 ### Improvements
