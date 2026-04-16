@@ -16,7 +16,7 @@
 - **Session lineage**: 선행 세션의 strategy/program/notable keeps를 새 세션에 상속
 - **Inherited Context**: program.md에 선행 세션 결론 자동 삽입
 - **Immutable receipt v2.2.0**: experiments_table, generation_snapshots, notable_keeps, runtime_warnings, parent_session
-- **Shell helper**: `hooks/scripts/session-helper.sh` 12개 서브커맨드, --dry-run 지원
+- **Shell helper**: `hooks/scripts/session-helper.sh` 13개 서브커맨드, --dry-run 지원
 
 ### 호환성 변경
 - `.deep-evolve/` 디렉터리 구조 변경: flat → per-session namespace
