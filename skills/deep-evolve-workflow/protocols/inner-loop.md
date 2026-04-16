@@ -168,8 +168,10 @@ Increment `experiment_count`.
 **6.a** Increment `inner_count`. Persist: update `session.yaml.outer_loop.inner_count` to the new value.
 
 **6.b** Check for **interval-based Outer Loop trigger**:
-If `inner_count >= outer_interval` → execute Step 6.5 immediately (respecting auto_trigger gate).
-After Step 6.5 returns, continue to 6.c (diminishing returns may still apply within same check).
+If `inner_count >= outer_interval`:
+  If `session.yaml.outer_loop.auto_trigger` is **false**: AskUserQuestion "주기적 Outer Loop 실행할까요?" → "실행" / "건너뛰기"
+  If approved (or auto_trigger=true): execute Step 6.5.
+  After Step 6.5 returns, continue to 6.c (diminishing returns may still apply within same check).
 
 **6.c** Check for diminishing returns using strategy.yaml thresholds:
 - 0 keeps in last `consecutive_discard_limit` (default 10) → report: "<N>회 연속 discard. Score가 수렴한 것 같습니다."
@@ -206,8 +208,7 @@ If any diminishing-returns signal triggered:
 
 **Step 6.5 — Outer Loop Evaluation** (triggers: `inner_count >= outer_interval` OR diminishing returns detected in Step 6):
 
-If `session.yaml.outer_loop.auto_trigger` is false, AskUserQuestion before entering.
-Otherwise execute immediately without user confirmation.
+Approval has already been resolved by the caller (Step 6.b or 6.c). Execute without additional confirmation.
 
 → Read `protocols/outer-loop.md`, execute Outer Loop.
 
