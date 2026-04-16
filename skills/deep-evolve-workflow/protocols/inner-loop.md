@@ -167,12 +167,21 @@ Increment `experiment_count`.
 
 **6.a** Increment `inner_count`. Persist: update `session.yaml.outer_loop.inner_count` to the new value.
 
-**6.b** Check for diminishing returns using strategy.yaml thresholds:
+**6.b** Check for **interval-based Outer Loop trigger**:
+If `inner_count >= outer_interval` → execute Step 6.5 immediately (respecting auto_trigger gate).
+After Step 6.5 returns, continue to 6.c (diminishing returns may still apply within same check).
+
+**6.c** Check for diminishing returns using strategy.yaml thresholds:
 - 0 keeps in last `consecutive_discard_limit` (default 10) → report: "<N>회 연속 discard. Score가 수렴한 것 같습니다."
 - keeps exist but max score delta < `min_delta` in last `plateau_window` (default 15) → report: "개선폭이 미미합니다."
 - `crash_tolerance`+ crashes in last 10 → report: "안정성 문제가 감지되었습니다."
 
-**6.c** If any diminishing-returns signal triggered:
+If any diminishing-returns signal triggered:
+
+  First, check **Code Archive Backtrack**: If `strategy.yaml.convergence.plateau_action` is `"branch"` AND `strategy.yaml.exploration.backtrack_enabled` is true AND code-archive has eligible entries:
+  → Execute backtrack (Read `protocols/archive.md`). Then proceed to Outer Loop below.
+
+  If backtrack not applicable (disabled or no eligible entries), proceed directly to Outer Loop:
 
   If `session.yaml.outer_loop.auto_trigger` is **true** (default):
   → **IMMEDIATELY** run Step 6.5 (Outer Loop Evaluation). Do NOT AskUserQuestion before Outer Loop completes.
@@ -182,10 +191,12 @@ Increment `experiment_count`.
     - "실행" → Step 6.5
     - "건너뛰기" → Step 6.d로 이동
 
-  If diminishing returns detected AND `strategy.yaml.convergence.plateau_action` is `"branch"` AND `strategy.yaml.exploration.backtrack_enabled` is true:
-  → **Code Archive Backtrack**: Read `protocols/archive.md`, execute **Code Archive Backtrack** section.
+**6.d** Continuation decision:
 
-**6.d** After Outer Loop returns (or if no trigger):
+  If Outer Loop was NOT run (no trigger in 6.b or 6.c):
+  → auto-continue to Step 1.
+
+  If Outer Loop ran:
   - Q(v) improved and no convergence flag → auto-continue to Step 1
   - Q(v) degraded or session-level stop criteria met → AskUserQuestion:
     Options:
@@ -193,16 +204,12 @@ Increment `experiment_count`.
     - "평가 harness 확장 (더 어려운 시나리오/단계 추가)" → Go to **Section D: Prepare Expansion** (below)
     - "여기서 완료" → Read `protocols/completion.md`
 
-Increment `experiment_count`.
-
 **Step 6.5 — Outer Loop Evaluation** (triggers: `inner_count >= outer_interval` OR diminishing returns detected in Step 6):
 
 If `session.yaml.outer_loop.auto_trigger` is false, AskUserQuestion before entering.
 Otherwise execute immediately without user confirmation.
 
 → Read `protocols/outer-loop.md`, execute Outer Loop.
-
-If neither trigger condition is met, skip Outer Loop.
 
 If `experiment_count >= max_count`:
 → Read `protocols/completion.md`
