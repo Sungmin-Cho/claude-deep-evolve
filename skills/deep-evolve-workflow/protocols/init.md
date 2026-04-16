@@ -193,7 +193,7 @@ If at least one completed session exists:
    Include `program` version tracking, `outer_loop` state, and `evaluation_epoch`:
    ```yaml
    session_id: "<computed>"
-   deep_evolve_version: "2.2.0"
+   deep_evolve_version: "2.2.1"
    parent_session:    # null for root sessions; populated if continue selected
      id: "<parent_id or null>"
      parent_receipt_schema_version: <N>

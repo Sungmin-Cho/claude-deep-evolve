@@ -1,6 +1,6 @@
 ---
 name: deep-evolve-workflow
-version: "2.2.0"
+version: "2.2.1"
 description: |
   Autonomous experimentation protocol with goal-driven experiment loops,
   session history, resume, and lineage tracking.
@@ -42,6 +42,10 @@ History        → protocols/history.md     (세션 목록/lineage/통계)
 - `/deep-evolve` — 새 세션 시작 또는 기존 세션 재개
 - `/deep-evolve 50` — 50회 실험 요청
 - `/deep-evolve "새 목표"` — 새 목표로 세션 시작
+- `/deep-evolve resume` — 중단된 세션 재개
+- `/deep-evolve history` — 세션 이력 조회
+- `/deep-evolve history <session-id>` — 세션 상세 보기
+- `/deep-evolve history --lineage` — lineage tree 표시
 
 ## 지원 도메인
 

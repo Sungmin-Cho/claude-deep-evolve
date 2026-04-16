@@ -3,7 +3,7 @@
 # Usage: session-helper.sh <subcommand> [args...]
 set -Eeuo pipefail
 
-HELPER_VERSION="2.2.0"
+HELPER_VERSION="2.2.1"
 export DEEP_EVOLVE_HELPER=1
 
 # === Dependencies ===
@@ -30,6 +30,15 @@ iso_now() {
   date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || gdate -u +"%Y-%m-%dT%H:%M:%SZ"
 }
 
+normalize_path() {
+  local p="$1"
+  p="${p//\\//}"
+  while [[ "$p" == *"//"* ]]; do
+    p="${p//\/\//\/}"
+  done
+  printf '%s' "$p"
+}
+
 compute_slug() {
   local input="$1"
   local slug
@@ -38,20 +47,25 @@ compute_slug() {
     | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-*//; s/-*$//' \
     | cut -c1-40)
   if [ -z "$slug" ]; then
-    # Unicode-only input → hash fallback
-    slug="session-$(printf '%s' "$input$(iso_now)" | shasum | cut -c1-6)"
+    # Unicode-only input → hash fallback (shasum or sha256sum)
+    local hash_cmd="shasum"
+    command -v shasum >/dev/null 2>&1 || hash_cmd="sha256sum"
+    slug="session-$(printf '%s' "$input$(iso_now)" | $hash_cmd | cut -c1-6)"
   fi
   printf '%s' "$slug"
 }
 
 find_project_root() {
-  local dir="$PWD"
-  while [ "$dir" != "/" ]; do
+  local dir
+  dir="$(normalize_path "$PWD")"
+  local prev=""
+  while [ "$dir" != "$prev" ]; do
     if [ -d "$dir/.deep-evolve" ]; then
       printf '%s' "$dir"
       return 0
     fi
-    dir="$(dirname "$dir")"
+    prev="$dir"
+    dir="$(normalize_path "$(dirname "$dir")")"
   done
   return 1
 }

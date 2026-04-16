@@ -134,8 +134,25 @@ Based on meta analysis, propose program.md revision:
       Close previous history entry's experiment range: `"<start>-<end>"`.
    g. Insert separator in `results.tsv`: `--- program v<old> -> v<new> (meta_analysis: <reason>) ---`
 
-(Optional, v2.3에서 의무화 예정) 이 keep이 다른 세션에 전이할 가치가 있다면
-journal.jsonl에 {"event": "outer_loop", "notable": true, "n": <experiment_number>, "reason": "<brief>", "timestamp": "<now>"} 형태로 기록.
+## Step 6.5.4a — Notable Keep 마킹
+
+> 이 스텝은 Step 6.5.4의 program.md 수정 승인 여부와 무관하게 항상 실행한다.
+
+현재 generation의 kept 실험 중 score_delta 기준 상위 3개를 자동으로 notable 마킹한다.
+
+1. **Kept 실험 추출**: results.tsv에서 현재 generation 구간 (이전 outer_loop 이벤트 이후 ~ 현재)의 `kept` 행을 추출
+2. **score_delta 계산**: 각 kept 실험에 대해:
+   ```
+   score_delta = experiment_score - previous_kept_score
+   ```
+   - `previous_kept_score`: results.tsv에서 해당 실험 직전에 keep된 실험의 score 값
+   - generation 내 첫 keep이면: results.tsv에서 현재 generation 구간 시작 직전의 마지막 kept 행의 score 사용 (generation 시작 전 score를 반영. `session.yaml.metric.current`는 inner-loop에서 매 keep마다 갱신되므로 사용하지 않는다)
+3. **Top-3 선정**: score_delta 상위 3개 선정 (kept가 3개 미만이면 전부)
+4. **Journal 기록**: 각각 journal.jsonl에 기록:
+   ```json
+   {"event": "notable_marked", "id": <experiment_id>, "commit": "<hash>", "description": "<idea description>", "score_delta": <value>, "source": "auto_top_n", "generation": <g>, "timestamp": "<now>"}
+   ```
+5. 에이전트가 추가로 전략적으로 중요한 keep을 `source: "marked"`로 마킹 가능 (optional)
 
 ## Step 6.5.5 — Strategy Keep/Discard Judgment
 

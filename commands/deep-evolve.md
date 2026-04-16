@@ -6,7 +6,7 @@ description: |
   Supports init, resume, and completion workflows via state-based auto-routing.
 allowed_tools: all
 # Note: Bash tool is allowed but protect-readonly.sh hook intercepts shell writes
-# to .deep-evolve/prepare.py, prepare-protocol.md, and program.md during active experiment runs.
+# to .deep-evolve/prepare.py, prepare-protocol.md, program.md, and strategy.yaml during active experiment runs.
 ---
 
 You are running the **deep-evolve** autonomous experimentation protocol.
@@ -136,3 +136,4 @@ transfer:
 | strategy_judgment    | 전략 keep/discard 판정 |
 | strategy_stagnation  | Outer Loop 정체 감지 |
 | branch_fork          | Code Archive backtrack |
+| notable_marked       | Notable keep 자동/수동 마킹 |

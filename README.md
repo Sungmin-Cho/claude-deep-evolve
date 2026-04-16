@@ -87,6 +87,14 @@ deep-evolve exchanges bidirectional data with other plugins in the deep-suite ec
 **Consumer (imports):**
 - `.deep-review/recurring-findings.json` → read during init Stage 3.5 to steer experiment direction (prepare.py scenarios + program.md + strategy.yaml weight adjustment)
 
+### Session Management (v2.2)
+
+deep-evolve manages sessions in per-session namespaces under `.deep-evolve/<session-id>/`, preserving all experiment data across sessions.
+
+- **Resume**: Stop anytime. Run `/deep-evolve` again — it detects the active session, performs integrity checks (branch alignment, dirty tree, orphan experiments), and picks up where it left off.
+- **History**: View all sessions for the current project with `/deep-evolve history`. See experiment counts, keep rates, Q trajectories, and score improvements at a glance.
+- **Session Lineage**: New sessions can continue from a completed session, inheriting its final strategy, program, and notable keeps as starting context. Inherited Context (strategy patterns, notable discoveries, and lessons from the parent session) is automatically injected into the new session's `program.md`. The lineage chain is visible via `/deep-evolve history --lineage`.
+
 ## The Methodology
 
 ### Three Files That Matter
@@ -268,6 +276,15 @@ Then asks: merge to main, create PR, keep branch, or discard?
 
 # Start with a specific goal
 /deep-evolve "minimize val_bpb"
+
+# Resume an interrupted session
+/deep-evolve resume
+
+# View session history
+/deep-evolve history
+
+# View lineage tree
+/deep-evolve history --lineage
 ```
 
 ## Supported Domains

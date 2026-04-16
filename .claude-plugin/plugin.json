@@ -1,6 +1,6 @@
 {
   "name": "deep-evolve",
-  "version": "2.1.0",
+  "version": "2.2.1",
   "description": "Autonomous Experimentation Protocol — goal-driven experiment loops that systematically improve any project through measured code modifications",
   "author": {
     "name": "sungmin"
