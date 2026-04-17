@@ -124,9 +124,15 @@ If either condition is not met, skip recording.
    - Rewrite the full file (within flock)
 
 5. **Flock failure handling**:
-   - If flock times out (5 seconds): save to `~/.claude/deep-evolve/.pending-archive.jsonl` instead.
-     Display warning: "메타 아카이브 잠금 실패 — .pending-archive.jsonl에 임시 저장됨. 다음 세션에서 자동 병합됩니다."
-   - On next session init (A.2.5), check for `.pending-archive.jsonl` and merge (with flock).
+   - If flock times out (5 seconds), **append one or two tagged records** to
+     `~/.claude/deep-evolve/.pending-archive.jsonl`:
+     - New entry: `{"type": "new_entry", "timestamp": "<now>", "data": { <full new entry object> }}`
+     - Source update (only if transfer was used): `{"type": "update_source", "timestamp": "<now>",
+       "id": "<source_id>", "this_session_success": <0|1>}`
+   - Display warning: "메타 아카이브 잠금 실패 — .pending-archive.jsonl에 임시 저장됨.
+     다음 세션에서 자동 병합됩니다."
+   - Legacy untagged lines (written by v2.2.1 or earlier) are merged as if they were
+     `type: "new_entry"` — see Section F step 2. (H-3 fix)
 
 ## Section E.1: Cross-Plugin Feedback Export
 
@@ -181,8 +187,19 @@ Manages the global meta-archive at `~/.claude/deep-evolve/meta-archive.jsonl`.
 1. **Check archive exists**:
    If `~/.claude/deep-evolve/meta-archive.jsonl` does not exist, report "메타 아카이브가 비어 있습니다." and exit.
 
-2. **Merge pending entries**:
-   If `~/.claude/deep-evolve/.pending-archive.jsonl` exists, merge its entries into the main archive (via flock).
+2. **Merge pending entries** (H-3):
+   If `~/.claude/deep-evolve/.pending-archive.jsonl` exists, merge entries (via flock):
+   - For each line, detect `type`:
+     - `type: "new_entry"` — append `data` to main archive (dedupe by `id`).
+     - `type: "update_source"` — locate source entry by `id`, recompute
+       `transfer_success_rate` using its stored `usage_count`:
+       ```
+       new_rate = (old_rate * usage_count + this_session_success) / (usage_count + 1)
+       # or this_session_success if old_rate is null
+       ```
+       then `usage_count += 1`.
+     - Untagged (legacy v2.2.1 lines, JSON object at root): treat as `new_entry`.
+   - Atomically rewrite main archive; remove `.pending-archive.jsonl` after success.
 
 3. **Display archive statistics**:
    ```
