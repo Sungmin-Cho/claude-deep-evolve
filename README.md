@@ -91,7 +91,9 @@ deep-evolve exchanges bidirectional data with other plugins in the deep-suite ec
 
 deep-evolve manages sessions in per-session namespaces under `.deep-evolve/<session-id>/`, preserving all experiment data across sessions.
 
-- **Resume**: Stop anytime. Run `/deep-evolve` again — it detects the active session, performs integrity checks (branch alignment, dirty tree, orphan experiments), and picks up where it left off.
+- **Session lifecycle**: `initializing` (baseline 측정/writeback) → `active` (inner loop) → `paused` (outer loop 실행 중) → `active` → `completed` / `aborted` (v2.2.2).
+- **Resume**: Stop anytime. Run `/deep-evolve` again — it detects the active session, performs integrity checks (branch alignment, dirty tree, orphan experiments), and picks up where it left off. Outer Loop resume is **idempotent per-phase**: each sub-step is identified by a journal event (`outer_loop`, `strategy_update`, `strategy_judgment`, `notable_marked`, `program_skip`) and is skipped on restart if already completed (v2.2.2).
+- **Baseline contract**: Minimize-direction metrics are writebacked during init so that `session.yaml.metric.baseline == 1.0` for every session. All downstream comparisons (`improvement_pct`, Q(v) `normalized_delta`, archive scoring) share a common scale (v2.2.2).
 - **History**: View all sessions for the current project with `/deep-evolve history`. See experiment counts, keep rates, Q trajectories, and score improvements at a glance.
 - **Session Lineage**: New sessions can continue from a completed session, inheriting its final strategy, program, and notable keeps as starting context. Inherited Context (strategy patterns, notable discoveries, and lessons from the parent session) is automatically injected into the new session's `program.md`. The lineage chain is visible via `/deep-evolve history --lineage`.
 
@@ -231,7 +233,7 @@ Based on the analysis, deep-evolve generates an evaluation harness tailored to y
 | Domain Signal | Template | Example |
 |---|---|---|
 | stdout contains parseable metrics | stdout-parse | ML training (val_bpb), backtesting (Sharpe ratio) |
-| Test framework detected | test-runner | Web apps (jest), libraries (pytest, cargo test) |
+| Test framework detected | test-runner | jest, pytest, vitest, cargo test, go test |
 | Code quality / pattern goals | scenario-based | Plugin hooks, security patterns, lint rules |
 
 **Protocol mode** (`prepare-protocol.md`):

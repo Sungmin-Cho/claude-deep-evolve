@@ -1,4 +1,4 @@
-# Resume Protocol (v2.2.0)
+# Resume Protocol (v2.2.2)
 
 Resumes an interrupted deep-evolve session. Restores context from persisted state
 and re-enters the experiment loop.
@@ -6,9 +6,13 @@ and re-enters the experiment loop.
 ## Step 1 — Load current session
 
 Run `session-helper.sh resolve_current` → `session_id`, `$SESSION_ROOT`.
-Read `$SESSION_ROOT/session.yaml`. If status is terminal (completed/aborted):
-  "재개할 세션이 없습니다. `/deep-evolve`로 새 세션을 시작하세요."
-  Stop here.
+Read `$SESSION_ROOT/session.yaml`. Branch by `status`:
+- **terminal** (`completed` / `aborted`):
+  "재개할 세션이 없습니다. `/deep-evolve`로 새 세션을 시작하세요." Stop here.
+- **initializing** (v2.2.2): baseline writeback 전 중단 → dispatch back to
+  `protocols/init.md` Step 11 (dispatcher에서 이미 처리됨; resume.md는 이 상태를
+  직접 다루지 않는다).
+- **active** / **paused**: continue to Step 2.
 
 ## Step 2 — Load session state
 

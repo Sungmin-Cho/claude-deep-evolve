@@ -131,6 +131,20 @@ Include only the metrics that your evaluation steps actually produce.
   - 예: `score = max(0, 1 - (raw_value / baseline_value))` 또는 `score = baseline / raw_value`
 - 이 규칙은 deep-evolve 실험 루프의 judgment 단계에서 항상 `score_new > score_old`로 비교하기 위한 불변식입니다.
 
+### Baseline = 1.0 불변식 (v2.2.2/C-7)
+
+Protocol mode는 CLI mode의 `BASELINE_SCORE` writeback 메커니즘과 달리, Score Computation
+formula 자체에 `baseline_value` 상수를 포함시켜 **최초 실행 시 score=1.0**이 나오도록
+설계해야 합니다. 구체적으로:
+1. Protocol 설계 시 `baseline_value`를 수식에 포함 (예: `score = baseline_value / raw_value`).
+2. `baseline_value`를 상수로 하드코딩하거나 첫 실행의 raw 값으로 치환할 placeholder로 둠.
+3. init.md Step 11.a에서 첫 실행 → raw_value 기록 → (선택) `baseline_value`를 측정값으로 치환.
+4. init.md Step 11.b는 CLI mode stdout-parse 전용이므로 protocol mode는 이 단계를 건너뜁니다.
+5. session.yaml.metric.baseline은 minimize의 경우 1.0, maximize의 경우 raw_score로 기록.
+
+이렇게 해서 모든 하류 계산(`improvement_pct`, Q(v) `normalized_delta`, archive scoring)이
+CLI mode와 동일한 스케일로 비교됩니다.
+
 ## Important Rules
 
 1. Follow each step EXACTLY as written — same tools, same parameters, same order
