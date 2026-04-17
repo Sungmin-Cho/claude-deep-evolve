@@ -28,7 +28,17 @@ Options:
 
 ## Section C: Experiment Loop
 
-> **$SESSION_ROOT resolution**: The dispatcher or resume.md has already resolved the active session via `session-helper.sh resolve_current`. All `.deep-evolve/` paths in this protocol refer to `$SESSION_ROOT/`.
+> **$SESSION_ID / $SESSION_ROOT resolution**: The dispatcher or `resume.md` has already
+> resolved the active session via `session-helper.sh resolve_current`. Its output is a
+> tab-separated line `<session_id>\t<session_root>`. Bind both:
+>
+> ```bash
+> read -r SESSION_ID SESSION_ROOT < <(session-helper.sh resolve_current)
+> ```
+>
+> All `.deep-evolve/` paths in this protocol refer to `$SESSION_ROOT/`. Use `$SESSION_ID`
+> for any `session-helper.sh` subcommand that takes a session id argument
+> (e.g., `mark_session_status`, `append_sessions_jsonl`).
 
 Read `session.yaml` for configuration. Read `$SESSION_ROOT/strategy.yaml` for strategy parameters.
 Read `results.tsv` and `journal.jsonl` for history.
@@ -66,12 +76,34 @@ Before starting, check last entry in `journal.jsonl`:
 - If last status is `kept` → fully resolved, start fresh experiment
 - If last status is `discarded` → check if rollback was completed:
   - Look for subsequent `{"id": <same_id>, "status": "rollback_completed"}` entry
+  - If rollback_completed exists → fully resolved, start fresh experiment
   - If NO rollback_completed entry exists:
     → Run Branch & Clean-Tree Guard
-    → Verify HEAD commit matches the journal's `commit` field
-    → If match: execute `git reset --hard HEAD~1`, then append `{"id": <id>, "status": "rollback_completed"}`
-    → If no match: HEAD was already reset (manual intervention), append `rollback_completed`
-  - If rollback_completed exists → fully resolved, start fresh experiment
+    → Read `journal_commit` (the `commit` field of the discarded entry). It may be a
+       full 40-char SHA (v2.2.2+) or a 7-12 char short SHA (legacy v2.2.1 or earlier).
+    → Resolve `journal_commit` to a canonical full SHA (R-2 legacy compat):
+       ```bash
+       if [ "${#journal_commit}" -ge 40 ]; then
+         canonical=$journal_commit
+       else
+         canonical=$(git rev-parse "$journal_commit" 2>/dev/null) || canonical=""
+       fi
+       ```
+    → If `canonical` is empty, the commit no longer exists (pruned / force-pushed) →
+       append `rollback_completed` with `"note": "commit unresolvable"` and skip reset.
+    → Compare `git rev-parse HEAD` with `canonical`:
+       - **Exact match** → run `git reset --hard HEAD~1`, append `rollback_completed`.
+       - **No match** → run `git merge-base --is-ancestor "$canonical" HEAD`:
+         - **exit 0 (ancestor=true)** — journal commit is still in HEAD's ancestry, an
+           unrelated commit sits on top. R-4 fix: rollback IS possible but not via
+           `HEAD~1`. AskUserQuestion: "실험 커밋 <short>이 HEAD 계보에 남아있고 그 위에
+           다른 커밋이 쌓여 있습니다." Options:
+             - "자동 reset (위 커밋 삭제)" → `git reset --hard "$canonical^"` then
+               `rollback_completed`
+             - "수동 처리" → abort
+         - **exit 1 (ancestor=false)** — commit is not in HEAD's history at all → already
+           rolled back (or branch-switched) → append `rollback_completed` with
+           `"note": "already removed from HEAD ancestry"`.
 
 ### Loop
 
@@ -100,7 +132,7 @@ Repeat until `experiment_count >= max_count` or diminishing returns detected:
 git add <target_files>
 git commit -m "experiment: <idea description>"
 ```
-- Get commit hash: `COMMIT=$(git rev-parse --short HEAD)`
+- Get commit hash: `COMMIT=$(git rev-parse HEAD)` (full 40-char SHA — C-6)
 - Append to `journal.jsonl`: `{"id": <id>, "status": "committed", "commit": "<COMMIT>", "timestamp": "<now>"}`
 
 **Step 4 — Evaluation:**
@@ -216,7 +248,16 @@ If any diminishing-returns signal triggered:
 
 Approval has already been resolved by the caller (Step 6.b or 6.c). Execute without additional confirmation.
 
-→ Read `protocols/outer-loop.md`, execute Outer Loop.
+1. **Mark paused** (C-1/R-1): `session-helper.sh mark_session_status "$SESSION_ID" paused`
+   — indicates that a crash during Outer Loop should re-enter via `resume.md` Step 5's
+   outer-loop branch rather than re-running inner experiments.
+2. → Read `protocols/outer-loop.md`, execute Outer Loop. Outer Loop itself uses journal
+   events as checkpoints (see outer-loop.md "Resume safety" section) so restart is
+   idempotent per-phase.
+3. **Mark active**: on normal return (Outer Loop did not trigger completion),
+   `session-helper.sh mark_session_status "$SESSION_ID" active`. If Outer Loop terminated
+   the session (e.g., session-level stop criteria), completion.md will set the final
+   status to `completed`.
 
 If `experiment_count >= max_count`:
 → Read `protocols/completion.md`

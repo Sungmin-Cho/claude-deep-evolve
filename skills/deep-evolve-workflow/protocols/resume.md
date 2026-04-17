@@ -109,8 +109,12 @@ Q(v) 추이: <q_history values>
 
 ## Step 5 — Re-enter experiment loop
 
-If `session.yaml.status` == `paused`:
-  → Read `protocols/outer-loop.md` from Step 6.5 (outer loop was in progress)
+If `session.yaml.status == paused`:
+  → A crash occurred during an Outer Loop run (see `inner-loop.md` Step 6.5, which wraps
+    Outer Loop in `mark_session_status paused/active`). Read `protocols/outer-loop.md`
+    and execute from the beginning. Outer Loop's **Resume safety** section inspects
+    `journal.jsonl` for each sub-step's completion event and skips already-completed
+    phases, so restart is idempotent — no additional work required here.
 
-If `session.yaml.status` == `active`:
-  → Read `protocols/inner-loop.md`, enter Section C with restored `inner_count`
+If `session.yaml.status == active`:
+  → Read `protocols/inner-loop.md`, enter Section C with restored `inner_count`.
