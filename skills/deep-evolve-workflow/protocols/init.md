@@ -191,7 +191,9 @@ If at least one completed session exists:
    Include `program` version tracking, `outer_loop` state, and `evaluation_epoch`:
    ```yaml
    session_id: "<computed>"
-   deep_evolve_version: "2.2.1"
+   deep_evolve_version: "2.2.2"
+   status: initializing                 # C-7: transitions to 'active' at end of Step 11
+   created_at: "<ISO 8601 now>"
    parent_session:    # null for root sessions; populated if continue selected
      id: "<parent_id or null>"
      parent_receipt_schema_version: <N>
@@ -330,20 +332,58 @@ If at least one completed session exists:
     ```
     Wait for confirmation.
 
-11. Run baseline measurement:
+11. **Baseline measurement + writeback + status transition** (C-7):
+
+    Scoring contract requires `session.yaml.metric.baseline == 1.0` for minimize
+    metrics (raw → inverted → 1.0). This step establishes that contract. The session
+    is still `status: initializing`, so `protect-readonly.sh` does NOT yet enforce
+    prepare.py protection — we can writeback `BASELINE_SCORE` during this step.
+
+    **11.a — First measurement (raw)**:
 
     **If eval_mode is `cli`:**
     ```bash
-    python3 $SESSION_ROOT/prepare.py > $SESSION_ROOT/runs/run-000.log 2>&1
+    python3 $SESSION_ROOT/prepare.py > $SESSION_ROOT/runs/run-000-raw.log 2>&1
     ```
 
     **If eval_mode is `protocol`:**
     Execute the evaluation protocol defined in `$SESSION_ROOT/prepare-protocol.md`:
     - Follow each step exactly using the specified tools
-    - Record all tool call results to `$SESSION_ROOT/runs/run-000.log`
+    - Record all tool call results to `$SESSION_ROOT/runs/run-000-raw.log`
     - Compute score using the protocol's formula
-    - Output in standard format: `score: X.XXXXXX`
 
-    Parse baseline score and record in session.yaml and results.tsv.
+    Parse `raw_score` from the `score: X.XXXXXX` line.
+
+    **11.b — BASELINE_SCORE writeback** (cli mode, stdout-parse template, minimize
+    direction only):
+
+    For `stdout-parse` template with `METRIC_DIRECTION == "minimize"`, writeback the
+    raw measurement so the second run produces 1.0:
+
+    - Read `$SESSION_ROOT/prepare.py`
+    - Replace the line `BASELINE_SCORE = None` with `BASELINE_SCORE = <raw_score>`
+      (Write tool — hook allows writes because session.yaml.status is `initializing`)
+    - Re-run: `python3 $SESSION_ROOT/prepare.py > $SESSION_ROOT/runs/run-000.log 2>&1`
+    - Parse `score:` from the new log — it MUST be `1.000000` (± float epsilon).
+    - If it is not ~1.0, abort with: "baseline writeback 검증 실패: expected ~1.0, got <score>"
+
+    For `test-runner` / `scenario` templates (pass-rate based) and `maximize` metrics:
+    - No writeback needed; `raw_score` is already the normalized baseline.
+    - Copy `run-000-raw.log` → `run-000.log` for consistency.
+
+    **11.c — Record baseline**:
+
+    - `session.yaml.metric.baseline = 1.0` (for minimize after writeback) or `raw_score`
+      (for maximize / pass-rate templates)
+    - `session.yaml.metric.current = session.yaml.metric.baseline`
+    - `session.yaml.metric.best = session.yaml.metric.baseline`
+    - Append to `results.tsv`: `baseline\t<baseline_value>\tbaseline\tinitial measurement`
+
+    **11.d — Status transition**:
+
+    `session-helper.sh mark_session_status "$SESSION_ID" active`
+
+    From this point forward, `protect-readonly.sh` enforces prepare.py/program.md/
+    strategy.yaml protection. The inner loop can proceed.
 
 → Proceed to Inner Loop: Read `protocols/inner-loop.md`

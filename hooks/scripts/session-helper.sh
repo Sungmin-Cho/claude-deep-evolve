@@ -251,8 +251,9 @@ cmd_start_new_session() {
     exit 1
   }
 
-  # P2+P3: 직접 함수 호출 + jq 기반 JSON
-  local jq_args=(--arg goal "$goal" --arg status "active")
+  # C-7 fix: session starts in 'initializing' status. init.md Step 11 transitions to 'active'
+  # after baseline writeback (protect-readonly.sh only enforces when status=="active").
+  local jq_args=(--arg goal "$goal" --arg status "initializing")
   local jq_extra='+ {goal:$goal, status:$status}'
   if [ -n "$parent_id" ]; then
     jq_args+=(--arg pid "$parent_id")
