@@ -61,10 +61,16 @@ SAFETY CHECK:
    if CURRENT != EXPECTED → ABORT with error:
    "⛔ Branch mismatch: expected <expected>, on <current>. /deep-evolve에서 세션을 확인하세요."
 
-2. Verify worktree is clean (excluding .deep-evolve/):
-   DIRTY=$(git status --porcelain | grep -v '^\?\? .deep-evolve/')
-   if DIRTY is not empty → ABORT with error:
+2. Verify worktree is clean, allowing only `.deep-evolve/` untracked (R-3 fix):
+   ```bash
+   DIRTY=$(git status --porcelain | awk '$1 != "??" || $2 !~ /^\.deep-evolve\//')
+   ```
+   If `$DIRTY` is non-empty → ABORT with error:
    "⛔ Dirty worktree detected. 실험을 시작하기 전에 uncommitted 변경을 커밋하거나 stash하세요."
+
+   Rationale: `git reset --hard HEAD~1` only rolls back tracked changes, but untracked
+   user files in the worktree could silently influence evaluation output (e.g., a stray
+   config file). Only `.deep-evolve/` (session state, gitignored) is exempt.
 ```
 
 ### Resume Reconciliation
