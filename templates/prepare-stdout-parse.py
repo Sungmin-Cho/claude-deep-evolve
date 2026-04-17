@@ -12,6 +12,19 @@ Usage: python3 prepare.py [--verbose]
 import subprocess, sys, re, os, time
 from pathlib import Path
 
+
+def _resolve_project_root():
+    """Walk up from this file until we find .deep-evolve/, return its parent.
+    Works for both v2.2.0 namespace layout (.deep-evolve/<sid>/prepare.py)
+    and legacy flat layout (.deep-evolve/prepare.py)."""
+    p = Path(__file__).resolve()
+    for ancestor in p.parents:
+        if ancestor.name == ".deep-evolve":
+            return ancestor.parent
+    sys.stderr.write(f"[prepare] WARN: .deep-evolve/ not found in path hierarchy of {p}\n")
+    return p.parent
+
+
 # ── Configuration (filled by deep-evolve init) ──────────────
 
 RAW_COMMAND = "{{RAW_COMMAND}}"
@@ -36,7 +49,7 @@ def run_command():
             capture_output=True,
             text=True,
             timeout=TIMEOUT,
-            cwd=str(Path(__file__).parent.parent),  # project root
+            cwd=str(_resolve_project_root()),  # project root (handles v2.2.0 namespace + legacy flat)
         )
         return result.stdout, result.stderr, result.returncode
     except subprocess.TimeoutExpired:

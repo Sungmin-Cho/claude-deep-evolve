@@ -12,6 +12,19 @@ Usage: python3 prepare.py [--verbose]
 import subprocess, sys, re, os, json
 from pathlib import Path
 
+
+def _resolve_project_root():
+    """Walk up from this file until we find .deep-evolve/, return its parent.
+    Works for both v2.2.0 namespace layout (.deep-evolve/<sid>/prepare.py)
+    and legacy flat layout (.deep-evolve/prepare.py)."""
+    p = Path(__file__).resolve()
+    for ancestor in p.parents:
+        if ancestor.name == ".deep-evolve":
+            return ancestor.parent
+    sys.stderr.write(f"[prepare] WARN: .deep-evolve/ not found in path hierarchy of {p}\n")
+    return p.parent
+
+
 # Scoring Contract: score는 항상 higher-is-better.
 # test-runner/scenario 템플릿은 본질적으로 pass rate 기반이므로 방향 반전 불필요.
 
@@ -30,7 +43,7 @@ WEIGHTS = {
 
 # ── Evaluation Engine ───────────────────────────────────────
 
-PROJECT_ROOT = str(Path(__file__).parent.parent)
+PROJECT_ROOT = str(_resolve_project_root())
 
 
 def run_tests():
