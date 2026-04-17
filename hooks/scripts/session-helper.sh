@@ -331,14 +331,16 @@ cmd_migrate_legacy() {
 
   acquire_project_lock || exit 1
 
+  # C-3 fix: declare lists outside skip_copy guard so the later rm loop
+  # still sees them when idempotent re-runs short-circuit the copy phase.
+  local files_to_copy=(session.yaml strategy.yaml program.md prepare.py prepare-protocol.md results.tsv journal.jsonl report.md evolve-receipt.json)
+  local dirs_to_copy=(runs code-archive strategy-archive)
+
   if [ "$skip_copy" -eq 0 ]; then
   # 1) Create namespace dir
   mkdir -p "$legacy_dir/meta-analyses" || { release_project_lock; return 1; }
 
   # 2) COPY (not move) — P4: FAIL on any copy error (no || true)
-  # Codex review fix: report.md + evolve-receipt.json도 복사 대상에 포함
-  local files_to_copy=(session.yaml strategy.yaml program.md prepare.py prepare-protocol.md results.tsv journal.jsonl report.md evolve-receipt.json)
-  local dirs_to_copy=(runs code-archive strategy-archive)
   local copy_failed=0
 
   for f in "${files_to_copy[@]}"; do
