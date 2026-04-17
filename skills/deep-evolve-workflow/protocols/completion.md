@@ -44,49 +44,54 @@ Generate `$SESSION_ROOT/evolve-receipt.json` from `session.yaml` and `results.ts
 ```json
 {
   "plugin": "deep-evolve",
-  "version": "2.2.1",
-  "timestamp": "<ISO 8601 now>",
-  "goal": "<session.yaml.goal>",
-  "eval_mode": "<session.yaml.eval_mode>",
+  "version": "2.2.2",
+  "receipt_schema_version": 2,                                           // number
+  "timestamp": "<ISO 8601 now>",                                         // string
+  "goal": "<session.yaml.goal>",                                         // string
+  "eval_mode": "<session.yaml.eval_mode>",                               // string: cli | protocol
   "experiments": {
-    "total": "<session.yaml.experiments.total>",
-    "kept": "<session.yaml.experiments.kept>",
-    "discarded": "<session.yaml.experiments.discarded>",
-    "crashed": "<session.yaml.experiments.crashed>",
-    "keep_rate": "<kept / total>"
+    "total": <session.yaml.experiments.total>,                           // number (not string)
+    "kept": <session.yaml.experiments.kept>,                             // number
+    "discarded": <session.yaml.experiments.discarded>,                   // number
+    "crashed": <session.yaml.experiments.crashed>,                       // number
+    "keep_rate": <kept / total, ratio 0.0-1.0 — NOT percentage>          // number
   },
   "score": {
-    "baseline": "<session.yaml.metric.baseline (normalized, higher-is-better)>",
-    "current": "<session.yaml.metric.current (normalized, higher-is-better)>",
-    "best": "<session.yaml.metric.best (normalized, higher-is-better)>",
-    "improvement_pct": "<(best - baseline) / baseline * 100>"
+    "baseline": <session.yaml.metric.baseline>,                          // number (normalized, higher-is-better)
+    "current": <session.yaml.metric.current>,                            // number
+    "best": <session.yaml.metric.best>,                                  // number
+    "improvement_pct": <(best - baseline) / baseline * 100>              // number (percentage, 0 when baseline==0)
   },
   "strategy_evolution": {
-    "outer_loop_generations": "<session.yaml.outer_loop.generation>",
-    "q_trajectory": "<session.yaml.outer_loop.q_history mapped to Q values>",
-    "strategy_versions": "<count of strategy-archive/ directories>",
-    "best_generation": "<generation with highest Q in q_history>"
+    "outer_loop_generations": <session.yaml.outer_loop.generation>,      // number
+    "q_trajectory": [<Q values per generation>],                         // array of numbers
+    "strategy_versions": <count of strategy-archive/ directories>,       // number
+    "best_generation": <generation with highest Q in q_history>          // number
   },
   "program": {
-    "versions": "<session.yaml.program.version>",
-    "meta_analyses": "<count of program.history entries with reason containing 'meta_analysis'>"
+    "versions": <session.yaml.program.version>,                          // number
+    "meta_analyses": <count of program.history entries containing 'meta_analysis'>  // number
   },
-  "evaluation_epochs": "<session.yaml.evaluation_epoch.current>",
+  "evaluation_epochs": <session.yaml.evaluation_epoch.current>,          // number
   "archives": {
-    "strategy_archive_size": "<count of strategy-archive/ directories>",
-    "code_archive_size": "<count of code-archive/ directories>",
-    "code_forks_used": "<count of lineage.previous_branches>"
+    "strategy_archive_size": <count of strategy-archive/ directories>,   // number
+    "code_archive_size": <count of code-archive/ directories>,           // number
+    "code_forks_used": <count of lineage.previous_branches>              // number
   },
-  "meta_archive_updated": "<true if E.0 recorded successfully>",
+  "meta_archive_updated": <true | false>,                                // boolean
   "transfer": {
-    "received_from": "<session.yaml.transfer.source_id or null>",
-    "adopted_patterns_kept": "<ratio of transferred patterns retained in final strategy>"
+    "received_from": <session.yaml.transfer.source_id or null>,          // string | null
+    "adopted_patterns_kept": <ratio of transferred patterns retained>    // number | null
   },
-  "duration_minutes": "<if session.yaml.created_at exists: minutes between created_at and now, else: null>",
-  "quality_score": "<computed below>",
-  "outcome": null
+  "duration_minutes": <minutes between created_at and now, or null>,     // number | null
+  "quality_score": <0-100, computed below>,                              // number
+  "outcome": null                                                        // string | null (set after user selection)
 }
 ```
+
+> **Type strictness (v2.2.2, M-3)**: values marked `// number` MUST be emitted as JSON
+> numbers, not quoted strings. `cmd_append_meta_archive_local` and deep-dashboard
+> aggregations depend on numeric arithmetic (`/`, `*`).
 
 Notes:
 - `duration_minutes`: null if session.yaml lacks created_at (pre-2.1.0 sessions)

@@ -4,12 +4,46 @@ The Outer Loop governs strategy evolution across the 3-tier hierarchy. It fires 
 
 **Auto-trigger gate**: If `session.yaml.outer_loop.auto_trigger` is false, the caller (inner-loop.md Step 6.c) will have already asked the user before entering this protocol. If true, this protocol executes without user confirmation.
 
+## Resume safety (v2.2.2)
+
+Each sub-step of the Outer Loop is idempotent because it can be identified by an
+existing journal event. Before executing any step, check whether the step's completion
+event is already in `journal.jsonl` for the **current generation** (i.e., after the
+most recent `outer_loop` event with `"generation": g-1`, if any, and `<=` the current
+generation being computed).
+
+| Step      | Completion check (idempotent-skip condition)                                  |
+|-----------|--------------------------------------------------------------------------------|
+| 6.5.1     | `$SESSION_ROOT/meta-analyses/gen-<g>.md` exists                                |
+| 6.5.2     | journal has `{"event": "outer_loop", "generation": g, ...}`                    |
+| 6.5.3     | journal has `{"event": "strategy_update", "generation": g, ...}`               |
+| 6.5.4     | `session.yaml.program.history` entry with `version >= new_version` OR          |
+|           | journal has `{"event": "program_skip", "generation": g, ...}` (user declined)  |
+| 6.5.4a    | journal has 1+ `{"event": "notable_marked", "generation": g, ...}` (or 0 kept) |
+| 6.5.5     | journal has `{"event": "strategy_judgment", "generation": g, ...}`             |
+| 6.5.6     | journal has `{"event": "strategy_stagnation", ...}` OR 3 gen no improve check  |
+
+This removes the need for a separate `current_phase` field. resume.md Step 5 simply
+routes paused sessions to outer-loop.md; this protocol self-heals by event replay.
+
+**Step 6.5.4 program_skip event** (when user declines update in Step 6.5.4.1):
+Append `{"event": "program_skip", "generation": g, "timestamp": "..."}` to mark the
+phase complete without writing program.md — so resume does not re-prompt.
+
 The 3-tier self-evolution hierarchy:
 1. **Tier 1** — `strategy.yaml` parameter tuning (low freedom, quantitative adjustment)
 2. **Tier 2** — `program.md` strategy text revision (medium freedom, natural language)
 3. **Tier 3** — `prepare.py` scenario expansion (high freedom, raises quality ceiling)
 
-Reset `inner_count` to 0. **Persist**: update `session.yaml.outer_loop.inner_count` to 0. Increment `session.yaml.outer_loop.generation`.
+**Guarded generation increment** (R-1 resume safety):
+1. Compute `target_gen = session.yaml.outer_loop.generation + 1`.
+2. Check `journal.jsonl` for any event `{"event": "outer_loop", "generation": <target_gen>}`.
+   - If found → generation was already incremented in a crashed prior run. Set
+     `current_gen = target_gen` and skip the increment/reset.
+   - If NOT found → set `session.yaml.outer_loop.generation = target_gen`,
+     `session.yaml.outer_loop.inner_count = 0` (persist).
+
+All subsequent references to "current generation" in this protocol mean `current_gen`.
 
 ## Step 6.5.1 — Meta Analysis
 
@@ -158,7 +192,19 @@ Based on meta analysis, propose program.md revision:
 
 > **W-2 guard**: If `q_history` has fewer than 2 entries, there is no prior generation to compare against. Auto-keep the current strategy and archive it as baseline. Skip comparison logic below.
 
-Compare Q(v_g) with Q(v_g-1). **Both generations must belong to the same `evaluation_epoch`**; if epoch changed between them, skip comparison (no valid reference point).
+Compare Q(v_g) with Q(v_g-1). **Both generations must belong to the same `evaluation_epoch`**.
+
+**Epoch transition handling (H-2 fix)**: If the previous generation belongs to a
+different `evaluation_epoch` (e.g., Tier 3 auto-expansion just advanced the epoch),
+treat the current generation as the new epoch's baseline:
+- **Auto-keep** the current strategy
+- **Strategy Archive Save** with `parent: null` and `epoch: <new>` (baseline for
+  comparisons in this epoch)
+- Log: `{"event": "strategy_judgment", "result": "epoch_baseline", "epoch": <new>,
+  "Q": <value>, "timestamp": "..."}`
+- Skip the Q comparison cases below.
+
+**Same-epoch comparison**:
 
 - **Q(v_g) > Q(v_g-1)**: **keep** — strategy changes were beneficial.
   **Strategy Archive**: Read `protocols/archive.md`, execute **Strategy Archive Save** section with result=kept.

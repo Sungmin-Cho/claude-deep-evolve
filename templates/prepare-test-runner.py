@@ -12,6 +12,19 @@ Usage: python3 prepare.py [--verbose]
 import subprocess, sys, re, os, json
 from pathlib import Path
 
+
+def _resolve_project_root():
+    """Walk up from this file until we find .deep-evolve/, return its parent.
+    Works for both v2.2.0 namespace layout (.deep-evolve/<sid>/prepare.py)
+    and legacy flat layout (.deep-evolve/prepare.py)."""
+    p = Path(__file__).resolve()
+    for ancestor in p.parents:
+        if ancestor.name == ".deep-evolve":
+            return ancestor.parent
+    sys.stderr.write(f"[prepare] WARN: .deep-evolve/ not found in path hierarchy of {p}\n")
+    return p.parent
+
+
 # Scoring Contract: score는 항상 higher-is-better.
 # test-runner/scenario 템플릿은 본질적으로 pass rate 기반이므로 방향 반전 불필요.
 
@@ -30,42 +43,64 @@ WEIGHTS = {
 
 # ── Evaluation Engine ───────────────────────────────────────
 
-PROJECT_ROOT = str(Path(__file__).parent.parent)
+PROJECT_ROOT = str(_resolve_project_root())
 
 
 def run_tests():
-    """Run test suite and return (passed, total, raw_output)."""
+    """Run test suite and return (passed, total, raw_output).
+
+    Supports: jest, pytest, vitest, cargo test, go test.
+    Returns (0, 0, stdout) when output is unparseable — signals "no tests detected"
+    rather than inflating pass_rate with false-positive patterns.
+    pytest 'skipped' count is NOT included in total (industry convention: skipped
+    tests are neither passed nor failed).
+    """
     try:
         result = subprocess.run(
             TEST_COMMAND, shell=True, capture_output=True, text=True,
             timeout=TIMEOUT, cwd=PROJECT_ROOT,
         )
         stdout = result.stdout + result.stderr
-        # Parse common test output formats
-        # Jest: Tests: X passed, Y total
-        jest = re.search(r'Tests:\s+(\d+)\s+passed,\s+(\d+)\s+total', stdout)
-        if jest:
-            return int(jest.group(1)), int(jest.group(2)), stdout
-        # Pytest: X passed, Y failed (or X passed)
-        pytest_pass = re.search(r'(\d+)\s+passed', stdout)
-        pytest_fail = re.search(r'(\d+)\s+failed', stdout)
-        if pytest_pass:
-            passed = int(pytest_pass.group(1))
-            failed = int(pytest_fail.group(1)) if pytest_fail else 0
-            return passed, passed + failed, stdout
-        # Generic: count lines with PASS/FAIL
-        pass_count = len(re.findall(r'(?:PASS|ok|\.)', stdout))
-        fail_count = len(re.findall(r'(?:FAIL|ERROR|F)', stdout))
-        total = pass_count + fail_count
-        return pass_count, max(total, 1), stdout
+        # Jest: "Tests: X passed, Y total"
+        m = re.search(r'Tests:\s+(\d+)\s+passed,\s+(\d+)\s+total', stdout)
+        if m:
+            return int(m.group(1)), int(m.group(2)), stdout
+        # Vitest: "Tests  X passed (Y)"
+        vitest = re.search(r'Tests\s+(\d+)\s+passed\s*\((\d+)\)', stdout)
+        if vitest:
+            return int(vitest.group(1)), int(vitest.group(2)), stdout
+        # Vitest alt: "Tests  X passed | Y failed"
+        vitest_alt = re.search(r'Tests\s+(\d+)\s+passed\s*\|\s*(\d+)\s+failed', stdout)
+        if vitest_alt:
+            p, f = int(vitest_alt.group(1)), int(vitest_alt.group(2))
+            return p, p + f, stdout
+        # Cargo test: "test result: ok. X passed; Y failed;"
+        cargo = re.search(r'test result:\s+\w+\.\s+(\d+)\s+passed;\s+(\d+)\s+failed', stdout)
+        if cargo:
+            p, f = int(cargo.group(1)), int(cargo.group(2))
+            return p, p + f, stdout
+        # Go test: count "--- PASS:" and "--- FAIL:" lines
+        go_pass = len(re.findall(r'^--- PASS:', stdout, re.MULTILINE))
+        go_fail = len(re.findall(r'^--- FAIL:', stdout, re.MULTILINE))
+        if go_pass or go_fail:
+            return go_pass, go_pass + go_fail, stdout
+        # Pytest: sum "N passed", "N failed", "N error(s)"; skipped excluded from total
+        passed = sum(int(n) for n in re.findall(r'(\d+)\s+passed', stdout, re.IGNORECASE))
+        failed = sum(int(n) for n in re.findall(r'(\d+)\s+failed', stdout, re.IGNORECASE))
+        errors = sum(int(n) for n in re.findall(r'(\d+)\s+error(?:s)?\b', stdout, re.IGNORECASE))
+        if passed or failed or errors:
+            return passed, passed + failed + errors, stdout
+        # Unparseable — signal "no tests detected"
+        return 0, 0, stdout
     except subprocess.TimeoutExpired:
-        return 0, 1, "TIMEOUT"
+        return 0, 0, "TIMEOUT"
     except Exception as e:
-        return 0, 1, str(e)
+        return 0, 0, str(e)
 
 
 def run_coverage():
-    """Run coverage command and extract percentage."""
+    """Run coverage command and extract percentage.
+    Prefers TOTAL/Total/All files summary; falls back to last % value."""
     if not COVERAGE_COMMAND or COVERAGE_COMMAND == "null":
         return None
     try:
@@ -74,26 +109,46 @@ def run_coverage():
             timeout=TIMEOUT, cwd=PROJECT_ROOT,
         )
         stdout = result.stdout + result.stderr
-        pct = re.search(r'(\d+(?:\.\d+)?)\s*%', stdout)
-        if pct:
-            return float(pct.group(1)) / 100.0
+        total_line = re.search(r'(?:TOTAL|Total|All files).*?(\d+(?:\.\d+)?)\s*%', stdout)
+        if total_line:
+            return float(total_line.group(1)) / 100.0
+        matches = re.findall(r'(\d+(?:\.\d+)?)\s*%', stdout)
+        if matches:
+            return float(matches[-1]) / 100.0
         return None
     except Exception:
         return None
 
 
 def run_lint():
-    """Run lint and return (errors, warnings)."""
+    """Run lint and return (errors, warnings).
+
+    Counts numeric summary lines ('N errors', 'N warnings') when present.
+    Falls back to diagnostic-line counting (eslint/clippy/rustc style:
+    lines starting with 'error:' or 'warning:') when no summary line exists.
+    Uses max() on summary counts — summary lines typically contain the total.
+    Tradeoff: eslint --format compact without a summary may under-count;
+    diagnostic fallback catches those.
+    """
     if not LINT_COMMAND or LINT_COMMAND == "null":
         return None, None
     try:
         result = subprocess.run(
             LINT_COMMAND, shell=True, capture_output=True, text=True,
-            timeout=60, cwd=PROJECT_ROOT,
+            timeout=TIMEOUT, cwd=PROJECT_ROOT,
         )
-        error_count = len(re.findall(r'error', result.stdout, re.IGNORECASE))
-        warning_count = len(re.findall(r'warning', result.stdout, re.IGNORECASE))
-        return error_count, warning_count
+        stdout = result.stdout + result.stderr
+        error_counts = [int(n) for n in re.findall(r'(\d+)\s+error(?:s)?\b', stdout, re.IGNORECASE)]
+        warning_counts = [int(n) for n in re.findall(r'(\d+)\s+warning(?:s)?\b', stdout, re.IGNORECASE)]
+        if error_counts or warning_counts:
+            return (max(error_counts) if error_counts else 0,
+                    max(warning_counts) if warning_counts else 0)
+        # Fallback: count diagnostic lines (clippy/rustc/eslint-stylish without summary)
+        err_diag = len(re.findall(r'^error(?:\[[^\]]*\])?[:\-\s]',
+                                  stdout, re.IGNORECASE | re.MULTILINE))
+        warn_diag = len(re.findall(r'^warning(?:\[[^\]]*\])?[:\-\s]',
+                                   stdout, re.IGNORECASE | re.MULTILINE))
+        return err_diag, warn_diag
     except Exception:
         return None, None
 
@@ -117,16 +172,19 @@ def main():
     if verbose and lint_errors is not None:
         print(f"Lint: {lint_errors} errors, {lint_warnings} warnings")
 
-    # Compute weighted score
+    # Compute weighted score using only the weights whose metric is available
     w = WEIGHTS
-    total_weight = sum(v for v in w.values() if v > 0)
+    active = {"test_pass_rate": (test_rate, w.get("test_pass_rate", 0))}
+    if coverage is not None:
+        active["coverage"] = (coverage, w.get("coverage", 0))
+    if lint_errors is not None:
+        active["lint"] = (lint_score, w.get("lint", 0))
+    total_weight = sum(weight for _, weight in active.values() if weight > 0)
     score = 0.0
     if total_weight > 0:
-        score += (w["test_pass_rate"] / total_weight) * test_rate
-        if coverage is not None:
-            score += (w["coverage"] / total_weight) * coverage
-        if lint_errors is not None:
-            score += (w["lint"] / total_weight) * lint_score
+        for value, weight in active.values():
+            if weight > 0:
+                score += (weight / total_weight) * value
 
     print("\n---")
     print(f"score:              {score:.6f}")

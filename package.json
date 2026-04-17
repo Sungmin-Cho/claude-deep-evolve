@@ -1,6 +1,6 @@
 {
   "name": "@deep-evolve/deep-evolve",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "Autonomous Experimentation Plugin for Claude Code — goal-driven experiment loops with autoresearch methodology",
   "author": "sungmin",
   "license": "MIT",

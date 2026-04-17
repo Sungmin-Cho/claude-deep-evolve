@@ -1,5 +1,35 @@
 # Changelog
 
+## v2.2.2
+
+### Critical Fixes
+- **prepare.py cwd regression (C-2)**: v2.2.0 namespace layout made `Path(__file__).parent.parent` resolve to `.deep-evolve/` instead of the project root. All three CLI templates now walk up until they find `.deep-evolve/`'s parent, working for both v2.2.0 namespace and legacy flat layouts.
+- **paused session state + journal-event idempotent resume (C-1, R-1)**: Outer Loop entry/exit toggles `mark_session_status paused|active`. Outer Loop itself is now idempotent: each sub-step checks its completion event in `journal.jsonl` and skips if already done. No separate `current_phase` field — reuses existing events (`outer_loop`, `strategy_update`, `strategy_judgment`, `notable_marked`, `program_skip`).
+- **migrate_legacy unbound variable (C-3)**: `files_to_copy` and `dirs_to_copy` declared outside the `skip_copy` guard; `set -u` no longer aborts idempotent re-runs.
+- **DEEP_EVOLVE_HELPER bypass (C-4, R-6)**: Scoped to file-based tools only, AND empty `TOOL_NAME` is treated as Bash-like (safe default: full inspection).
+- **prepare-test-runner.py lint TIMEOUT (C-5)**: `run_lint` honors configured `TIMEOUT` instead of hardcoded 60s.
+- **resume commit-hash comparison (C-6, R-2, R-4)**: Journal records full 40-char SHA going forward. Legacy short-hash entries are resolved via `git rev-parse` before comparison. `git merge-base --is-ancestor` semantics corrected — ancestor=true now means "rollback possible via `reset HEAD~1^`" (prompts user), ancestor=false means "already removed from HEAD ancestry" (idempotent skip).
+- **baseline writeback for minimize metrics (C-7, R-7, new)**: init.md Step 11 now persists the measured raw baseline into `BASELINE_SCORE`, re-measures (producing score=1.0), and records that 1.0 in `session.yaml.metric.baseline`. Requires session.yaml.status="initializing" during init and transition to "active" at Step 11 end.
+
+### High-Priority Fixes
+- **session_id TOCTOU (H-1)**: Collision check inside the project lock; suffix retry handles concurrent init races.
+- **epoch transition archive (H-2)**: Generation immediately after a Tier 3 auto-expansion is auto-kept as the new epoch's baseline.
+- **pending meta-archive source updates (H-3)**: `.pending-archive.jsonl` carries tagged `new_entry`/`update_source` records so flock-timeout sessions don't lose `transfer_success_rate` updates.
+- **multi-framework test parsing (H-4, R-8)**: Added explicit jest, vitest, cargo test, go test, and pytest detection. Unparseable output now reports 0/0 instead of inflating pass_rate via the old `(PASS|ok|\.)` fallback.
+- **lint summary + diagnostic fallback (H-5, R-10)**: Counts errors/warnings from `"N errors"` summary lines; when no summary exists, falls back to counting diagnostic lines (`error:`, `warning:`) — catches clippy/rustc-style linters that omit totals.
+- **coverage TOTAL anchor (H-6)**: Prefers `TOTAL`/`Total`/`All files` line; falls back to the last `%` in output.
+- **pytest skipped exclusion (R-9)**: `passed+failed+errors` for total (skipped neither passed nor failed, per pytest convention).
+
+### Medium/Low Fixes
+- **init.md lineage canonical (M-1, R-12)**: `lineage_set` event is the sole canonical path. `--parent=<id>` flag still accepted for backwards compat but not invoked from init.md.
+- **`current_branch:` 2-space anchor (M-2, R-11)**: `cmd_check_branch_alignment` matches only the top-level lineage.current_branch (2-space indent) via awk; nested `forked_from.current_branch` is ignored.
+- **receipt type annotations (M-3)**: Every field in `evolve-receipt.json` has an explicit number/string/boolean type comment to prevent `cmd_append_meta_archive_local` arithmetic breakage.
+- **dirty-tree targeted whitelist (L-1, R-3)**: Replaces the prior dead-code filter with `awk '$1 != "??" || $2 !~ /^\.deep-evolve\//'` — detects real untracked files while exempting session state.
+
+### Template Weighting
+- `prepare-test-runner.py` score composition normalizes over active weights only; test-only projects reach score=1.0 when coverage/lint are disabled.
+- `prepare-stdout-parse.py` minimize inversion has an explicit `score <= 0` guard.
+
 ## v2.2.1
 
 ### Improvements

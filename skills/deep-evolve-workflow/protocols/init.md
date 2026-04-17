@@ -148,10 +148,16 @@ If `.deep-evolve/session.yaml` exists at root and `.deep-evolve/current.json` do
 
 2. Create session via helper:
 ```bash
-session-helper.sh start_new_session "<goal>" [--parent=<parent_id>]
+session-helper.sh start_new_session "<goal>"
 ```
-This creates `.deep-evolve/<session-id>/` with subdirs: `runs/`, `code-archive/`, `strategy-archive/`, `meta-analyses/`.
-Sets `$SESSION_ROOT` to the created directory. Writes `current.json` and `sessions.jsonl`.
+This creates `.deep-evolve/<session-id>/` with subdirs: `runs/`, `code-archive/`,
+`strategy-archive/`, `meta-analyses/`. Sets `$SESSION_ID` and `$SESSION_ROOT`. Writes
+`current.json` and `sessions.jsonl`.
+
+> **v2.2.2 note (M-1, R-12)**: The legacy `--parent=<parent_id>` argument is still
+> accepted by the helper for backwards compatibility but is no longer invoked directly
+> from this protocol. Lineage is recorded via `lineage_set` event in Step 3.5 below
+> (canonical flow).
 
 3. Add `.deep-evolve/` to `.gitignore` (if not already present):
 ```bash
@@ -160,32 +166,24 @@ git add .gitignore
 git commit -m "chore: add .deep-evolve/ to gitignore"
 ```
 
-3.5. **Lineage Decision** (v2.2.0):
-
-**AH3 주의**: Lineage는 Step 2 (start_new_session) 이후에 결정되지만, `--parent=<id>` 인자는 Step 2에서 전달된다. 따라서 실제 흐름은:
-1. Step 3.5에서 lineage 결정 (AskUserQuestion)
-2. 결정이 "continue"이면 parent_id 확보
-3. Step 2에서 `start_new_session "<goal>" --parent=<parent_id>` 호출 (Step 2가 3.5 뒤에 실행됨)
-
-**대안 (순서 문제 해소)**: Step 2를 먼저 실행(parent 없이)하고, Step 3.5에서 parent 결정 후 sessions.jsonl에 lineage 이벤트를 추가 append:
-```bash
-# parent 결정 후
-session-helper.sh append_sessions_jsonl "lineage_set" "<session_id>" --parent_session_id="<parent_id>"
-```
-그리고 `cmd_list_sessions`의 jq reduce에서 `lineage_set` 이벤트를 처리하도록 추가.
+3.5. **Lineage Decision** (canonical via `lineage_set` event — M-1 fix):
 
 Run `session-helper.sh list_sessions --status=completed`.
 If at least one completed session exists:
   AskUserQuestion: "이 프로젝트에는 완료된 세션 N개가 있습니다. 어떻게 시작할까요?"
-    - "fresh: 빈 상태로 시작" → parent_session = null
+    - "fresh: 빈 상태로 시작" → parent_session = null, no lineage event
     - "continue from <last-completed>" → parent_session.id = last
     - "continue from ...: 특정 세션 선택" → list + pick
     - "transfer from other project" → 기존 transfer.md 경로
-  If continue selected:
-    - `session-helper.sh append_sessions_jsonl "lineage_set" "<session_id>" --parent_session_id="<parent_id>"`
-    - Copy parent's final strategy.yaml to $SESSION_ROOT/strategy.yaml
-    - Record parent_session in session.yaml (Step 4에서)
-    - Read parent receipt for Step 6 Inherited Context generation
+
+  If `continue` is selected, let `PARENT_ID` be the chosen parent's session_id.
+  Execute (in order):
+  1. `session-helper.sh append_sessions_jsonl lineage_set "$SESSION_ID" --parent_session_id="$PARENT_ID"`
+     (`cmd_list_sessions` reduces `lineage_set` events into `parent_session_id` for queries)
+  2. Copy parent's final `$EVOLVE_DIR/$PARENT_ID/strategy.yaml` → `$SESSION_ROOT/strategy.yaml`
+  3. Populate `parent_session:` block in session.yaml (Step 4) with parent's receipt schema
+     version and seed source
+  4. Read parent's receipt for Step 6 Inherited Context generation
 
 4. Generate `session.yaml` with all collected configuration.
    Must include `eval_mode` field (`cli` or `protocol`).
@@ -193,7 +191,9 @@ If at least one completed session exists:
    Include `program` version tracking, `outer_loop` state, and `evaluation_epoch`:
    ```yaml
    session_id: "<computed>"
-   deep_evolve_version: "2.2.1"
+   deep_evolve_version: "2.2.2"
+   status: initializing                 # C-7: transitions to 'active' at end of Step 11
+   created_at: "<ISO 8601 now>"
    parent_session:    # null for root sessions; populated if continue selected
      id: "<parent_id or null>"
      parent_receipt_schema_version: <N>
@@ -332,20 +332,58 @@ If at least one completed session exists:
     ```
     Wait for confirmation.
 
-11. Run baseline measurement:
+11. **Baseline measurement + writeback + status transition** (C-7):
+
+    Scoring contract requires `session.yaml.metric.baseline == 1.0` for minimize
+    metrics (raw → inverted → 1.0). This step establishes that contract. The session
+    is still `status: initializing`, so `protect-readonly.sh` does NOT yet enforce
+    prepare.py protection — we can writeback `BASELINE_SCORE` during this step.
+
+    **11.a — First measurement (raw)**:
 
     **If eval_mode is `cli`:**
     ```bash
-    python3 $SESSION_ROOT/prepare.py > $SESSION_ROOT/runs/run-000.log 2>&1
+    python3 $SESSION_ROOT/prepare.py > $SESSION_ROOT/runs/run-000-raw.log 2>&1
     ```
 
     **If eval_mode is `protocol`:**
     Execute the evaluation protocol defined in `$SESSION_ROOT/prepare-protocol.md`:
     - Follow each step exactly using the specified tools
-    - Record all tool call results to `$SESSION_ROOT/runs/run-000.log`
+    - Record all tool call results to `$SESSION_ROOT/runs/run-000-raw.log`
     - Compute score using the protocol's formula
-    - Output in standard format: `score: X.XXXXXX`
 
-    Parse baseline score and record in session.yaml and results.tsv.
+    Parse `raw_score` from the `score: X.XXXXXX` line.
+
+    **11.b — BASELINE_SCORE writeback** (cli mode, stdout-parse template, minimize
+    direction only):
+
+    For `stdout-parse` template with `METRIC_DIRECTION == "minimize"`, writeback the
+    raw measurement so the second run produces 1.0:
+
+    - Read `$SESSION_ROOT/prepare.py`
+    - Replace the line `BASELINE_SCORE = None` with `BASELINE_SCORE = <raw_score>`
+      (Write tool — hook allows writes because session.yaml.status is `initializing`)
+    - Re-run: `python3 $SESSION_ROOT/prepare.py > $SESSION_ROOT/runs/run-000.log 2>&1`
+    - Parse `score:` from the new log — it MUST be `1.000000` (± float epsilon).
+    - If it is not ~1.0, abort with: "baseline writeback 검증 실패: expected ~1.0, got <score>"
+
+    For `test-runner` / `scenario` templates (pass-rate based) and `maximize` metrics:
+    - No writeback needed; `raw_score` is already the normalized baseline.
+    - Copy `run-000-raw.log` → `run-000.log` for consistency.
+
+    **11.c — Record baseline**:
+
+    - `session.yaml.metric.baseline = 1.0` (for minimize after writeback) or `raw_score`
+      (for maximize / pass-rate templates)
+    - `session.yaml.metric.current = session.yaml.metric.baseline`
+    - `session.yaml.metric.best = session.yaml.metric.baseline`
+    - Append to `results.tsv`: `baseline\t<baseline_value>\tbaseline\tinitial measurement`
+
+    **11.d — Status transition**:
+
+    `session-helper.sh mark_session_status "$SESSION_ID" active`
+
+    From this point forward, `protect-readonly.sh` enforces prepare.py/program.md/
+    strategy.yaml protection. The inner loop can proceed.
 
 → Proceed to Inner Loop: Read `protocols/inner-loop.md`

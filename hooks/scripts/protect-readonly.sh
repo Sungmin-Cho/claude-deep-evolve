@@ -79,17 +79,19 @@ fi
 # Read tool input from stdin
 TOOL_INPUT="$(cat)"
 
-# DEEP_EVOLVE_HELPER=1 bypass — scoped to registry files only
-if [[ "${DEEP_EVOLVE_HELPER:-}" == "1" ]]; then
+# DEEP_EVOLVE_HELPER=1 bypass — registry files only, AND only when TOOL_NAME is
+# a known non-Bash tool. Empty TOOL_NAME (env var missing) is treated as Bash-like:
+# the safe default is to deny the bypass and run full command-pattern inspection.
+# (C-4, R-6)
+if [[ "${DEEP_EVOLVE_HELPER:-}" == "1" && -n "$TOOL_NAME" && "$TOOL_NAME" != "Bash" ]]; then
   FILE_PATH=""
   if echo "$TOOL_INPUT" | grep -q '"file_path"'; then
     FILE_PATH="$(echo "$TOOL_INPUT" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
   fi
   case "$FILE_PATH" in
     */current.json|*/sessions.jsonl|*/session.yaml) exit 0 ;;
-    "") exit 0 ;;  # Bash tool — let normal detection handle
   esac
-  # Fall through to normal protection for non-registry files
+  # Non-registry file: fall through to normal protection
 fi
 
 # Protected paths (absolute)

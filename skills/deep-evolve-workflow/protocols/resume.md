@@ -1,4 +1,4 @@
-# Resume Protocol (v2.2.0)
+# Resume Protocol (v2.2.2)
 
 Resumes an interrupted deep-evolve session. Restores context from persisted state
 and re-enters the experiment loop.
@@ -6,9 +6,13 @@ and re-enters the experiment loop.
 ## Step 1 — Load current session
 
 Run `session-helper.sh resolve_current` → `session_id`, `$SESSION_ROOT`.
-Read `$SESSION_ROOT/session.yaml`. If status is terminal (completed/aborted):
-  "재개할 세션이 없습니다. `/deep-evolve`로 새 세션을 시작하세요."
-  Stop here.
+Read `$SESSION_ROOT/session.yaml`. Branch by `status`:
+- **terminal** (`completed` / `aborted`):
+  "재개할 세션이 없습니다. `/deep-evolve`로 새 세션을 시작하세요." Stop here.
+- **initializing** (v2.2.2): baseline writeback 전 중단 → dispatch back to
+  `protocols/init.md` Step 11 (dispatcher에서 이미 처리됨; resume.md는 이 상태를
+  직접 다루지 않는다).
+- **active** / **paused**: continue to Step 2.
 
 ## Step 2 — Load session state
 
@@ -109,8 +113,12 @@ Q(v) 추이: <q_history values>
 
 ## Step 5 — Re-enter experiment loop
 
-If `session.yaml.status` == `paused`:
-  → Read `protocols/outer-loop.md` from Step 6.5 (outer loop was in progress)
+If `session.yaml.status == paused`:
+  → A crash occurred during an Outer Loop run (see `inner-loop.md` Step 6.5, which wraps
+    Outer Loop in `mark_session_status paused/active`). Read `protocols/outer-loop.md`
+    and execute from the beginning. Outer Loop's **Resume safety** section inspects
+    `journal.jsonl` for each sub-step's completion event and skips already-completed
+    phases, so restart is idempotent — no additional work required here.
 
-If `session.yaml.status` == `active`:
-  → Read `protocols/inner-loop.md`, enter Section C with restored `inner_count`
+If `session.yaml.status == active`:
+  → Read `protocols/inner-loop.md`, enter Section C with restored `inner_count`.

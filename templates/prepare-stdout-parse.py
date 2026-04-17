@@ -12,6 +12,19 @@ Usage: python3 prepare.py [--verbose]
 import subprocess, sys, re, os, time
 from pathlib import Path
 
+
+def _resolve_project_root():
+    """Walk up from this file until we find .deep-evolve/, return its parent.
+    Works for both v2.2.0 namespace layout (.deep-evolve/<sid>/prepare.py)
+    and legacy flat layout (.deep-evolve/prepare.py)."""
+    p = Path(__file__).resolve()
+    for ancestor in p.parents:
+        if ancestor.name == ".deep-evolve":
+            return ancestor.parent
+    sys.stderr.write(f"[prepare] WARN: .deep-evolve/ not found in path hierarchy of {p}\n")
+    return p.parent
+
+
 # ── Configuration (filled by deep-evolve init) ──────────────
 
 RAW_COMMAND = "{{RAW_COMMAND}}"
@@ -36,7 +49,7 @@ def run_command():
             capture_output=True,
             text=True,
             timeout=TIMEOUT,
-            cwd=str(Path(__file__).parent.parent),  # project root
+            cwd=str(_resolve_project_root()),  # project root (handles v2.2.0 namespace + legacy flat)
         )
         return result.stdout, result.stderr, result.returncode
     except subprocess.TimeoutExpired:
@@ -86,12 +99,17 @@ def main():
     score = compute_score(values)
 
     if METRIC_DIRECTION == "minimize":
-        # Invert so higher score = better (scoring contract: always higher-is-better)
-        # baseline → 1.0, improvement → >1.0, regression → <1.0 (no clamp)
-        if BASELINE_SCORE is not None and BASELINE_SCORE > 0 and score > 0:
+        # Scoring contract: higher-is-better.
+        # With baseline_raw recorded, minimize metric is inverted so baseline=1.0,
+        # improvement>1.0, regression<1.0 (no clamp).
+        if score <= 0:
+            # 0 or negative raw: ceiling (infinitely better than baseline).
+            # Guards against division-by-zero; 2.0 is arbitrary but bounded downstream.
+            score = 2.0 if BASELINE_SCORE is not None else 1.0
+        elif BASELINE_SCORE is not None and BASELINE_SCORE > 0:
             score = BASELINE_SCORE / score
-        elif score == 0:
-            score = 1.0
+        # else: BASELINE_SCORE unset → first-run raw value returned; init.md Step 11
+        # writeback (Task 16) will fill BASELINE_SCORE and re-measure to establish 1.0.
 
     # Standardized output
     print("\n---")
