@@ -192,7 +192,19 @@ Based on meta analysis, propose program.md revision:
 
 > **W-2 guard**: If `q_history` has fewer than 2 entries, there is no prior generation to compare against. Auto-keep the current strategy and archive it as baseline. Skip comparison logic below.
 
-Compare Q(v_g) with Q(v_g-1). **Both generations must belong to the same `evaluation_epoch`**; if epoch changed between them, skip comparison (no valid reference point).
+Compare Q(v_g) with Q(v_g-1). **Both generations must belong to the same `evaluation_epoch`**.
+
+**Epoch transition handling (H-2 fix)**: If the previous generation belongs to a
+different `evaluation_epoch` (e.g., Tier 3 auto-expansion just advanced the epoch),
+treat the current generation as the new epoch's baseline:
+- **Auto-keep** the current strategy
+- **Strategy Archive Save** with `parent: null` and `epoch: <new>` (baseline for
+  comparisons in this epoch)
+- Log: `{"event": "strategy_judgment", "result": "epoch_baseline", "epoch": <new>,
+  "Q": <value>, "timestamp": "..."}`
+- Skip the Q comparison cases below.
+
+**Same-epoch comparison**:
 
 - **Q(v_g) > Q(v_g-1)**: **keep** — strategy changes were beneficial.
   **Strategy Archive**: Read `protocols/archive.md`, execute **Strategy Archive Save** section with result=kept.
