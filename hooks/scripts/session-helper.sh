@@ -221,10 +221,21 @@ cmd_start_new_session() {
 
   acquire_project_lock || exit 1
 
-  # P3: 직접 함수 호출 (재귀 $0 제거 → lock 해제 방지)
-  local session_id
+  # H-1 fix: compute session_id inside the lock + retry on collision with suffix.
+  local session_id base_id suffix=2
   session_id=$(cmd_compute_session_id "$goal")
+  base_id="$session_id"
   local session_root="$EVOLVE_DIR/$session_id"
+  while [ -e "$session_root" ]; do
+    session_id="${base_id}-${suffix}"
+    session_root="$EVOLVE_DIR/$session_id"
+    suffix=$((suffix + 1))
+    if [ "$suffix" -gt 1000 ]; then
+      release_project_lock
+      echo "session-helper: session_id collision retry exhausted" >&2
+      exit 1
+    fi
+  done
 
   if dry_run_guard "create session $session_id at $session_root"; then
     release_project_lock
@@ -422,7 +433,19 @@ cmd_migrate_legacy() {
 cmd_check_branch_alignment() {
   local session_dir="$1"
   local expected
-  expected=$(grep 'current_branch:' "$session_dir/session.yaml" 2>/dev/null | head -1 | sed 's/.*current_branch:[[:space:]]*//' | tr -d '"')
+  # R-11/M-2 fix: match exactly 2-space-indented current_branch under lineage: (session.yaml
+  # schema fixes indent to 2 spaces at top-level block entries). Nested keys like
+  # forked_from.current_branch are at 4+ spaces and will NOT match.
+  expected=$(awk '
+    /^lineage:/ { in_lineage=1; next }
+    /^[^[:space:]]/ { in_lineage=0 }
+    in_lineage && /^  current_branch:/ {
+      sub(/^  current_branch:[[:space:]]*/, "")
+      gsub(/"/, "")
+      print
+      exit
+    }
+  ' "$session_dir/session.yaml" 2>/dev/null)
   local actual
   actual=$(git branch --show-current 2>/dev/null)
 
