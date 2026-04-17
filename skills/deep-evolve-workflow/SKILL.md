@@ -1,6 +1,6 @@
 ---
 name: deep-evolve-workflow
-version: "2.2.1"
+version: "2.2.2"
 description: |
   Autonomous experimentation protocol with goal-driven experiment loops,
   session history, resume, and lineage tracking.
