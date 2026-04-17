@@ -1,5 +1,35 @@
 # 변경 이력
 
+## v2.2.2
+
+### Critical Fixes
+- **prepare.py cwd 회귀 (C-2)**: v2.2.0 namespace 레이아웃에서 `Path(__file__).parent.parent`가 `.deep-evolve/`를 가리키던 버그 수정. 세 템플릿 모두 `.deep-evolve/` 부모로 역탐색. namespace/flat 레이아웃 모두 지원.
+- **paused 세션 상태 + journal-event 기반 idempotent resume (C-1, R-1)**: Outer Loop 진입/복귀 시 `mark_session_status paused|active`. Outer Loop 자체도 각 sub-step의 완료 이벤트(`outer_loop`, `strategy_update`, `strategy_judgment`, `notable_marked`, `program_skip`)를 journal에서 확인해 idempotent하게 스킵. 별도 `current_phase` 필드 없이 기존 이벤트 재사용.
+- **migrate_legacy unbound 변수 (C-3)**: `files_to_copy`, `dirs_to_copy`를 `skip_copy` 가드 바깥으로 선언. `set -u` 하 idempotent 재실행 abort 제거.
+- **DEEP_EVOLVE_HELPER 우회 + TOOL_NAME 가드 (C-4, R-6)**: 파일 기반 도구 + 명시적 non-Bash TOOL_NAME일 때만 허용. 빈 TOOL_NAME은 Bash-like 취급(안전한 기본값: 전체 검사).
+- **prepare-test-runner.py lint TIMEOUT (C-5)**: `run_lint`가 설정된 `TIMEOUT`을 존중.
+- **resume 커밋 해시 비교 (C-6, R-2, R-4)**: journal에 full 40-char SHA 기록. 기존 short-hash 엔트리는 `git rev-parse`로 resolve 후 비교. `--is-ancestor` semantics 정정 — ancestor=true면 "reset HEAD~1^로 롤백 가능"(사용자 프롬프트), ancestor=false면 "이미 제거됨"(idempotent skip).
+- **minimize baseline writeback (C-7, R-7, 신규)**: init.md Step 11이 측정된 raw baseline을 `BASELINE_SCORE`로 writeback, 재측정(score=1.0 확인) 후 그 1.0을 `session.yaml.metric.baseline`으로 기록. init 중 session.yaml.status="initializing", Step 11 완료 시 "active" 전환.
+
+### High-Priority Fixes
+- **session_id TOCTOU (H-1)**: collision 체크를 프로젝트 락 내부로 이동. suffix 재시도로 동시 init 경쟁 해결.
+- **epoch 전환 시 archive save (H-2)**: Tier 3 자동 확장 직후 generation을 새 epoch 기준선으로 자동 keep.
+- **pending 메타 아카이브 source 업데이트 (H-3)**: `.pending-archive.jsonl`에 `new_entry`/`update_source` 태그 레코드. flock timeout 시 `transfer_success_rate` 업데이트 손실 방지.
+- **다중 프레임워크 테스트 파싱 (H-4, R-8)**: jest, vitest, cargo test, go test, pytest 명시적 지원. 파싱 불가 출력은 0/0 반환 (기존 false-positive `(PASS|ok|\.)` fallback 제거).
+- **lint 요약 + 진단 라인 fallback (H-5, R-10)**: `"N errors"` 요약 라인 카운트; 요약 없으면 `error:`/`warning:` 진단 라인 카운트로 fallback (clippy/rustc 스타일 지원).
+- **coverage TOTAL 앵커 (H-6)**: `TOTAL`/`Total`/`All files` 라인 우선, 마지막 `%` 값 폴백.
+- **pytest skipped 제외 (R-9)**: `passed+failed+errors`로 total 계산 (skipped는 pytest 관행상 pass/fail 어느 쪽도 아님).
+
+### Medium/Low Fixes
+- **init.md lineage canonical (M-1, R-12)**: `lineage_set` 이벤트가 유일한 canonical 경로. `--parent=<id>` 플래그는 helper가 하위 호환으로 파싱하지만 init.md에서는 호출하지 않음.
+- **`current_branch:` 2-space 앵커 (M-2, R-11)**: `cmd_check_branch_alignment`가 awk로 최상위 `lineage.current_branch`(2-space)만 매칭. 중첩 필드 무시.
+- **receipt 타입 주석 (M-3)**: `evolve-receipt.json`의 모든 필드에 number/string/boolean 타입 주석.
+- **dirty-tree targeted whitelist (L-1, R-3)**: 죽은 grep 필터를 `awk '$1 != "??" || $2 !~ /^\.deep-evolve\//'`로 교체. 실제 untracked 탐지 유지, 세션 상태만 예외.
+
+### 템플릿 가중치
+- `prepare-test-runner.py` score 합성이 활성 weight만 정규화. coverage/lint 비활성 프로젝트도 score=1.0 달성 가능.
+- `prepare-stdout-parse.py` minimize 반전에 명시적 `score <= 0` 가드.
+
 ## v2.2.1
 
 ### 개선
