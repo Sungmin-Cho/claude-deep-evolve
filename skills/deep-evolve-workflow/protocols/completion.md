@@ -48,6 +48,29 @@ Read `results.tsv` and `session.yaml` to compile:
 git diff deep-evolve/<tag>...main
 ```
 
+### v3.0.0 Signals (v3 sessions only)
+
+IF $VERSION starts with "3.":
+
+Append to report.md:
+
+```markdown
+## v3.0.0 Signals
+
+- **Idea entropy trajectory**: <comma-separated entropy_bits per generation from journal entropy_snapshot events>
+- **Shortcut flagged (total)**: <session.shortcut.total_flagged> (<pct>% of kept experiments)
+- **Hard-rejected (flagged_unexplained)**: <count from journal.jsonl `discarded` events where reason="flagged_unexplained">
+  (Count by: `grep -c '"reason":"flagged_unexplained"' $SESSION_ROOT/journal.jsonl` or `jq -c 'select(.status=="discarded" and .reason=="flagged_unexplained")' | wc -l`.
+  Note: v3 results.tsv has no `reason` column — the journal `discarded` event
+  is the authoritative source per §5.5.)
+- **Diagnose-retry**: used <session.diagnose_retry.session_retries_used>/<strategy.judgment.diagnose_retry.max_per_session>, recovered <N>, gave up <session.diagnose_retry.gave_up_count>
+- **Rationale missing**: <session.legibility.missing_rationale_count> / <total kept> (<pct>%)
+- **Section D forced (from 6.a.5)**: <count of shortcut_escalation events in journal>
+- **Tier 3 flagged-trigger fires**: <count of tier3_flagged_reset events in journal>
+```
+
+ELSE (v2): skip (existing report format unchanged).
+
 Display the report to the user.
 
 ## Evolve Receipt Generation
