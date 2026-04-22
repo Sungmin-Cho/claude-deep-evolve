@@ -211,7 +211,12 @@ git commit -m "experiment: <idea description>"
 - Compute score using the protocol's formula
 - IMPORTANT: Follow the protocol EXACTLY as written. Do not deviate, skip steps, or "improve" the evaluation. The protocol is the ground truth — same as prepare.py in cli mode.
 
-- Append to `journal.jsonl`: `{"id": <id>, "status": "evaluated", "score": <score>, "timestamp": "<now>"}`
+- **For v2 sessions only**: Append to `journal.jsonl`:
+  `{"id": <id>, "status": "evaluated", "score": <score>, "timestamp": "<now>"}`
+  
+  **For v3 sessions (`$VERSION` starts with "3.")**: do NOT append yet —
+  Step 4.5 below defers the `evaluated` event until `score_delta` and
+  `loc_delta` are computed. Mirror the Step 1 / Step 1.5 deferral pattern.
 
 **Step 4.5 — Delta Measurement (v3 only):**
 
@@ -224,10 +229,17 @@ loc_delta=$(git diff --numstat HEAD~1..HEAD -- <target_file_1> <target_file_2> .
   awk '{ a+=$1; d+=$2 } END { print a+d }')
 ```
 
-- Amend the `evaluated` event with both fields (produce a single `evaluated` event
-  that carries `score_delta` + `loc_delta` on first write — do NOT rewrite a
-  prior event; Step 4's v3 path emits the evaluated event AFTER these deltas are
-  computed, just as Step 1.5 defers the planned event).
+- **Extract `target_files` from session.yaml** for the diff:
+  ```bash
+  target_files=$(python3 -c "import yaml; print(' '.join(yaml.safe_load(open('$SESSION_ROOT/session.yaml'))['target_files']))")
+  loc_delta=$(git diff --numstat HEAD~1..HEAD -- $target_files |
+    awk '{ a+=$1; d+=$2 } END { print (a+d)+0 }')
+  ```
+  (The earlier bash snippet above is illustrative; the target_files list must
+  actually come from session.yaml.)
+- Append the `evaluated` event now, with both delta fields on first write:
+  `{"event": "evaluated", "id": <id>, "score": <score>, "score_delta": <score_delta>, "loc_delta": <loc_delta>, "timestamp": "<now>"}`
+  (No journal amendment — the event is written once, here, at the end of Step 4.5.)
 
 **Reference-point contract after diagnose-retry**: when a retry via 5.a produces a
 new commit SHA_B (the original SHA_A was reset), `HEAD~1` for SHA_B is the
@@ -254,10 +266,12 @@ IF $VERSION starts with "3.":
   If `session.diagnose_retry.session_retries_used >= cap`, skip (go to 5.a-fallback).
 
   If gated in:
-    Append `diagnose_retry_started {id, trigger, timestamp}`.
+    Append journal event (explicit event key form — consumed by
+    `session-helper.sh retry_budget_remaining`):
+    `{"event": "diagnose_retry_started", "id": <id>, "trigger": "<reason>", "timestamp": "<now>"}`
     Agent reads run log + target files diff, proposes diagnosis:
       a) "idea itself flawed" → gave_up:
-         - Append `diagnose_retry_completed {id, outcome:"gave_up"}`.
+         - Append `{"event": "diagnose_retry_completed", "id": <id>, "outcome": "gave_up", "timestamp": "<now>"}`.
          - `session.diagnose_retry.session_retries_used++`, `gave_up_count++`.
          - `experiment_count` increments normally.
          - GO TO discard path with `reason="diagnosed_gave_up"` (5.e persist+reset,
@@ -267,13 +281,13 @@ IF $VERSION starts with "3.":
          - `git reset --hard HEAD~1` (removes original failing commit SHA_A).
          - Apply proposed fix to target files.
          - `git add + git commit` (new SHA_B).
-         - Append `committed {id: same, commit: SHA_B, retry_of: SHA_A}`.
+         - Append `{"id": <same>, "status": "committed", "commit": "<SHA_B>", "retry_of": "<SHA_A>", "timestamp": "<now>"}`.
          - `session.diagnose_retry.session_retries_used++`.
          - `experiment_count` NOT incremented (retry is the same experiment).
          - Jump back to Step 4 (re-evaluate SHA_B).
          - On return: if still triggers, append
-           `diagnose_retry_completed {outcome:"failed"}` + go to 5.a-fallback;
-           otherwise `diagnose_retry_completed {outcome:"recovered"}` + continue to 5.b.
+           `{"event": "diagnose_retry_completed", "id": <id>, "outcome": "failed", "timestamp": "<now>"}` + go to 5.a-fallback;
+           otherwise `{"event": "diagnose_retry_completed", "id": <id>, "outcome": "recovered", "timestamp": "<now>"}` + continue to 5.b.
 
   **5.a-fallback** (gate skipped or retry exhausted):
   Invariant assert: `session_retries_used >= max_per_session` OR a prior
@@ -299,7 +313,12 @@ IF $VERSION starts with "3.":
   **Step 5.c — Shortcut Detector** (keep branch only):
   `flagged = (score_delta >= strategy.shortcut_detection.auto_flag_delta) AND (loc_delta <= strategy.shortcut_detection.min_loc)`.
   If flagged:
-    Append `shortcut_flagged {id, commit, score_delta, loc_delta, timestamp}`.
+    Append journal event — **explicit `event` key required** so that
+    `session-helper.sh count_flagged_since_last_expansion` and outer-loop.md
+    Tier 3 flagged-evidence injection can consume it:
+    `{"event": "shortcut_flagged", "id": <id>, "commit": "<COMMIT>", "score_delta": <score_delta>, "loc_delta": <loc_delta>, "description": "<idea description>", "timestamp": "<now>"}`
+    (The `description` field is read by outer-loop.md Step 6.5.6 Tier 3
+    evidence injection when the commit has been gc'd.)
     `session.shortcut.cumulative_flagged++`.
     `session.shortcut.flagged_since_last_tier3++`.
     `session.shortcut.total_flagged++`.
@@ -309,29 +328,55 @@ IF $VERSION starts with "3.":
   Agent supplies rationale (≤ `strategy.legibility.max_rationale_chars`, default 120).
   Validation:
     Empty:
-      medium → append `rationale_missing`, `session.legibility.missing_rationale_count++`, proceed.
+      medium → append journal event
+               `{"event": "rationale_missing", "id": <id>, "timestamp": "<now>"}`
+               then `session.legibility.missing_rationale_count++`, proceed to 5.e keep branch.
       hard   → re-prompt once; if still empty, convert to discard:
                  `status="discarded"`, `reason="flagged_unexplained"`.
-                 Write results.tsv row BEFORE reset (9 cols, `rationale=""`, `flagged=true`)
+                 Write 9-column results.tsv row BEFORE reset (`rationale=""`, `flagged=true`)
                  — forensic data preserved even if commit is gc'd later.
-                 Append `discarded {id, status:"discarded", reason, rationale, timestamp}`
-                 BEFORE reset — §5.5 contract.
+                 Append journal event BEFORE reset — §5.5 contract:
+                 `{"id": <id>, "status": "discarded", "reason": "flagged_unexplained", "rationale": "", "timestamp": "<now>"}`
                  Branch & Clean-Tree Guard + `git reset --hard HEAD~1`.
-                 Append `rollback_completed`.
+                 Append `{"id": <id>, "status": "rollback_completed", "timestamp": "<now>"}`.
+                 Update `session.yaml`: `experiments.total++`, `experiments.discarded++`.
                  Counter preservation: `cumulative_flagged`, `flagged_since_last_tier3`,
                  `total_flagged` all NOT decremented (intentional — suspicious pattern
                  still contributes to escalation signal even when rejected).
+                 **SKIP 5.e** — persistence already completed here.
     Identical to description (`block_identical_to_description=true`):
-      medium → re-prompt once; if still identical, warn and proceed.
+      medium → re-prompt once; if still identical, warn and proceed to 5.e keep branch.
       hard   → re-prompt once; if still identical, same discard path as empty+hard
                (results.tsv row with `rationale=<last submitted>` — identical to
                description — preserves evidence).
-  On pass: kept event includes `rationale` field.
+  On pass: continue to Step 5.e keep branch with rationale.
 
   **Step 5.e — Persist**:
-  Keep branch: write 9-column results.tsv row (`commit score status category score_delta loc_delta flagged rationale description`, tab-separated), Code Archive update (existing).
-  Discard branch (from 5.b regression OR 5.a crash/gave_up): write 9-col results.tsv row, then Branch & Clean-Tree Guard + `git reset --hard HEAD~1`, append `rollback_completed`.
-  Note: for 5.d hard-reject, the results.tsv row + `discarded` + `rollback_completed` were already written in 5.d — do NOT duplicate.
+
+  **Keep branch** (score improved, rationale passed 5.d OR flagged not applicable):
+    - Append journal: `{"id": <id>, "status": "kept", "rationale": "<text>", "score_delta": <n>, "loc_delta": <n>, "flagged": <bool>, "timestamp": "<now>"}`
+    - Append 9-column results.tsv row: `<COMMIT>\t<score>\tkept\t<idea_category>\t<score_delta>\t<loc_delta>\t<flagged>\t<rationale>\t<idea description>`
+    - Update `session.yaml`:
+      - `metric.current = score`
+      - `metric.best = max(metric.best, score)`
+      - `experiments.total++`
+      - `experiments.kept++`
+    - **Code Archive**: record the kept commit in `$SESSION_ROOT/code-archive/keep_<NNN>/` (as per v2 behavior).
+
+  **Discard branch** (from 5.b `reason="regression"`, OR 5.a `reason="crash"`, OR 5.a `reason="diagnosed_gave_up"`):
+    - Append journal: `{"id": <id>, "status": "discarded", "reason": "<regression|crash|diagnosed_gave_up>", "timestamp": "<now>"}`
+    - Append 9-column results.tsv row: `<COMMIT>\t<score>\tdiscarded\t<idea_category>\t<score_delta>\t<loc_delta>\t<flagged>\t\t<idea description>`
+      (empty `rationale` for discard branch — rationale is only required on keep)
+    - Update `session.yaml`:
+      - `experiments.total++`
+      - `experiments.discarded++` (or `experiments.crashed++` when `reason="crash"`)
+    - Run **Branch & Clean-Tree Guard**.
+    - Run: `git reset --hard HEAD~1`.
+    - Append `{"id": <id>, "status": "rollback_completed", "timestamp": "<now>"}`.
+
+  **Note**: for 5.d hard-reject, persistence was already performed inside 5.d
+  (results.tsv row + journal `discarded` event + reset + `rollback_completed` +
+  counter increments) — do NOT duplicate in 5.e.
 
 ELSE (v2):
   
