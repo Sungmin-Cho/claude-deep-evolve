@@ -3,7 +3,7 @@
 # Usage: session-helper.sh <subcommand> [args...]
 set -Eeuo pipefail
 
-HELPER_VERSION="2.2.2"
+HELPER_VERSION="3.0.0"
 export DEEP_EVOLVE_HELPER=1
 
 # === Dependencies ===
@@ -105,10 +105,18 @@ ensure_evolve_dir() {
 
 cmd_help() {
   echo "session-helper.sh v$HELPER_VERSION"
-  echo "Subcommands: compute_session_id, resolve_current, list_sessions,"
+  echo ""
+  echo "Session lifecycle:"
+  echo "  compute_session_id, resolve_current, list_sessions,"
   echo "  start_new_session, mark_session_status, append_sessions_jsonl,"
   echo "  migrate_legacy, check_branch_alignment, detect_orphan_experiment,"
   echo "  append_meta_archive_local, render_inherited_context, lineage_tree"
+  echo ""
+  echo "v3.0.0 subcommands (AAR-inspired):"
+  echo "  entropy_compute <journal> [window_size]         — Shannon entropy over recent planned events"
+  echo "  migrate_v2_weights <v2_json>                    — Translate 4-cat v2 weights to 10-cat v3"
+  echo "  count_flagged_since_last_expansion <journal>    — Count shortcut_flagged since last reset"
+  echo "  retry_budget_remaining <journal> [cap]          — Diagnose-retry budget remaining"
 }
 
 cmd_compute_session_id() {
