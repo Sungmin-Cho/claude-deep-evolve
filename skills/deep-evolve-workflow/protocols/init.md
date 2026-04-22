@@ -441,7 +441,21 @@ If at least one completed session exists:
       (for maximize / pass-rate templates)
     - `session.yaml.metric.current = session.yaml.metric.baseline`
     - `session.yaml.metric.best = session.yaml.metric.baseline`
-    - Append to `results.tsv`: `baseline\t<baseline_value>\tbaseline\tinitial measurement`
+    - Append to `results.tsv`:
+      
+      **If `session.yaml.deep_evolve_version` starts with `"3."`** (9-column v3 schema):
+      ```
+      baseline\t<baseline_value>\tbaseline\t\t0\t0\tfalse\t\tinitial measurement
+      ```
+      (9 tab-separated fields: `commit=baseline`, `score=<value>`, `status=baseline`,
+      empty `category`, `score_delta=0`, `loc_delta=0`, `flagged=false`, empty
+      `rationale`, `description="initial measurement"`. Matches Step 7's 9-col
+      header; prevents awk-split misreads in resume.md/completion.md consumers.)
+      
+      **Else** (v2 4-column schema, existing behavior):
+      ```
+      baseline\t<baseline_value>\tbaseline\tinitial measurement
+      ```
 
     **11.d — Status transition**:
 
