@@ -220,48 +220,145 @@ ELSE (v2): skip this step.
 
 **Step 5 — Judgment:**
 
-Compare `score` with `session.yaml.metric.current`:
+IF $VERSION starts with "3.":
 
-**Scoring contract: prepare.py / prepare-protocol.md는 항상 higher-is-better score를 출력합니다.**
+  **Step 5.a — Crash/Severe-drop Diagnose Gate**:
 
-minimize 메트릭의 반전은 evaluation harness 내부에서 처리됩니다.
-- cli 모드: prepare.py가 minimize 메트릭에 `score = BASELINE_SCORE / raw_score` 변환 적용 (baseline=1.0, 개선 시 >1.0, 악화 시 <1.0 — clamp 없음, 1.0 초과 허용)
-- protocol 모드: prepare-protocol.md가 동일한 변환 적용
+  Trigger conditions (any): crashed flag set by Step 4; OR
+  `score < session.yaml.metric.baseline - strategy.yaml.judgment.diagnose_retry.severe_drop_delta`;
+  OR `run-<NNN>.log` contains any `strategy.judgment.diagnose_retry.error_keywords`.
 
-judgment는 항상 단일 규칙을 따릅니다: **score_new > score_old + min_delta → keep**
+  Per-experiment retry cap: 1. Check journal for an earlier `diagnose_retry_started`
+  with the same experiment id; if found, skip the gate (go to 5.a-fallback).
 
-**If score_new > score_old + min_delta** (where `min_delta` = `strategy.yaml.judgment.min_delta`, default 0.001):
-- Append to `journal.jsonl`: `{"id": <id>, "status": "kept", "timestamp": "<now>"}`
-- Append to `results.tsv`: `<COMMIT>\t<score>\tkept\t<idea description>`
-- Update `session.yaml`: `metric.current = score`, `metric.best = max(best, score)`, increment `experiments.total` and `experiments.kept`
-- **Code Archive**: Record the kept commit in `$SESSION_ROOT/code-archive/`:
-  Create or update `keep_<NNN>/` with:
-  ```yaml
-  commit: <COMMIT>
-  score: <score>
-  description: "<idea description>"
-  children_explored: 0
-  branch: "<session.yaml.lineage.current_branch>"
-  ```
+  Session-wide cap: `strategy.judgment.diagnose_retry.max_per_session` (default 10).
+  If `session.diagnose_retry.session_retries_used >= cap`, skip (go to 5.a-fallback).
 
-**If score same or worse:**
-- Append to `journal.jsonl`: `{"id": <id>, "status": "discarded", "timestamp": "<now>"}`
-- Append to `results.tsv`: `<COMMIT>\t<score>\tdiscarded\t<idea description>`
-- Update `session.yaml`: increment `experiments.total` and `experiments.discarded`
-- Run **Branch & Clean-Tree Guard** (verify branch + clean worktree)
-- Run: `git reset --hard HEAD~1`
-- Append to `journal.jsonl`: `{"id": <id>, "status": "rollback_completed", "timestamp": "<now>"}`
+  If gated in:
+    Append `diagnose_retry_started {id, trigger, timestamp}`.
+    Agent reads run log + target files diff, proposes diagnosis:
+      a) "idea itself flawed" → gave_up:
+         - Append `diagnose_retry_completed {id, outcome:"gave_up"}`.
+         - `session.diagnose_retry.session_retries_used++`, `gave_up_count++`.
+         - `experiment_count` increments normally.
+         - GO TO discard path with `reason="diagnosed_gave_up"` (5.e persist+reset,
+           skipping 5.b/5.c/5.d).
+      b) "environment or hyperparameter issue" → retry:
+         - Branch & Clean-Tree Guard.
+         - `git reset --hard HEAD~1` (removes original failing commit SHA_A).
+         - Apply proposed fix to target files.
+         - `git add + git commit` (new SHA_B).
+         - Append `committed {id: same, commit: SHA_B, retry_of: SHA_A}`.
+         - `session.diagnose_retry.session_retries_used++`.
+         - `experiment_count` NOT incremented (retry is the same experiment).
+         - Jump back to Step 4 (re-evaluate SHA_B).
+         - On return: if still triggers, append
+           `diagnose_retry_completed {outcome:"failed"}` + go to 5.a-fallback;
+           otherwise `diagnose_retry_completed {outcome:"recovered"}` + continue to 5.b.
 
-**If evaluation crashed:**
-- Attempt a simple fix (1 attempt only)
-- If fix works, re-evaluate
-- If fix fails:
-  - Append to `journal.jsonl`: `{"id": <id>, "status": "discarded", "reason": "crash", "timestamp": "<now>"}`
-  - Append to `results.tsv`: `<COMMIT>\t0\tcrash\t<idea description>`
-  - Update `session.yaml`: increment `experiments.total` and `experiments.crashed`
+  **5.a-fallback** (gate skipped or retry exhausted):
+  Invariant assert: `session_retries_used >= max_per_session` OR a prior
+  `diagnose_retry_started` exists for this experiment id — if neither,
+  raise hard error + prompt user.
+  If `crashed` was the original trigger: go to discard(`reason="crash"`).
+  Otherwise (severe-drop/error-keyword, non-crashing score): continue to 5.b.
+
+  **Resume rule for 5.a** (4 branches):
+  If last event is `diagnose_retry_started` without matching `_completed`:
+    1. HEAD == SHA_B (recorded as `committed` with `retry_of`): re-enter Step 4.
+    2. HEAD == SHA_A (original committed SHA): reset never happened; re-enter
+       at diagnosis proposal step.
+    3. HEAD == parent(SHA_A): *expected mid-retry window* — reset succeeded but
+       new commit didn't land. Re-enter at "apply proposed fix to target files".
+    4. HEAD matches none of the three: unexpected. Prompt user with the three
+       SHAs + current HEAD for manual recovery.
+
+  **Step 5.b — Score Comparison** (only reached if 5.a did not force discard):
+  `score_new > score_old + strategy.judgment.min_delta` → keep branch (continue 5.c).
+  Else → discard branch with `reason="regression"` → persist+reset (5.e).
+
+  **Step 5.c — Shortcut Detector** (keep branch only):
+  `flagged = (score_delta >= strategy.shortcut_detection.auto_flag_delta) AND (loc_delta <= strategy.shortcut_detection.min_loc)`.
+  If flagged:
+    Append `shortcut_flagged {id, commit, score_delta, loc_delta, timestamp}`.
+    `session.shortcut.cumulative_flagged++`.
+    `session.shortcut.flagged_since_last_tier3++`.
+    `session.shortcut.total_flagged++`.
+
+  **Step 5.d — Legibility Gate** (keep branch only):
+  `level = "hard" if flagged else "medium"`.
+  Agent supplies rationale (≤ `strategy.legibility.max_rationale_chars`, default 120).
+  Validation:
+    Empty:
+      medium → append `rationale_missing`, `session.legibility.missing_rationale_count++`, proceed.
+      hard   → re-prompt once; if still empty, convert to discard:
+                 `status="discarded"`, `reason="flagged_unexplained"`.
+                 Write results.tsv row BEFORE reset (9 cols, `rationale=""`, `flagged=true`)
+                 — forensic data preserved even if commit is gc'd later.
+                 Append `discarded {id, status:"discarded", reason, rationale, timestamp}`
+                 BEFORE reset — §5.5 contract.
+                 Branch & Clean-Tree Guard + `git reset --hard HEAD~1`.
+                 Append `rollback_completed`.
+                 Counter preservation: `cumulative_flagged`, `flagged_since_last_tier3`,
+                 `total_flagged` all NOT decremented (intentional — suspicious pattern
+                 still contributes to escalation signal even when rejected).
+    Identical to description (`block_identical_to_description=true`):
+      medium → re-prompt once; if still identical, warn and proceed.
+      hard   → re-prompt once; if still identical, same discard path as empty+hard
+               (results.tsv row with `rationale=<last submitted>` — identical to
+               description — preserves evidence).
+  On pass: kept event includes `rationale` field.
+
+  **Step 5.e — Persist**:
+  Keep branch: write 9-column results.tsv row (`commit score status category score_delta loc_delta flagged rationale description`, tab-separated), Code Archive update (existing).
+  Discard branch (from 5.b regression OR 5.a crash/gave_up): write 9-col results.tsv row, then Branch & Clean-Tree Guard + `git reset --hard HEAD~1`, append `rollback_completed`.
+  Note: for 5.d hard-reject, the results.tsv row + `discarded` + `rollback_completed` were already written in 5.d — do NOT duplicate.
+
+ELSE (v2):
+  
+  Compare `score` with `session.yaml.metric.current`:
+  
+  **Scoring contract: prepare.py / prepare-protocol.md는 항상 higher-is-better score를 출력합니다.**
+  
+  minimize 메트릭의 반전은 evaluation harness 내부에서 처리됩니다.
+  - cli 모드: prepare.py가 minimize 메트릭에 `score = BASELINE_SCORE / raw_score` 변환 적용 (baseline=1.0, 개선 시 >1.0, 악화 시 <1.0 — clamp 없음, 1.0 초과 허용)
+  - protocol 모드: prepare-protocol.md가 동일한 변환 적용
+  
+  judgment는 항상 단일 규칙을 따릅니다: **score_new > score_old + min_delta → keep**
+  
+  **If score_new > score_old + min_delta** (where `min_delta` = `strategy.yaml.judgment.min_delta`, default 0.001):
+  - Append to `journal.jsonl`: `{"id": <id>, "status": "kept", "timestamp": "<now>"}`
+  - Append to `results.tsv`: `<COMMIT>\t<score>\tkept\t<idea description>`
+  - Update `session.yaml`: `metric.current = score`, `metric.best = max(best, score)`, increment `experiments.total` and `experiments.kept`
+  - **Code Archive**: Record the kept commit in `$SESSION_ROOT/code-archive/`:
+    Create or update `keep_<NNN>/` with:
+    ```yaml
+    commit: <COMMIT>
+    score: <score>
+    description: "<idea description>"
+    children_explored: 0
+    branch: "<session.yaml.lineage.current_branch>"
+    ```
+  
+  **If score same or worse:**
+  - Append to `journal.jsonl`: `{"id": <id>, "status": "discarded", "timestamp": "<now>"}`
+  - Append to `results.tsv`: `<COMMIT>\t<score>\tdiscarded\t<idea description>`
+  - Update `session.yaml`: increment `experiments.total` and `experiments.discarded`
   - Run **Branch & Clean-Tree Guard** (verify branch + clean worktree)
   - Run: `git reset --hard HEAD~1`
   - Append to `journal.jsonl`: `{"id": <id>, "status": "rollback_completed", "timestamp": "<now>"}`
+  
+  **If evaluation crashed:**
+  - Attempt a simple fix (1 attempt only)
+  - If fix works, re-evaluate
+  - If fix fails:
+    - Append to `journal.jsonl`: `{"id": <id>, "status": "discarded", "reason": "crash", "timestamp": "<now>"}`
+    - Append to `results.tsv`: `<COMMIT>\t0\tcrash\t<idea description>`
+    - Update `session.yaml`: increment `experiments.total` and `experiments.crashed`
+    - Run **Branch & Clean-Tree Guard** (verify branch + clean worktree)
+    - Run: `git reset --hard HEAD~1`
+    - Append to `journal.jsonl`: `{"id": <id>, "status": "rollback_completed", "timestamp": "<now>"}`
+  
 
 Increment `experiment_count`.
 
