@@ -94,7 +94,7 @@ Generate `$SESSION_ROOT/evolve-receipt.json` from `session.yaml` and `results.ts
 ```json
 {
   "plugin": "deep-evolve",
-  "version": "2.2.2",
+  "version": "<session.yaml.deep_evolve_version>",                        // string — MUST match session's recorded version (not hardcoded). v3 sessions emit "3.0.0"; v2 sessions continuing to complete emit "2.2.2".
   "receipt_schema_version": 2,                                           // number
   "timestamp": "<ISO 8601 now>",                                         // string
   "goal": "<session.yaml.goal>",                                         // string
