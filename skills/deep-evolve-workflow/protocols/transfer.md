@@ -90,6 +90,7 @@ If either condition is not met, skip recording.
    ```jsonl
    {
      "id": "archive_<timestamp_hash>",
+     "schema_version": 3,
      "timestamp": "<now>",
      "project": {
        "path_hash": "<sha256(project_path)[:8]>",
@@ -131,6 +132,10 @@ If either condition is not met, skip recording.
      "transfer_success_rate": null
    }
    ```
+
+   **v3.0.0 note**: v3 sessions MUST set `"schema_version": 3` on every new
+   entry written here. v2 sessions (pre-3.0.0) wrote entries without this
+   field; A.2.5 schema compatibility branch treats missing as `2`.
 
 4. **Update source entry** (if transfer was used):
    Within the same flock:
