@@ -50,6 +50,25 @@ VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | head -1 | 
 
 All v3-gated sub-steps below check `$VERSION`. If `$VERSION` starts with `"3."` (i.e., `3.0.0` or later), execute the v3 sub-step; otherwise skip it (v2 behavior preserved).
 
+### v3 Environment Propagation (only when $VERSION starts with "3.")
+
+IF $VERSION starts with "3.":
+
+```bash
+seal_flag=$(grep -A 10 "^shortcut_detection:" "$SESSION_ROOT/strategy.yaml" | grep '^\s*seal_prepare_read:' | head -1 | sed 's/.*:[[:space:]]*//; s/\s*$//')
+if [[ "$seal_flag" == "true" ]]; then
+  export DEEP_EVOLVE_SEAL_PREPARE=1
+else
+  # Deterministic clear — prevents cross-session leak if a prior session's
+  # export persisted in the parent Claude Code process environment.
+  unset DEEP_EVOLVE_SEAL_PREPARE
+fi
+```
+
+The export/unset pair runs on every inner-loop entry (including resumes), so
+one session enabling the seal cannot poison a later session that disabled it.
+ELSE (v2): always `unset DEEP_EVOLVE_SEAL_PREPARE` (v2 has no seal concept).
+
 Read `session.yaml` for configuration. Read `$SESSION_ROOT/strategy.yaml` for strategy parameters.
 Read `results.tsv` and `journal.jsonl` for history.
 

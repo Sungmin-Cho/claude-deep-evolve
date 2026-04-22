@@ -112,8 +112,36 @@ JSON
   exit 2
 }
 
+# === v3.0.0: optional read-block for prepare.py / prepare-protocol.md ===
+# Gated on DEEP_EVOLVE_SEAL_PREPARE=1 (opt-in from strategy.yaml.shortcut_detection).
+# Blocks Read tool calls that would reveal scenario text the agent could hardcode
+# answers against. Default off → existing behavior preserved.
+SEAL_PREPARE_READ="${DEEP_EVOLVE_SEAL_PREPARE:-}"
+if [[ "$SEAL_PREPARE_READ" == "1" && "$TOOL_NAME" == "Read" ]]; then
+  FILE_PATH=""
+  if echo "$TOOL_INPUT" | grep -q '"file_path"'; then
+    FILE_PATH="$(echo "$TOOL_INPUT" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+  fi
+  if [[ -n "$FILE_PATH" ]]; then
+    # Canonicalize: relative paths resolved against PROJECT_ROOT (matches
+    # existing Write/Edit branch below; fixes relative-path bypass).
+    FILE_PATH="$(normalize_path "$FILE_PATH")"
+    if [[ "$FILE_PATH" =~ ^[A-Za-z]:/ ]] || [[ "$FILE_PATH" == /* ]]; then
+      : # already absolute
+    else
+      FILE_PATH="$(normalize_path "$PROJECT_ROOT/$FILE_PATH")"
+    fi
+    if [[ "$FILE_PATH" == "$PROTECTED_PREPARE" || "$FILE_PATH" == "$PROTECTED_PROTOCOL" ]]; then
+      cat <<JSON
+{"decision":"block","reason":"Deep Evolve Guard (v3 seal_prepare_read): 실험 중 prepare.py / prepare-protocol.md의 Read가 차단되었습니다. shortcut 탐지 회피용 하드코드 방지. 비활성화하려면 strategy.yaml.shortcut_detection.seal_prepare_read: false."}
+JSON
+      exit 2
+    fi
+  fi
+fi
+
 # ── Write/Edit/MultiEdit: check file_path ──
-if [[ "$TOOL_NAME" != "Bash" ]]; then
+if [[ "$TOOL_NAME" != "Bash" && "$TOOL_NAME" != "Read" ]]; then
   FILE_PATH=""
   if echo "$TOOL_INPUT" | grep -q '"file_path"'; then
     FILE_PATH="$(echo "$TOOL_INPUT" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
