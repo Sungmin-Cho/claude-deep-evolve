@@ -22,6 +22,20 @@ Before generating the report, record this session's strategy evolution:
 
 Generate `$SESSION_ROOT/report.md`:
 
+**Column-count auto-detect (v3 addition)**:
+
+Read the first line of `$SESSION_ROOT/results.tsv`:
+
+```bash
+header_cols=$(head -1 "$SESSION_ROOT/results.tsv" | awk -F'\t' '{print NF}')
+```
+
+IF `$header_cols == 4`: v2 schema — columns are `commit score status description`.
+IF `$header_cols == 9`: v3 schema — columns are `commit score status category score_delta loc_delta flagged rationale description`.
+ELSE: abort with error: "Unexpected results.tsv column count: $header_cols. Expected 4 (v2) or 9 (v3)."
+
+All downstream parsing in this report must use the detected column layout.
+
 Read `results.tsv` and `session.yaml` to compile:
 
 ```markdown
