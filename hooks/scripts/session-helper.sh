@@ -746,6 +746,34 @@ print(json.dumps({"count": count, "last_reset_idx": last_reset_idx}))
 PY
 }
 
+cmd_retry_budget_remaining() {
+  local journal_path="${1:-}"
+  local max_per_session="${2:-10}"
+  if [[ -z "$journal_path" || ! -f "$journal_path" ]]; then
+    echo '{"error":"missing or nonexistent journal path"}' >&2
+    return 1
+  fi
+  python3 - "$journal_path" "$max_per_session" <<'PY'
+import json, sys
+
+journal_path, cap = sys.argv[1], int(sys.argv[2])
+used = 0
+with open(journal_path) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if evt.get("event") == "diagnose_retry_started":
+            used += 1
+remaining = max(0, cap - used)
+print(json.dumps({"used": used, "remaining": remaining, "cap": cap}))
+PY
+}
+
 # === Parse global flags ===
 ARGS=()
 for arg in "$@"; do
@@ -781,5 +809,6 @@ case "$SUBCMD" in
   entropy_compute) cmd_entropy_compute "$@" ;;
   migrate_v2_weights) cmd_migrate_v2_weights "$@" ;;
   count_flagged_since_last_expansion) cmd_count_flagged_since_last_expansion "$@" ;;
+  retry_budget_remaining) cmd_retry_budget_remaining "$@" ;;
   *) echo "session-helper: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
 esac

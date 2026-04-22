@@ -89,3 +89,30 @@ def test_count_flagged_no_escalation_yet(run_helper, make_journal):
     ])
     result = run_helper("count_flagged_since_last_expansion", str(journal))
     assert result["count"] == 2
+
+
+def test_retry_budget_ignores_crashes(run_helper, make_journal):
+    journal = make_journal([
+        {"event": "diagnose_retry_started", "id": 1, "timestamp": "t1"},
+        {"event": "diagnose_retry_completed", "id": 1, "outcome": "recovered", "timestamp": "t2"},
+        {"event": "diagnose_retry_started", "id": 2, "timestamp": "t3"},
+        {"event": "diagnose_retry_completed", "id": 2, "outcome": "gave_up", "timestamp": "t4"},
+        {"event": "diagnose_retry_started", "id": 3, "timestamp": "t5"},
+        {"event": "diagnose_retry_completed", "id": 3, "outcome": "failed", "timestamp": "t6"},
+        {"id": 4, "status": "discarded", "reason": "crash", "timestamp": "t7"},
+        {"id": 5, "status": "discarded", "reason": "crash", "timestamp": "t8"},
+    ])
+    result = run_helper("retry_budget_remaining", str(journal), "10")
+    assert result["used"] == 3
+    assert result["remaining"] == 7
+
+
+def test_retry_budget_exhausted(run_helper, make_journal):
+    entries = [
+        {"event": "diagnose_retry_started", "id": i, "timestamp": f"t{i}"}
+        for i in range(1, 11)
+    ]
+    journal = make_journal(entries)
+    result = run_helper("retry_budget_remaining", str(journal), "10")
+    assert result["used"] == 10
+    assert result["remaining"] == 0
