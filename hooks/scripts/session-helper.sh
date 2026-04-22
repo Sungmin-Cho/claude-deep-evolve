@@ -716,7 +716,13 @@ pre = {
     "other":               FLOOR,
 }
 total = sum(pre.values())
-weights = {k: (v / total) for k, v in pre.items()} if total > 0 else pre
+if total > 0:
+    weights = {k: (v / total) for k, v in pre.items()}
+else:
+    # Defensive: total==0 is unreachable in practice (4 FLOOR=0.05 entries
+    # guarantee total >= 0.20) but if someone disables the floor in a future
+    # refactor, emit even-split 10-category weights rather than all-zeros.
+    weights = {k: 0.1 for k in pre.keys()}
 print(json.dumps({"weights": weights, "pre_normalize_sum": round(total, 6)}))
 PY
 }
