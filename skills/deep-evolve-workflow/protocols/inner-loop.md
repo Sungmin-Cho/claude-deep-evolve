@@ -40,6 +40,16 @@ Options:
 > for any `session-helper.sh` subcommand that takes a session id argument
 > (e.g., `mark_session_status`, `append_sessions_jsonl`).
 
+### v3 Version Gate
+
+Before entering the loop, read the session's deep_evolve_version:
+
+```bash
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
+```
+
+All v3-gated sub-steps below check `$VERSION`. If `$VERSION` starts with `"3."` (i.e., `3.0.0` or later), execute the v3 sub-step; otherwise skip it (v2 behavior preserved).
+
 Read `session.yaml` for configuration. Read `$SESSION_ROOT/strategy.yaml` for strategy parameters.
 Read `results.tsv` and `journal.jsonl` for history.
 
@@ -128,6 +138,34 @@ Repeat until `experiment_count >= max_count` or diminishing returns detected:
 - For each candidate, analyze: expected improvement, risk (crash/regression likelihood), novelty vs recent attempts
 - Select the BEST candidate based on this analysis
 - Append to `journal.jsonl`: `{"id": <next_id>, "status": "planned", "idea": "<description>", "candidates_considered": <N>, "timestamp": "<now>"}`
+
+**Step 1.5 — Category Tagging (v3 only):**
+
+**Ordering invariant (v3)**: the `planned` journal event MUST be appended AFTER
+category tagging completes, not before. This preserves the append-only invariant
+that the entire idempotent-resume mechanism depends on. For v3 sessions, the
+final append line of Step 1 is **deferred** until Step 1.5 has assigned a
+category; v2 sessions append immediately as before.
+
+Concretely for v3:
+- After ranking `candidates_per_step` candidates in Step 1, do NOT yet append
+  the `planned` event — continue to Step 1.5.
+- Read `protocols/taxonomy.md` for the 10-category list.
+- Classify each ranked candidate into one of the 10 categories; unclassifiable → `other`.
+- From the ranked list, select the highest-ranked candidate whose category
+  differs from every `planned` event in the last
+  `strategy.yaml.idea_selection.min_novelty_distance` attempts.
+- If no candidate clears the category filter, pick the highest-ranked candidate
+  regardless (soft-fail with a warning — forward progress guaranteed).
+- Compute `idea_category = <selected>`.
+- THEN append the `planned` event with `idea_category` included from the start:
+  `{id, status:"planned", idea, idea_category, timestamp}`
+
+For v2 sessions: skip Step 1.5 entirely and use the existing Step 1 flow (append
+`planned` event without `idea_category`).
+
+No journal rewrite ever happens — the `idea_category` field is present on first
+write or not at all.
 
 **Step 2 — Code Modification:**
 - Modify ONLY files listed in `session.yaml.target_files`
