@@ -713,6 +713,39 @@ print(json.dumps({"weights": weights, "pre_normalize_sum": round(total, 6)}))
 PY
 }
 
+cmd_count_flagged_since_last_expansion() {
+  local journal_path="${1:-}"
+  if [[ -z "$journal_path" || ! -f "$journal_path" ]]; then
+    echo '{"error":"missing or nonexistent journal path"}' >&2
+    return 1
+  fi
+  python3 - "$journal_path" <<'PY'
+import json, sys
+
+events = []
+with open(sys.argv[1]) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+
+last_reset_idx = -1
+for i, evt in enumerate(events):
+    if evt.get("event") in ("shortcut_escalation", "tier3_flagged_reset"):
+        last_reset_idx = i
+
+count = sum(
+    1 for evt in events[last_reset_idx + 1:]
+    if evt.get("event") == "shortcut_flagged"
+)
+print(json.dumps({"count": count, "last_reset_idx": last_reset_idx}))
+PY
+}
+
 # === Parse global flags ===
 ARGS=()
 for arg in "$@"; do
@@ -747,5 +780,6 @@ case "$SUBCMD" in
   lineage_tree) cmd_lineage_tree "$@" ;;
   entropy_compute) cmd_entropy_compute "$@" ;;
   migrate_v2_weights) cmd_migrate_v2_weights "$@" ;;
+  count_flagged_since_last_expansion) cmd_count_flagged_since_last_expansion "$@" ;;
   *) echo "session-helper: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
 esac

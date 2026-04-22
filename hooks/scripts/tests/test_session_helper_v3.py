@@ -68,3 +68,24 @@ def test_migrate_v2_weights_pathological_all_structural(run_helper, tmp_path):
     assert abs(weights["add_guard"] - (1.0 / 3) / 1.20) < 1e-6
     assert abs(weights["other"] - 0.05 / 1.20) < 1e-6
     assert abs(sum(weights.values()) - 1.0) < 1e-9
+
+
+def test_count_flagged_respects_escalation_reset(run_helper, make_journal):
+    journal = make_journal([
+        {"event": "shortcut_flagged", "id": 1, "commit": "a", "timestamp": "t1"},
+        {"event": "shortcut_flagged", "id": 2, "commit": "b", "timestamp": "t2"},
+        {"event": "shortcut_flagged", "id": 3, "commit": "c", "timestamp": "t3"},
+        {"event": "shortcut_escalation", "cumulative": 3, "timestamp": "t4"},
+        {"event": "shortcut_flagged", "id": 4, "commit": "d", "timestamp": "t5"},
+    ])
+    result = run_helper("count_flagged_since_last_expansion", str(journal))
+    assert result["count"] == 1
+
+
+def test_count_flagged_no_escalation_yet(run_helper, make_journal):
+    journal = make_journal([
+        {"event": "shortcut_flagged", "id": 1, "commit": "a", "timestamp": "t1"},
+        {"event": "shortcut_flagged", "id": 2, "commit": "b", "timestamp": "t2"},
+    ])
+    result = run_helper("count_flagged_since_last_expansion", str(journal))
+    assert result["count"] == 2
