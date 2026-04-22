@@ -1,5 +1,18 @@
 # Completion Report (Section E)
 
+## Protocol Entry — Version Gate
+
+Every entry to this protocol MUST initialize `$VERSION` locally. Do NOT rely
+on shell state inherited from the caller — Claude Code's Read tool loads a
+fresh context.
+
+```bash
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
+```
+
+The v3 signals block (added in Task 16) checks `$VERSION` locally to decide
+whether to emit the v3-specific report section.
+
 ## Pre-completion: Meta Archive Update
 
 Before generating the report, record this session's strategy evolution:
