@@ -511,6 +511,21 @@ Otherwise: → Back to Step 1
 
 ## Section D: Prepare Expansion
 
+**Protection bypass**: Section D must Write to `prepare.py` or `prepare-protocol.md`
+which are normally protected by `protect-readonly.sh`. Export the `prepare_update`
+meta mode BEFORE the Write and unset it AFTER:
+
+```bash
+export DEEP_EVOLVE_META_MODE=prepare_update
+# ... perform Write / Edit on prepare.py or prepare-protocol.md ...
+unset DEEP_EVOLVE_META_MODE
+```
+
+This applies to BOTH the user-initiated Section D (via AskUserQuestion
+"평가 harness 확장") AND the v3 forced Section D (triggered by Step 6.a.5
+`shortcut_escalation`). Without this wrapper, the PreToolUse hook will block
+the Write even though the section is authorized to modify the harness.
+
 **If eval_mode is `cli`:**
 1. Read current `$SESSION_ROOT/prepare.py`
 2. Re-analyze the project (Stage 3 only — code has changed since last analysis)
@@ -519,6 +534,7 @@ Otherwise: → Back to Step 1
    - Patterns in discarded experiments
    - Code regions not covered by current scenarios
 4. Generate updated `prepare.py` with new scenarios
+   (Set `DEEP_EVOLVE_META_MODE=prepare_update` before this step; unset after.)
 5. Increment `session.yaml.prepare.version`
 6. Append to `session.yaml.prepare.history`: `{version, scenarios, reason}`
 7. Insert separator in `results.tsv`: `--- prepare v<old> -> v<new> (<old_count>-><new_count> scenarios) ---`
@@ -533,6 +549,7 @@ Otherwise: → Back to Step 1
    - Patterns in discarded experiments
    - Aspects not covered by current protocol steps
 4. Generate updated `prepare-protocol.md` with expanded evaluation
+   (Set `DEEP_EVOLVE_META_MODE=prepare_update` before this step; unset after.)
 5. Increment `session.yaml.prepare.version`
 6. Append to `session.yaml.prepare.history`: `{version, steps, reason}`
 7. Insert separator in `results.tsv`: `--- prepare v<old> -> v<new> (<old_steps>-><new_steps> steps) ---`

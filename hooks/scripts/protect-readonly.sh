@@ -103,6 +103,11 @@ PROTECTED_STRATEGY="$SESSION_ROOT/strategy.yaml"
 # Meta modes (DEEP_EVOLVE_META_MODE):
 #   program_update — allows program.md writes only (Phase 1 meta analysis)
 #   outer_loop     — allows both program.md and strategy.yaml writes (Phase 2 Outer Loop)
+#   prepare_update — (v3.0.0) allows prepare.py / prepare-protocol.md writes during
+#                    Section D (Prepare Expansion), invoked manually OR forced by
+#                    inner-loop.md Step 6.a.5 shortcut escalation, OR by outer-loop.md
+#                    Step 6.5.6 Tier 3 auto-expansion. Must be exported before Write
+#                    and unset after.
 META_MODE="${DEEP_EVOLVE_META_MODE:-}"
 
 block_protected() {
@@ -160,7 +165,10 @@ if [[ "$TOOL_NAME" != "Bash" && "$TOOL_NAME" != "Read" ]]; then
   fi
 
   case "$FILE_PATH" in
-    "$PROTECTED_PREPARE"|"$PROTECTED_PROTOCOL") block_protected ;;
+    "$PROTECTED_PREPARE"|"$PROTECTED_PROTOCOL")
+      if [[ "$META_MODE" != "prepare_update" ]]; then
+        block_protected
+      fi ;;
     "$PROTECTED_PROGRAM")
       if [[ "$META_MODE" != "program_update" && "$META_MODE" != "outer_loop" ]]; then
         block_protected
@@ -184,7 +192,10 @@ if [[ -z "$COMMAND" ]]; then
 fi
 
 # Build protected file list (conditional on META_MODE)
-BASH_PROTECTED_FILES=("prepare.py" "prepare-protocol.md" "$SESSION_ROOT/prepare.py" "$SESSION_ROOT/prepare-protocol.md")
+BASH_PROTECTED_FILES=()
+if [[ "$META_MODE" != "prepare_update" ]]; then
+  BASH_PROTECTED_FILES+=("prepare.py" "prepare-protocol.md" "$SESSION_ROOT/prepare.py" "$SESSION_ROOT/prepare-protocol.md")
+fi
 if [[ "$META_MODE" != "program_update" && "$META_MODE" != "outer_loop" ]]; then
   BASH_PROTECTED_FILES+=("program.md" "$SESSION_ROOT/program.md")
 fi

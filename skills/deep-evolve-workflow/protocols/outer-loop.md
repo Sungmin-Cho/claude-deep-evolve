@@ -356,6 +356,12 @@ ELSE (v2):
    Then re-analyze the project (Stage 3 code analysis only) and generate the
    expanded prepare.py/protocol as before. Increment `session.yaml.prepare.version`.
 
+   **Protection bypass**: Before writing the updated prepare.py / prepare-protocol.md,
+   set `DEEP_EVOLVE_META_MODE=prepare_update` so the PreToolUse hook allows the
+   Write; unset after. Required for the same reason documented in inner-loop.md
+   Section D — `$PROTECTED_PREPARE` / `$PROTECTED_PROTOCOL` are otherwise blocked
+   while session status is `active`.
+
    **After Tier 3 expansion completes**, reset
    `session.shortcut.flagged_since_last_tier3 = 0`. Append:
    `{"event": "tier3_flagged_reset", "generation": <g>, "timestamp": "..."}`
