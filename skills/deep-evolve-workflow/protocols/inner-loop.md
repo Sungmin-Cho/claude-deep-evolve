@@ -366,6 +366,22 @@ Increment `experiment_count`.
 
 **6.a** Increment `inner_count`. Persist: update `session.yaml.outer_loop.inner_count` to the new value.
 
+**6.a.5 — Shortcut Escalation (v3 only):**
+
+IF $VERSION starts with "3.":
+  IF `session.shortcut.cumulative_flagged >= strategy.shortcut_detection.cumulative_threshold`:
+    - Append `shortcut_escalation` event: `{"event": "shortcut_escalation", "cumulative": <N>, "action": "section_d_forced", "timestamp": "..."}`
+    - Reset `session.shortcut.cumulative_flagged = 0` (persist)
+    - Execute **Section D: Prepare Expansion** (below) inline, BEFORE Step 6.b-6.d.
+    - After Section D returns, continue at Step 1 (skip 6.b-6.d this cycle).
+
+    **IMPORTANT**: inner_count is NOT reset by 6.a.5. If inner_count had already
+    crossed outer_interval, the Outer Loop trigger is preserved — the next
+    iteration's 6.b will see the still-high inner_count and fire the Outer Loop
+    normally. This guarantees no silent drop of pending outer-loop generations.
+
+ELSE (v2): skip this step.
+
 **6.b** Check for **interval-based Outer Loop trigger**:
 If `inner_count >= outer_interval`:
   If `session.yaml.outer_loop.auto_trigger` is **false**: AskUserQuestion "주기적 Outer Loop 실행할까요?" → "실행" / "건너뛰기 (→ 6.d)"
