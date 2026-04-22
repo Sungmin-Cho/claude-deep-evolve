@@ -247,6 +247,7 @@ Manages the global meta-archive at `~/.claude/deep-evolve/meta-archive.jsonl`.
    - 90+ days since last use (`timestamp` and last transfer) AND `transfer_success_rate < 0.3`
    - `transfer_success_rate == 0` (all transfers from this entry failed)
    - `outcome.total_outer_generations < 2` (insufficient Outer Loop data)
+   - **v2 schema + 180+ days old**: `(schema_version < 3 OR schema_version missing) AND timestamp older than 180 days` (v3.0.0 deprecation path)
 
 5. **Display pruning candidates**:
    ```
