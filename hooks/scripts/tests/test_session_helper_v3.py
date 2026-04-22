@@ -31,3 +31,40 @@ def test_entropy_compute_window_respected(run_helper, make_journal):
     # Single category within window → entropy = 0, active_categories = 1
     assert result["entropy_bits"] == 0.0
     assert result["active_categories"] == 1
+
+
+import json
+
+
+def test_migrate_v2_weights_normalized(run_helper, tmp_path):
+    v2 = {
+        "parameter_tuning": 0.2,
+        "structural_change": 0.4,
+        "algorithm_swap": 0.2,
+        "simplification": 0.2,
+    }
+    input_file = tmp_path / "v2.json"
+    input_file.write_text(json.dumps(v2))
+    result = run_helper("migrate_v2_weights", str(input_file))
+    weights = result["weights"]
+    assert len(weights) == 10
+    assert abs(sum(weights.values()) - 1.0) < 1e-9
+    assert abs(weights["parameter_tune"] - 0.2 / 1.20) < 1e-6
+    assert abs(weights["refactor_simplify"] - 0.2 / 1.20) < 1e-6
+    assert abs(weights["algorithm_swap"] - 0.2 / 1.20) < 1e-6
+    assert abs(weights["add_guard"] - (0.4 / 3) / 1.20) < 1e-6
+    assert abs(weights["other"] - 0.05 / 1.20) < 1e-6
+
+
+def test_migrate_v2_weights_pathological_all_structural(run_helper, tmp_path):
+    v2 = {"structural_change": 1.0}
+    input_file = tmp_path / "v2.json"
+    input_file.write_text(json.dumps(v2))
+    result = run_helper("migrate_v2_weights", str(input_file))
+    weights = result["weights"]
+    assert weights["parameter_tune"] == 0.0
+    assert weights["refactor_simplify"] == 0.0
+    assert weights["algorithm_swap"] == 0.0
+    assert abs(weights["add_guard"] - (1.0 / 3) / 1.20) < 1e-6
+    assert abs(weights["other"] - 0.05 / 1.20) < 1e-6
+    assert abs(sum(weights.values()) - 1.0) < 1e-9

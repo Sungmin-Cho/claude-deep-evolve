@@ -684,6 +684,35 @@ print(json.dumps({
 PY
 }
 
+cmd_migrate_v2_weights() {
+  local v2_json="${1:-}"
+  if [[ -z "$v2_json" || ! -f "$v2_json" ]]; then
+    echo '{"error":"missing or nonexistent v2 weights JSON"}' >&2
+    return 1
+  fi
+  python3 - "$v2_json" <<'PY'
+import json, sys
+
+v2 = json.load(open(sys.argv[1]))
+FLOOR = 0.05
+pre = {
+    "parameter_tune":      v2.get("parameter_tuning", 0.0),
+    "refactor_simplify":   v2.get("simplification", 0.0),
+    "algorithm_swap":      v2.get("algorithm_swap", 0.0),
+    "add_guard":           v2.get("structural_change", 0.0) / 3.0,
+    "api_redesign":        v2.get("structural_change", 0.0) / 3.0,
+    "error_handling":      v2.get("structural_change", 0.0) / 3.0,
+    "data_preprocessing":  FLOOR,
+    "caching_memoization": FLOOR,
+    "test_expansion":      FLOOR,
+    "other":               FLOOR,
+}
+total = sum(pre.values())
+weights = {k: (v / total) for k, v in pre.items()} if total > 0 else pre
+print(json.dumps({"weights": weights, "pre_normalize_sum": round(total, 6)}))
+PY
+}
+
 # === Parse global flags ===
 ARGS=()
 for arg in "$@"; do
@@ -717,5 +746,6 @@ case "$SUBCMD" in
   render_inherited_context) cmd_render_inherited_context "$@" ;;
   lineage_tree) cmd_lineage_tree "$@" ;;
   entropy_compute) cmd_entropy_compute "$@" ;;
+  migrate_v2_weights) cmd_migrate_v2_weights "$@" ;;
   *) echo "session-helper: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
 esac
