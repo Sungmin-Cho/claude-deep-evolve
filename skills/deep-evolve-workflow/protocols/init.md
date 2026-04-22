@@ -191,7 +191,7 @@ If at least one completed session exists:
    Include `program` version tracking, `outer_loop` state, and `evaluation_epoch`:
    ```yaml
    session_id: "<computed>"
-   deep_evolve_version: "2.2.2"
+   deep_evolve_version: "3.0.0"
    status: initializing                 # C-7: transitions to 'active' at end of Step 11
    created_at: "<ISO 8601 now>"
    parent_session:    # null for root sessions; populated if continue selected
@@ -226,6 +226,17 @@ If at least one completed session exists:
      current_branch: "deep-evolve/<tag>"
      forked_from: null
      previous_branches: []
+   shortcut:                           # v3.0.0 — spec §5.3
+     cumulative_flagged: 0             # reset after 6.a.5 forced Section D
+     flagged_since_last_tier3: 0       # reset after §7.3 Tier 3 expansion
+     total_flagged: 0                  # lifetime counter (reporting only)
+   diagnose_retry:                     # v3.0.0 — spec §5.3
+     session_retries_used: 0           # counts toward max_per_session
+     gave_up_count: 0
+   legibility:                         # v3.0.0 — spec §5.3
+     missing_rationale_count: 0
+   entropy:                            # v3.0.0 — spec §5.3
+     last_collapse_generation: null
    ```
 
 5. Generate evaluation harness based on eval_mode:
@@ -272,41 +283,94 @@ If at least one completed session exists:
 
    Then generate the project-specific experiment instructions below the sentinel block.
 
-7. Initialize `results.tsv` with header: `commit\tscore\tstatus\tdescription`
+7. Initialize `results.tsv`:
+
+   IF session.yaml.deep_evolve_version starts with `"3."`:
+     Header: `commit\tscore\tstatus\tcategory\tscore_delta\tloc_delta\tflagged\trationale\tdescription`
+     (9 columns, tab-separated, trailing newline)
+
+   ELSE (v2 or earlier):
+     Header: `commit\tscore\tstatus\tdescription` (4 columns, existing behavior)
+
+   Downstream consumers (completion.md report, resume.md progress summary) use
+   column-count auto-detect (see Task 19.5 Step 2) to read whichever layout is
+   present.
 
 8. Initialize empty `journal.jsonl`.
 
 9. Generate `$SESSION_ROOT/strategy.yaml` with default parameters:
    ```yaml
    # strategy.yaml — Evolving strategy parameters (modified by Outer Loop)
-   version: 1
+   version: 2                          # v3.0.0 schema
 
    idea_selection:
-     method: "weighted"              # random | sequential | weighted
-     weights:
-       parameter_tuning: 0.25
-       structural_change: 0.25
-       algorithm_swap: 0.25
-       simplification: 0.25
-     candidates_per_step: 3          # idea ensemble: generate N candidates, select best 1
-     min_novelty_distance: 2         # skip ideas similar to last N attempts
+     method: "weighted"                # random | sequential | weighted
+     weights:                          # 10 categories — see protocols/taxonomy.md
+       parameter_tune: 0.15
+       refactor_simplify: 0.15
+       add_guard: 0.10
+       algorithm_swap: 0.15
+       data_preprocessing: 0.10
+       caching_memoization: 0.05
+       error_handling: 0.10
+       api_redesign: 0.10
+       test_expansion: 0.05
+       other: 0.05
+     candidates_per_step: 3
+     min_novelty_distance: 2
 
    judgment:
-     min_delta: 0.001                # minimum improvement threshold
-     crash_tolerance: 3              # N consecutive crashes → strategy review
-     marginal_policy: "discard"      # keep | discard | accumulate
+     min_delta: 0.001
+     crash_tolerance: 3
+     marginal_policy: "discard"
+     diagnose_retry:                   # v3.0.0 — spec §5.a
+       enabled: true
+       max_per_session: 10
+       severe_drop_delta: 0.05
+       error_keywords:
+         - "timeout"
+         - "nan"
+         - "inf"
+         - "shape mismatch"
+         - "exit 1"
+         - "traceback"
+         - "oom"
 
    convergence:
-     consecutive_discard_limit: 10   # N consecutive discards → strategy review
-     plateau_window: 15              # no improvement in last N → convergence
-     plateau_action: "branch"        # branch | meta_analysis | stop
+     consecutive_discard_limit: 10
+     plateau_window: 15
+     plateau_action: "branch"
 
    exploration:
-     radical_threshold: 20           # N consecutive marginal → attempt radical change
-     backtrack_enabled: true         # allow forking from previous keep commits
-     backtrack_strategy: "least_explored"  # least_explored | highest_score | random
+     radical_threshold: 20
+     backtrack_enabled: true
+     backtrack_strategy: "least_explored"
+
+   shortcut_detection:                 # v3.0.0 — spec §5.2
+     enabled: true
+     auto_flag_delta: 0.05
+     min_loc: 5
+     cumulative_threshold: 3           # 6.a.5 forced Section D trigger
+     tier3_flagged_threshold: 3        # §7.3 stagnation trigger
+     seal_prepare_read: false          # opt-in; when true, blocks reads too
+
+   legibility:                         # v3.0.0 — spec §5.2
+     enabled: true
+     require_rationale_on_keep: true
+     max_rationale_chars: 120
+     block_identical_to_description: true
+
+   entropy_tracking:                   # v3.0.0 — spec §5.2
+     enabled: true
+     window_size: 20
+     collapse_threshold_bits: 1.5
    ```
    If meta-archive lookup (A.2.5) found a similar project, use its `final_strategy` as initial values.
+
+   **Note (v3.0.0)**: If A.2.5 Meta Archive Lookup returned a v2 archive entry
+   (`schema_version < 3`), its `final_strategy.weights` were already translated to
+   10-category form via `session-helper.sh migrate_v2_weights` (see transfer.md).
+   Use the translated values as initial weights above; otherwise use the defaults.
 
 10. Show the user a summary of the generated evaluation harness:
 
