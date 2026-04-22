@@ -194,6 +194,30 @@ git commit -m "experiment: <idea description>"
 
 - Append to `journal.jsonl`: `{"id": <id>, "status": "evaluated", "score": <score>, "timestamp": "<now>"}`
 
+**Step 4.5 — Delta Measurement (v3 only):**
+
+IF $VERSION starts with "3.":
+- Compute `score_delta = score - (last kept score OR session.yaml.metric.baseline)`
+- Compute `loc_delta = abs(added + deleted)` over target_files only:
+
+```bash
+loc_delta=$(git diff --numstat HEAD~1..HEAD -- <target_file_1> <target_file_2> ... |
+  awk '{ a+=$1; d+=$2 } END { print a+d }')
+```
+
+- Amend the `evaluated` event with both fields (produce a single `evaluated` event
+  that carries `score_delta` + `loc_delta` on first write — do NOT rewrite a
+  prior event; Step 4's v3 path emits the evaluated event AFTER these deltas are
+  computed, just as Step 1.5 defers the planned event).
+
+**Reference-point contract after diagnose-retry**: when a retry via 5.a produces a
+new commit SHA_B (the original SHA_A was reset), `HEAD~1` for SHA_B is the
+pre-experiment baseline, not SHA_A. Therefore `loc_delta` on SHA_B measures the
+retry's total diff against the pre-experiment state — which is the correct
+"experiment-level" diff under the one-experiment-one-commit invariant.
+
+ELSE (v2): skip this step.
+
 **Step 5 — Judgment:**
 
 Compare `score` with `session.yaml.metric.current`:
