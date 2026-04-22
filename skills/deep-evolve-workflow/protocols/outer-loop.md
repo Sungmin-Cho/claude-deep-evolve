@@ -12,16 +12,19 @@ event is already in `journal.jsonl` for the **current generation** (i.e., after 
 most recent `outer_loop` event with `"generation": g-1`, if any, and `<=` the current
 generation being computed).
 
-| Step      | Completion check (idempotent-skip condition)                                  |
-|-----------|--------------------------------------------------------------------------------|
-| 6.5.1     | `$SESSION_ROOT/meta-analyses/gen-<g>.md` exists                                |
-| 6.5.2     | journal has `{"event": "outer_loop", "generation": g, ...}`                    |
-| 6.5.3     | journal has `{"event": "strategy_update", "generation": g, ...}`               |
-| 6.5.4     | `session.yaml.program.history` entry with `version >= new_version` OR          |
-|           | journal has `{"event": "program_skip", "generation": g, ...}` (user declined)  |
-| 6.5.4a    | journal has 1+ `{"event": "notable_marked", "generation": g, ...}` (or 0 kept) |
-| 6.5.5     | journal has `{"event": "strategy_judgment", "generation": g, ...}`             |
-| 6.5.6     | journal has `{"event": "strategy_stagnation", ...}` OR 3 gen no improve check  |
+| Step         | Completion check (idempotent-skip condition)                                                           |
+|--------------|--------------------------------------------------------------------------------------------------------|
+| 6.5.1        | `$SESSION_ROOT/meta-analyses/gen-<g>.md` exists                                                        |
+| 6.5.1.ent    | journal has `{"event": "entropy_snapshot", "generation": g, ...}`                                      |
+| 6.5.2        | journal has `{"event": "outer_loop", "generation": g, ...}`                                            |
+| 6.5.3.keep   | journal has `{"event": "strategy_update", "generation": g, "reason" != "entropy_collapse_response", ...}` |
+| 6.5.3.ent    | journal has `{"event": "strategy_update", "generation": g, "reason": "entropy_collapse_response", ...}` |
+| 6.5.4        | `session.yaml.program.history` entry with `version >= new_version` OR                                  |
+|              | journal has `{"event": "program_skip", "generation": g, ...}` (user declined)                          |
+| 6.5.4a       | journal has 1+ `{"event": "notable_marked", "generation": g, ...}` (or 0 kept)                         |
+| 6.5.5        | journal has `{"event": "strategy_judgment", "generation": g, ...}`                                     |
+| 6.5.6        | journal has `{"event": "strategy_stagnation", ...}` OR 3 gen no improve check                          |
+| 6.5.6.tier3r | journal has `{"event": "tier3_flagged_reset", "generation": g, ...}` (only after Tier 3 expansion fired in this generation) |
 
 This removes the need for a separate `current_phase` field. resume.md Step 5 simply
 routes paused sessions to outer-loop.md; this protocol self-heals by event replay.
@@ -104,6 +107,35 @@ Analyze experiment results for the current generation's interval:
    - crash_rate: <value>
    - idea_diversity: <value>
    ```
+
+### 6.5.1 (v3 addendum) — Entropy Snapshot
+
+IF $VERSION starts with "3.":
+- Check journal for an existing `entropy_snapshot` event with the current
+  generation's `g` value. If present, skip (idempotent).
+- Otherwise, invoke:
+
+```bash
+# Extract window_size from strategy.yaml using grep/sed (matches existing
+# deep_evolve_version extraction pattern from Task 9 Step 1; no yq dependency).
+window_size=$(grep -A 10 "^entropy_tracking:" "$SESSION_ROOT/strategy.yaml" | \
+  grep '^\s*window_size:' | head -1 | sed 's/.*:[[:space:]]*//; s/\s*$//')
+# Default to 20 if the field is missing or empty.
+[[ -z "$window_size" ]] && window_size=20
+
+result=$(bash "$CLAUDE_PLUGIN_ROOT/hooks/scripts/session-helper.sh" entropy_compute \
+  "$SESSION_ROOT/journal.jsonl" "$window_size")
+H=$(echo "$result" | jq -r '.entropy_bits')
+K=$(echo "$result" | jq -r '.active_categories')
+```
+
+- Append to journal:
+  `{"event": "entropy_snapshot", "generation": <g>, "entropy_bits": <H or null>, "active_categories": <K>, "timestamp": "..."}`
+- IF `H` is not null AND `H < strategy.entropy_tracking.collapse_threshold_bits`:
+  - Append: `{"event": "entropy_collapse", "generation": <g>, "entropy_bits": <H>, "threshold": <T>, "timestamp": "..."}`
+  - Update `session.yaml.entropy.last_collapse_generation = <g>`
+
+ELSE (v2): skip.
 
 ## Step 6.5.2 — Q(v) Meta-Metric Computation
 
