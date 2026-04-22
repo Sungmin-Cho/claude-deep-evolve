@@ -15,6 +15,9 @@ You are running the **deep-evolve** autonomous experimentation protocol.
 
 - **Scoring Contract**: score는 항상 higher-is-better. minimize 메트릭은 evaluation harness 내부에서 `score = BASELINE_SCORE / raw_score` 변환 적용 (clamp 없음, >1.0 허용). baseline=1.0, 개선 시 >1.0, 악화 시 <1.0. init.md Step 11 writeback으로 minimize 메트릭도 baseline=1.0 보장 (v2.2.2/C-7).
 - **보호 파일**: `prepare.py`, `prepare-protocol.md`, `strategy.yaml` — `DEEP_EVOLVE_META_MODE` 설정 없이는 수정 불가 (protect-readonly hook). status=`initializing` 동안에는 hook 미적용 (init 중 writeback 허용, v2.2.2/C-7).
+- **Seal Prepare Read (v3.0.0 opt-in)**: `strategy.yaml.shortcut_detection.seal_prepare_read: true` 설정 시
+  inner-loop.md Step 0 (resume reconciliation) 진입 시점에 `DEEP_EVOLVE_SEAL_PREPARE=1`을 현재 프로세스 환경에
+  export하여 protect-readonly.sh Read branch를 활성화. 실험 중 prepare.py / prepare-protocol.md Read 차단.
 - **상태 파일**: `session.yaml` (세션 설정+진행), `journal.jsonl` (이벤트 로그), `results.tsv` (실험 결과)
 - **세션 생명주기 (v2.2.2)**: `initializing` → `active` → `paused` (outer loop 중) → `active` → `completed` / `aborted`
 - **Resume 불변식 (v2.2.2)**: Outer Loop 각 sub-step은 journal 이벤트(`outer_loop`, `strategy_update`, `strategy_judgment`, `notable_marked`, `program_skip`)로 식별되며, resume 시 해당 이벤트가 이미 있으면 스킵 → idempotent.

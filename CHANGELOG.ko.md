@@ -1,5 +1,69 @@
 # 변경 이력
 
+## [3.0.0] — 2026-04-22 (AAR 기반 증거 중심 Hill-Climbing)
+
+AAR 논문(Wen et al. 2026, Anthropic Alignment Science Blog)에서 영감 받은 4개
+동작 레이어를 Inner/Outer Loop에 추가하는 major 릴리스. `session.yaml.deep_evolve_version: "3.0.0"`로 게이팅.
+v2.2.2 세션은 soft migration으로 완전 지원.
+
+### 추가
+- **Idea-category entropy 추적** (§7.1): 10-카테고리 taxonomy
+  (`protocols/taxonomy.md`); Outer Loop마다 Shannon entropy 계산
+  (`session-helper.sh entropy_compute` 신규); `entropy_snapshot` / `entropy_collapse`
+  journal 이벤트; Tier 1 entropy overlay (6.5.3).
+- **Legibility Gate** (§6 Step 5.d): 모든 `kept` 이벤트에 rationale 강제 (Medium).
+  Flagged keep은 Hard로 승격 — 설명 불가 시 discard 전환. 누락 카운터는 완료
+  리포트에 노출.
+- **Shortcut Detector** (§6 Step 5.c + 6.a.5): `score_delta ≥ 0.05 AND loc_delta ≤ 5` 기준 flag.
+  누적 3회 시 Section D prepare 확장 강제 발화, flagged commit의 diff를 재생성
+  프롬프트에 주입 (§7.3). Hard-reject 시에도 포렌식 row 기록.
+  End-to-end opt-in `seal_prepare_read` — strategy.yaml → `DEEP_EVOLVE_SEAL_PREPARE=1`
+  → PreToolUse hook이 prepare.py Read 차단.
+- **Diagnose-and-Retry** (§6 Step 5.a): crash / severe drop(>5%) / 에러 키워드 시
+  1회 복구 재시도. 세션 상한 10회. Retry는 reset + new commit + `retry_of` 링크.
+  Give_up 경로 별도 기록. Per-experiment 재시도 journal replay로 1회 강제.
+- **10-카테고리 taxonomy**: `parameter_tune, refactor_simplify, add_guard,
+  algorithm_swap, data_preprocessing, caching_memoization, error_handling,
+  api_redesign, test_expansion, other`.
+- **v2→v3 결정론적 매핑** — meta-archive A.2.5 lookup (§8.2).
+  `session-helper.sh migrate_v2_weights` 서브커맨드로 변환.
+- **신규 `session-helper.sh` 서브커맨드**: `entropy_compute`, `migrate_v2_weights`,
+  `count_flagged_since_last_expansion`, `retry_budget_remaining`.
+- **pytest 테스트 스위트** (`hooks/scripts/tests/`, 9개 테스트).
+- **Fixtures** (`hooks/scripts/tests/fixtures/`): `shortcut_bait/` (Scenario B),
+  `legibility_medium/` (Scenario A), `dogfood_target/` (self-dogfooding).
+
+### 변경
+- `strategy.yaml` 스키마 `version: 2` (v3 세션) — 10 카테고리 weights + 신규
+  `shortcut_detection`, `legibility`, `entropy_tracking` 섹션 + `judgment.diagnose_retry`.
+- `session.yaml`에 `shortcut`, `diagnose_retry`, `legibility`, `entropy` 블록
+  추가 (v3 세션). `deep_evolve_version`을 `"3.0.0"`로 업그레이드.
+- `results.tsv` v3 세션은 9 컬럼 (`category`, `score_delta`, `loc_delta`,
+  `flagged`, `rationale` 추가). v2 세션은 4 컬럼 유지.
+  Consumer(completion.md/resume.md)가 header의 column 수로 auto-detect.
+- `journal.jsonl` 확장: `planned.idea_category`, `committed.retry_of`,
+  `kept.{rationale, score_delta, loc_delta, flagged}`, `discarded.reason` 확장.
+  신규 이벤트: `diagnose_retry_started/completed`, `shortcut_flagged`,
+  `shortcut_escalation`, `entropy_snapshot`, `entropy_collapse`,
+  `rationale_missing`, `tier3_flagged_reset`.
+- Completion report에 "v3.0.0 Signals" 섹션 추가.
+- `hooks.json` matcher에 `Read` 추가 (`DEEP_EVOLVE_SEAL_PREPARE=1` opt-in으로만
+  활성화, default off — v2 행동 보존).
+- `protect-readonly.sh`에 상대 경로 정규화 포함 opt-in Read branch 추가.
+
+### 마이그레이션
+- v2.2.2 세션 resume 시 기존 v2 코드 경로 그대로 + 경고 배너 (`resume.md` Step 4).
+- v2 meta-archive 엔트리는 A.2.5 read 시 결정론적 매핑으로 변환 (floor는
+  pre-normalize seed, post-normalize invariant 아님 — spec §5.1 참조).
+- Deprecation 로드맵: 3.0.x v2 full support → 3.1.0 warning → 3.2.0 read-only
+  completion → 4.0.0 v2 스키마 제거.
+
+### 3.0.0에 미포함 (3.1.0로 연기)
+- Virtual parallel N-seed per epoch.
+- Cross-project transfer upstream-signal validation gate.
+
+---
+
 ## v2.2.2
 
 ### Critical Fixes

@@ -1,0 +1,118 @@
+"""pytest suite for v3 session-helper subcommands."""
+
+
+def test_entropy_compute_mixed_categories(run_helper, make_journal):
+    journal = make_journal([
+        ("parameter_tune", 3),
+        ("algorithm_swap", 2),
+        ("add_guard", 2),
+    ])
+    result = run_helper("entropy_compute", str(journal))
+    # Shannon entropy of distribution {3/7, 2/7, 2/7} ≈ 1.557 bits
+    assert 1.3 < result["entropy_bits"] < 1.6
+    assert result["active_categories"] == 3
+
+
+def test_entropy_compute_insufficient_sample(run_helper, make_journal):
+    # Only 4 tagged planned events — threshold is < 5
+    journal = make_journal([("parameter_tune", 4)])
+    result = run_helper("entropy_compute", str(journal))
+    assert result.get("reason") == "insufficient_sample"
+    assert result.get("entropy_bits") is None
+
+
+def test_entropy_compute_window_respected(run_helper, make_journal):
+    # 25 events total, default window is 20 — last 20 should be 100% algorithm_swap
+    journal = make_journal([
+        ("parameter_tune", 5),   # oldest 5 (outside window)
+        ("algorithm_swap", 20),  # newest 20 (inside window)
+    ])
+    result = run_helper("entropy_compute", str(journal))
+    # Single category within window → entropy = 0, active_categories = 1
+    assert result["entropy_bits"] == 0.0
+    assert result["active_categories"] == 1
+
+
+import json
+
+
+def test_migrate_v2_weights_normalized(run_helper, tmp_path):
+    v2 = {
+        "parameter_tuning": 0.2,
+        "structural_change": 0.4,
+        "algorithm_swap": 0.2,
+        "simplification": 0.2,
+    }
+    input_file = tmp_path / "v2.json"
+    input_file.write_text(json.dumps(v2))
+    result = run_helper("migrate_v2_weights", str(input_file))
+    weights = result["weights"]
+    assert len(weights) == 10
+    assert abs(sum(weights.values()) - 1.0) < 1e-9
+    assert abs(weights["parameter_tune"] - 0.2 / 1.20) < 1e-6
+    assert abs(weights["refactor_simplify"] - 0.2 / 1.20) < 1e-6
+    assert abs(weights["algorithm_swap"] - 0.2 / 1.20) < 1e-6
+    assert abs(weights["add_guard"] - (0.4 / 3) / 1.20) < 1e-6
+    assert abs(weights["other"] - 0.05 / 1.20) < 1e-6
+
+
+def test_migrate_v2_weights_pathological_all_structural(run_helper, tmp_path):
+    v2 = {"structural_change": 1.0}
+    input_file = tmp_path / "v2.json"
+    input_file.write_text(json.dumps(v2))
+    result = run_helper("migrate_v2_weights", str(input_file))
+    weights = result["weights"]
+    assert weights["parameter_tune"] == 0.0
+    assert weights["refactor_simplify"] == 0.0
+    assert weights["algorithm_swap"] == 0.0
+    assert abs(weights["add_guard"] - (1.0 / 3) / 1.20) < 1e-6
+    assert abs(weights["other"] - 0.05 / 1.20) < 1e-6
+    assert abs(sum(weights.values()) - 1.0) < 1e-9
+
+
+def test_count_flagged_respects_escalation_reset(run_helper, make_journal):
+    journal = make_journal([
+        {"event": "shortcut_flagged", "id": 1, "commit": "a", "timestamp": "t1"},
+        {"event": "shortcut_flagged", "id": 2, "commit": "b", "timestamp": "t2"},
+        {"event": "shortcut_flagged", "id": 3, "commit": "c", "timestamp": "t3"},
+        {"event": "shortcut_escalation", "cumulative": 3, "timestamp": "t4"},
+        {"event": "shortcut_flagged", "id": 4, "commit": "d", "timestamp": "t5"},
+    ])
+    result = run_helper("count_flagged_since_last_expansion", str(journal))
+    assert result["count"] == 1
+
+
+def test_count_flagged_no_escalation_yet(run_helper, make_journal):
+    journal = make_journal([
+        {"event": "shortcut_flagged", "id": 1, "commit": "a", "timestamp": "t1"},
+        {"event": "shortcut_flagged", "id": 2, "commit": "b", "timestamp": "t2"},
+    ])
+    result = run_helper("count_flagged_since_last_expansion", str(journal))
+    assert result["count"] == 2
+
+
+def test_retry_budget_ignores_crashes(run_helper, make_journal):
+    journal = make_journal([
+        {"event": "diagnose_retry_started", "id": 1, "timestamp": "t1"},
+        {"event": "diagnose_retry_completed", "id": 1, "outcome": "recovered", "timestamp": "t2"},
+        {"event": "diagnose_retry_started", "id": 2, "timestamp": "t3"},
+        {"event": "diagnose_retry_completed", "id": 2, "outcome": "gave_up", "timestamp": "t4"},
+        {"event": "diagnose_retry_started", "id": 3, "timestamp": "t5"},
+        {"event": "diagnose_retry_completed", "id": 3, "outcome": "failed", "timestamp": "t6"},
+        {"id": 4, "status": "discarded", "reason": "crash", "timestamp": "t7"},
+        {"id": 5, "status": "discarded", "reason": "crash", "timestamp": "t8"},
+    ])
+    result = run_helper("retry_budget_remaining", str(journal), "10")
+    assert result["used"] == 3
+    assert result["remaining"] == 7
+
+
+def test_retry_budget_exhausted(run_helper, make_journal):
+    entries = [
+        {"event": "diagnose_retry_started", "id": i, "timestamp": f"t{i}"}
+        for i in range(1, 11)
+    ]
+    journal = make_journal(entries)
+    result = run_helper("retry_budget_remaining", str(journal), "10")
+    assert result["used"] == 10
+    assert result["remaining"] == 0

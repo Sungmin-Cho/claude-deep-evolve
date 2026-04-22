@@ -3,7 +3,7 @@
 # Usage: session-helper.sh <subcommand> [args...]
 set -Eeuo pipefail
 
-HELPER_VERSION="2.2.2"
+HELPER_VERSION="3.0.0"
 export DEEP_EVOLVE_HELPER=1
 
 # === Dependencies ===
@@ -105,10 +105,18 @@ ensure_evolve_dir() {
 
 cmd_help() {
   echo "session-helper.sh v$HELPER_VERSION"
-  echo "Subcommands: compute_session_id, resolve_current, list_sessions,"
+  echo ""
+  echo "Session lifecycle:"
+  echo "  compute_session_id, resolve_current, list_sessions,"
   echo "  start_new_session, mark_session_status, append_sessions_jsonl,"
   echo "  migrate_legacy, check_branch_alignment, detect_orphan_experiment,"
   echo "  append_meta_archive_local, render_inherited_context, lineage_tree"
+  echo ""
+  echo "v3.0.0 subcommands (AAR-inspired):"
+  echo "  entropy_compute <journal> [window_size]         — Shannon entropy over recent planned events"
+  echo "  migrate_v2_weights <v2_json>                    — Translate 4-cat v2 weights to 10-cat v3"
+  echo "  count_flagged_since_last_expansion <journal>    — Count shortcut_flagged since last reset"
+  echo "  retry_budget_remaining <journal> [cap]          — Diagnose-retry budget remaining"
 }
 
 cmd_compute_session_id() {
@@ -634,6 +642,152 @@ cmd_lineage_tree() {
   '
 }
 
+cmd_entropy_compute() {
+  local journal_path="${1:-}"
+  local window_size="${2:-20}"
+  if [[ -z "$journal_path" || ! -f "$journal_path" ]]; then
+    echo '{"error":"missing or nonexistent journal path"}' >&2
+    return 1
+  fi
+  python3 - "$journal_path" "$window_size" <<'PY'
+import json, sys, math
+from collections import Counter
+
+journal_path, window_size = sys.argv[1], int(sys.argv[2])
+planned = []
+with open(journal_path) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if evt.get("status") == "planned" and evt.get("idea_category"):
+            planned.append(evt["idea_category"])
+
+recent = planned[-window_size:]
+if len(recent) < 5:
+    print(json.dumps({
+        "entropy_bits": None,
+        "active_categories": len(set(recent)),
+        "reason": "insufficient_sample",
+        "sample_size": len(recent),
+    }))
+    sys.exit(0)
+
+dist = Counter(recent)
+total = sum(dist.values())
+H = 0.0
+for c in dist.values():
+    p = c / total
+    if p > 0:
+        H -= p * math.log2(p)
+print(json.dumps({
+    "entropy_bits": round(H, 6),
+    "active_categories": len(dist),
+    "sample_size": total,
+}))
+PY
+}
+
+cmd_migrate_v2_weights() {
+  local v2_json="${1:-}"
+  if [[ -z "$v2_json" || ! -f "$v2_json" ]]; then
+    echo '{"error":"missing or nonexistent v2 weights JSON"}' >&2
+    return 1
+  fi
+  python3 - "$v2_json" <<'PY'
+import json, sys
+
+v2 = json.load(open(sys.argv[1]))
+FLOOR = 0.05
+pre = {
+    "parameter_tune":      v2.get("parameter_tuning", 0.0),
+    "refactor_simplify":   v2.get("simplification", 0.0),
+    "algorithm_swap":      v2.get("algorithm_swap", 0.0),
+    "add_guard":           v2.get("structural_change", 0.0) / 3.0,
+    "api_redesign":        v2.get("structural_change", 0.0) / 3.0,
+    "error_handling":      v2.get("structural_change", 0.0) / 3.0,
+    "data_preprocessing":  FLOOR,
+    "caching_memoization": FLOOR,
+    "test_expansion":      FLOOR,
+    "other":               FLOOR,
+}
+total = sum(pre.values())
+if total > 0:
+    weights = {k: (v / total) for k, v in pre.items()}
+else:
+    # Defensive: total==0 is unreachable in practice (4 FLOOR=0.05 entries
+    # guarantee total >= 0.20) but if someone disables the floor in a future
+    # refactor, emit even-split 10-category weights rather than all-zeros.
+    weights = {k: 0.1 for k in pre.keys()}
+print(json.dumps({"weights": weights, "pre_normalize_sum": round(total, 6)}))
+PY
+}
+
+cmd_count_flagged_since_last_expansion() {
+  local journal_path="${1:-}"
+  if [[ -z "$journal_path" || ! -f "$journal_path" ]]; then
+    echo '{"error":"missing or nonexistent journal path"}' >&2
+    return 1
+  fi
+  python3 - "$journal_path" <<'PY'
+import json, sys
+
+events = []
+with open(sys.argv[1]) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+
+last_reset_idx = -1
+for i, evt in enumerate(events):
+    if evt.get("event") in ("shortcut_escalation", "tier3_flagged_reset"):
+        last_reset_idx = i
+
+count = sum(
+    1 for evt in events[last_reset_idx + 1:]
+    if evt.get("event") == "shortcut_flagged"
+)
+print(json.dumps({"count": count, "last_reset_idx": last_reset_idx}))
+PY
+}
+
+cmd_retry_budget_remaining() {
+  local journal_path="${1:-}"
+  local max_per_session="${2:-10}"
+  if [[ -z "$journal_path" || ! -f "$journal_path" ]]; then
+    echo '{"error":"missing or nonexistent journal path"}' >&2
+    return 1
+  fi
+  python3 - "$journal_path" "$max_per_session" <<'PY'
+import json, sys
+
+journal_path, cap = sys.argv[1], int(sys.argv[2])
+used = 0
+with open(journal_path) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if evt.get("event") == "diagnose_retry_started":
+            used += 1
+remaining = max(0, cap - used)
+print(json.dumps({"used": used, "remaining": remaining, "cap": cap}))
+PY
+}
+
 # === Parse global flags ===
 ARGS=()
 for arg in "$@"; do
@@ -666,5 +820,9 @@ case "$SUBCMD" in
   append_meta_archive_local) cmd_append_meta_archive_local "$@" ;;
   render_inherited_context) cmd_render_inherited_context "$@" ;;
   lineage_tree) cmd_lineage_tree "$@" ;;
+  entropy_compute) cmd_entropy_compute "$@" ;;
+  migrate_v2_weights) cmd_migrate_v2_weights "$@" ;;
+  count_flagged_since_last_expansion) cmd_count_flagged_since_last_expansion "$@" ;;
+  retry_budget_remaining) cmd_retry_budget_remaining "$@" ;;
   *) echo "session-helper: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
 esac

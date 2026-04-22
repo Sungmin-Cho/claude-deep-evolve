@@ -103,6 +103,11 @@ PROTECTED_STRATEGY="$SESSION_ROOT/strategy.yaml"
 # Meta modes (DEEP_EVOLVE_META_MODE):
 #   program_update — allows program.md writes only (Phase 1 meta analysis)
 #   outer_loop     — allows both program.md and strategy.yaml writes (Phase 2 Outer Loop)
+#   prepare_update — (v3.0.0) allows prepare.py / prepare-protocol.md writes during
+#                    Section D (Prepare Expansion), invoked manually OR forced by
+#                    inner-loop.md Step 6.a.5 shortcut escalation, OR by outer-loop.md
+#                    Step 6.5.6 Tier 3 auto-expansion. Must be exported before Write
+#                    and unset after.
 META_MODE="${DEEP_EVOLVE_META_MODE:-}"
 
 block_protected() {
@@ -112,8 +117,36 @@ JSON
   exit 2
 }
 
+# === v3.0.0: optional read-block for prepare.py / prepare-protocol.md ===
+# Gated on DEEP_EVOLVE_SEAL_PREPARE=1 (opt-in from strategy.yaml.shortcut_detection).
+# Blocks Read tool calls that would reveal scenario text the agent could hardcode
+# answers against. Default off → existing behavior preserved.
+SEAL_PREPARE_READ="${DEEP_EVOLVE_SEAL_PREPARE:-}"
+if [[ "$SEAL_PREPARE_READ" == "1" && "$TOOL_NAME" == "Read" ]]; then
+  FILE_PATH=""
+  if echo "$TOOL_INPUT" | grep -q '"file_path"'; then
+    FILE_PATH="$(echo "$TOOL_INPUT" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+  fi
+  if [[ -n "$FILE_PATH" ]]; then
+    # Canonicalize: relative paths resolved against PROJECT_ROOT (matches
+    # existing Write/Edit branch below; fixes relative-path bypass).
+    FILE_PATH="$(normalize_path "$FILE_PATH")"
+    if [[ "$FILE_PATH" =~ ^[A-Za-z]:/ ]] || [[ "$FILE_PATH" == /* ]]; then
+      : # already absolute
+    else
+      FILE_PATH="$(normalize_path "$PROJECT_ROOT/$FILE_PATH")"
+    fi
+    if [[ "$FILE_PATH" == "$PROTECTED_PREPARE" || "$FILE_PATH" == "$PROTECTED_PROTOCOL" ]]; then
+      cat <<JSON
+{"decision":"block","reason":"Deep Evolve Guard (v3 seal_prepare_read): 실험 중 prepare.py / prepare-protocol.md의 Read가 차단되었습니다. shortcut 탐지 회피용 하드코드 방지. 비활성화하려면 strategy.yaml.shortcut_detection.seal_prepare_read: false."}
+JSON
+      exit 2
+    fi
+  fi
+fi
+
 # ── Write/Edit/MultiEdit: check file_path ──
-if [[ "$TOOL_NAME" != "Bash" ]]; then
+if [[ "$TOOL_NAME" != "Bash" && "$TOOL_NAME" != "Read" ]]; then
   FILE_PATH=""
   if echo "$TOOL_INPUT" | grep -q '"file_path"'; then
     FILE_PATH="$(echo "$TOOL_INPUT" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
@@ -132,7 +165,10 @@ if [[ "$TOOL_NAME" != "Bash" ]]; then
   fi
 
   case "$FILE_PATH" in
-    "$PROTECTED_PREPARE"|"$PROTECTED_PROTOCOL") block_protected ;;
+    "$PROTECTED_PREPARE"|"$PROTECTED_PROTOCOL")
+      if [[ "$META_MODE" != "prepare_update" ]]; then
+        block_protected
+      fi ;;
     "$PROTECTED_PROGRAM")
       if [[ "$META_MODE" != "program_update" && "$META_MODE" != "outer_loop" ]]; then
         block_protected
@@ -156,7 +192,10 @@ if [[ -z "$COMMAND" ]]; then
 fi
 
 # Build protected file list (conditional on META_MODE)
-BASH_PROTECTED_FILES=("prepare.py" "prepare-protocol.md" "$SESSION_ROOT/prepare.py" "$SESSION_ROOT/prepare-protocol.md")
+BASH_PROTECTED_FILES=()
+if [[ "$META_MODE" != "prepare_update" ]]; then
+  BASH_PROTECTED_FILES+=("prepare.py" "prepare-protocol.md" "$SESSION_ROOT/prepare.py" "$SESSION_ROOT/prepare-protocol.md")
+fi
 if [[ "$META_MODE" != "program_update" && "$META_MODE" != "outer_loop" ]]; then
   BASH_PROTECTED_FILES+=("program.md" "$SESSION_ROOT/program.md")
 fi

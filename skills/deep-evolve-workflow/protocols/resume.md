@@ -99,6 +99,42 @@ If counter appears inconsistent: warn and adopt safe default (0 if generation ju
 
 ## Step 4 — Display resume summary
 
+### v2 Compatibility Banner (v3 code path)
+
+Read `$SESSION_ROOT/session.yaml` and extract `deep_evolve_version`:
+
+```bash
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
+```
+
+IF `$VERSION` does NOT start with `3.` (i.e., `"2.2.2"` or earlier):
+Display the following banner to the user before the progress summary:
+
+```
+⚠ This session uses v2.2.2 schema. v3 features (entropy tracking,
+legibility enforcement, shortcut detection, diagnose-retry) are not
+applied. Start a new session to enable them.
+```
+
+Then continue with the existing Step 4 flow (progress summary etc.).
+
+ELSE ($VERSION starts with "3."):
+No banner. Proceed directly to progress summary.
+
+**Column-count auto-detect (v3 addition)**:
+
+Read the first line of `$SESSION_ROOT/results.tsv`:
+
+```bash
+header_cols=$(head -1 "$SESSION_ROOT/results.tsv" | awk -F'\t' '{print NF}')
+```
+
+IF `$header_cols == 4`: v2 schema — columns are `commit score status description`.
+IF `$header_cols == 9`: v3 schema — columns are `commit score status category score_delta loc_delta flagged rationale description`.
+ELSE: abort with error: "Unexpected results.tsv column count: $header_cols. Expected 4 (v2) or 9 (v3)."
+
+All downstream parsing in this report must use the detected column layout.
+
 ```
 Deep Evolve 세션을 재개합니다
 

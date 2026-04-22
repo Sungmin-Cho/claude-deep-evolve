@@ -12,16 +12,19 @@ event is already in `journal.jsonl` for the **current generation** (i.e., after 
 most recent `outer_loop` event with `"generation": g-1`, if any, and `<=` the current
 generation being computed).
 
-| Step      | Completion check (idempotent-skip condition)                                  |
-|-----------|--------------------------------------------------------------------------------|
-| 6.5.1     | `$SESSION_ROOT/meta-analyses/gen-<g>.md` exists                                |
-| 6.5.2     | journal has `{"event": "outer_loop", "generation": g, ...}`                    |
-| 6.5.3     | journal has `{"event": "strategy_update", "generation": g, ...}`               |
-| 6.5.4     | `session.yaml.program.history` entry with `version >= new_version` OR          |
-|           | journal has `{"event": "program_skip", "generation": g, ...}` (user declined)  |
-| 6.5.4a    | journal has 1+ `{"event": "notable_marked", "generation": g, ...}` (or 0 kept) |
-| 6.5.5     | journal has `{"event": "strategy_judgment", "generation": g, ...}`             |
-| 6.5.6     | journal has `{"event": "strategy_stagnation", ...}` OR 3 gen no improve check  |
+| Step         | Completion check (idempotent-skip condition)                                                           |
+|--------------|--------------------------------------------------------------------------------------------------------|
+| 6.5.1        | `$SESSION_ROOT/meta-analyses/gen-<g>.md` exists                                                        |
+| 6.5.1.ent    | journal has `{"event": "entropy_snapshot", "generation": g, ...}`                                      |
+| 6.5.2        | journal has `{"event": "outer_loop", "generation": g, ...}`                                            |
+| 6.5.3.keep   | journal has `{"event": "strategy_update", "generation": g, "reason" != "entropy_collapse_response", ...}` |
+| 6.5.3.ent    | journal has `{"event": "strategy_update", "generation": g, "reason": "entropy_collapse_response", ...}` |
+| 6.5.4        | `session.yaml.program.history` entry with `version >= new_version` OR                                  |
+|              | journal has `{"event": "program_skip", "generation": g, ...}` (user declined)                          |
+| 6.5.4a       | journal has 1+ `{"event": "notable_marked", "generation": g, ...}` (or 0 kept)                         |
+| 6.5.5        | journal has `{"event": "strategy_judgment", "generation": g, ...}`                                     |
+| 6.5.6        | journal has `{"event": "strategy_stagnation", ...}` OR 3 gen no improve check                          |
+| 6.5.6.tier3r | journal has `{"event": "tier3_flagged_reset", "generation": g, ...}` (only after Tier 3 expansion fired in this generation) |
 
 This removes the need for a separate `current_phase` field. resume.md Step 5 simply
 routes paused sessions to outer-loop.md; this protocol self-heals by event replay.
@@ -44,6 +47,20 @@ The 3-tier self-evolution hierarchy:
      `session.yaml.outer_loop.inner_count = 0` (persist).
 
 All subsequent references to "current generation" in this protocol mean `current_gen`.
+
+## Protocol Entry — Version Gate
+
+Every entry to this protocol (from inner-loop.md Step 6.5 OR from resume.md's
+paused-session path) MUST initialize `$VERSION` locally. Do NOT rely on shell
+state inherited from the caller — Claude Code's Read tool loads a fresh context.
+
+```bash
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
+```
+
+All v3-gated sub-steps below (6.5.1 entropy snapshot, 6.5.3 entropy overlay,
+6.5.6 flagged-density stagnation, Tier 3 flagged evidence injection) check
+`$VERSION` locally.
 
 ## Step 6.5.1 — Meta Analysis
 
@@ -90,6 +107,35 @@ Analyze experiment results for the current generation's interval:
    - crash_rate: <value>
    - idea_diversity: <value>
    ```
+
+### 6.5.1 (v3 addendum) — Entropy Snapshot
+
+IF $VERSION starts with "3.":
+- Check journal for an existing `entropy_snapshot` event with the current
+  generation's `g` value. If present, skip (idempotent).
+- Otherwise, invoke:
+
+```bash
+# Extract window_size from strategy.yaml using grep/sed (matches existing
+# deep_evolve_version extraction pattern from Task 9 Step 1; no yq dependency).
+window_size=$(grep -A 10 "^entropy_tracking:" "$SESSION_ROOT/strategy.yaml" | \
+  grep '^\s*window_size:' | head -1 | sed 's/.*:[[:space:]]*//; s/\s*$//')
+# Default to 20 if the field is missing or empty.
+[[ -z "$window_size" ]] && window_size=20
+
+result=$(bash "$CLAUDE_PLUGIN_ROOT/hooks/scripts/session-helper.sh" entropy_compute \
+  "$SESSION_ROOT/journal.jsonl" "$window_size")
+H=$(echo "$result" | jq -r '.entropy_bits')
+K=$(echo "$result" | jq -r '.active_categories')
+```
+
+- Append to journal:
+  `{"event": "entropy_snapshot", "generation": <g>, "entropy_bits": <H or null>, "active_categories": <K>, "timestamp": "..."}`
+- IF `H` is not null AND `H < strategy.entropy_tracking.collapse_threshold_bits`:
+  - Append: `{"event": "entropy_collapse", "generation": <g>, "entropy_bits": <H>, "threshold": <T>, "timestamp": "..."}`
+  - Update `session.yaml.entropy.last_collapse_generation = <g>`
+
+ELSE (v2): skip.
 
 ## Step 6.5.2 — Q(v) Meta-Metric Computation
 
@@ -141,6 +187,32 @@ Based on meta analysis results, adjust `strategy.yaml` parameters:
 
 Increment `strategy.yaml.version`. Record changes in journal.jsonl:
 `{"event": "strategy_update", "generation": <g>, "version": <new>, "changes": {...}, "timestamp": "..."}`
+
+### 6.5.3 (v3 addendum) — Entropy Overlay
+
+IF $VERSION starts with "3." AND the most recent `entropy_snapshot` event shows
+`entropy_bits < strategy.entropy_tracking.collapse_threshold_bits`:
+
+Apply AFTER the keep-rate adjustment above, AFTER the weights are intermediate
+but BEFORE final renormalize:
+
+1. Identify underexplored categories: `{c for c in CATEGORIES if dist[c] == 0 or dist[c] < 0.05}`
+   where `dist` is the distribution of `idea_category` over the current
+   generation's `planned` events.
+2. For each underexplored `c`: `weights[c] = max(weights[c], 0.08)` (floor up).
+3. Identify top-3 explored categories by `dist[c]`. For each: `weights[c] *= 0.9`.
+4. Renormalize once: `weights[c] /= sum(weights.values())` for all c.
+5. Append `strategy_update` journal event with **both** `generation: g` AND
+   `reason: "entropy_collapse_response"` — the two-field identity is the
+   idempotency key (see outer-loop.md Resume table row `6.5.3.ent`). Before
+   appending, check journal for an existing event matching both fields; skip
+   if found.
+
+The keep-rate adjustment touches categories with data; the overlay touches
+categories without data — disjoint sets. Single final renormalize avoids
+cross-coupling drift.
+
+ELSE: skip.
 
 ## Step 6.5.4 — Tier 2: program.md Revision
 
@@ -223,7 +295,18 @@ treat the current generation as the new epoch's baseline:
 
 Check for Outer Loop stagnation:
 
-**3 consecutive generations without Q improvement** (check `q_history`):
+**Stagnation triggers (v3 extended)**:
+
+IF $VERSION starts with "3.":
+  stagnation fires if ANY of:
+  - 3 consecutive generations without Q improvement   (existing)
+  - `session.shortcut.flagged_since_last_tier3 >= strategy.shortcut_detection.tier3_flagged_threshold`
+    (sustained flagged density since the last Tier 3 — prevents perpetual re-fire
+    by using a counter that resets, not the lifetime `total_flagged`)
+ELSE (v2):
+  stagnation fires only on the 3-consecutive-no-improve criterion.
+
+(Check `q_history` and, when on v3, also `session.shortcut.flagged_since_last_tier3`.)
 
 → **Strategy Archive Fork**: Read `protocols/archive.md`, execute **Strategy Archive Fork** section.
 
@@ -234,7 +317,54 @@ Check for Outer Loop stagnation:
 **Post-fork stagnation (3 more generations without improvement after any archive fork)**:
 → **Tier 3: Automatic Prepare Expansion with Epoch Transition** — execute inline (NOT Section D):
 
-1. **Prepare expansion**: Re-analyze the project (Stage 3 code analysis only). Generate expanded prepare.py/protocol with new scenarios or stricter criteria. Increment `session.yaml.prepare.version`.
+1. **Prepare expansion** (v3 extension — flagged evidence injection):
+
+   IF $VERSION starts with "3." AND `session.shortcut.total_flagged > 0`:
+     Collect flagged evidence:
+     ```python
+     flagged_events = journal.select(event=="shortcut_flagged")
+     evidence = []
+     for evt in flagged_events:
+         try:
+             diff = run(["git", "show", "--stat", "--patch", evt.commit,
+                         "--", *target_files], check=True).stdout
+             source = "git_show"
+         except (CalledProcessError, FileNotFoundError):
+             diff = None
+             source = "journal_only"
+         evidence.append({
+             "commit": evt.commit,
+             "diff": diff[:2048] if diff else None,
+             "description": evt.description,
+             "score_jump": evt.score_delta,
+             "loc_delta": evt.loc_delta,
+             "source": source,
+         })
+     ```
+
+     Append the evidence to the LLM prompt used for re-generating prepare.py /
+     prepare-protocol.md as a suffix:
+     ```
+     This session flagged N suspicious score jumps. The new evaluation
+     harness MUST include adversarial scenarios that catch these patterns.
+     For each pattern below (diff may be null if source=journal_only — infer
+     from description + score_jump + loc_delta), design a held-out case that
+     breaks the shortcut if the target code relied on it:
+       {evidence}
+     ```
+
+   Then re-analyze the project (Stage 3 code analysis only) and generate the
+   expanded prepare.py/protocol as before. Increment `session.yaml.prepare.version`.
+
+   **Protection bypass**: Before writing the updated prepare.py / prepare-protocol.md,
+   set `DEEP_EVOLVE_META_MODE=prepare_update` so the PreToolUse hook allows the
+   Write; unset after. Required for the same reason documented in inner-loop.md
+   Section D — `$PROTECTED_PREPARE` / `$PROTECTED_PROTOCOL` are otherwise blocked
+   while session status is `active`.
+
+   **After Tier 3 expansion completes**, reset
+   `session.shortcut.flagged_since_last_tier3 = 0`. Append:
+   `{"event": "tier3_flagged_reset", "generation": <g>, "timestamp": "..."}`
 
 2. **Epoch transition**:
    a. Close current epoch: finalize `session.yaml.evaluation_epoch.history[current]`

@@ -1,5 +1,18 @@
 # Completion Report (Section E)
 
+## Protocol Entry — Version Gate
+
+Every entry to this protocol MUST initialize `$VERSION` locally. Do NOT rely
+on shell state inherited from the caller — Claude Code's Read tool loads a
+fresh context.
+
+```bash
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
+```
+
+The v3 signals block (added in Task 16) checks `$VERSION` locally to decide
+whether to emit the v3-specific report section.
+
 ## Pre-completion: Meta Archive Update
 
 Before generating the report, record this session's strategy evolution:
@@ -8,6 +21,20 @@ Before generating the report, record this session's strategy evolution:
 ## Completion Report
 
 Generate `$SESSION_ROOT/report.md`:
+
+**Column-count auto-detect (v3 addition)**:
+
+Read the first line of `$SESSION_ROOT/results.tsv`:
+
+```bash
+header_cols=$(head -1 "$SESSION_ROOT/results.tsv" | awk -F'\t' '{print NF}')
+```
+
+IF `$header_cols == 4`: v2 schema — columns are `commit score status description`.
+IF `$header_cols == 9`: v3 schema — columns are `commit score status category score_delta loc_delta flagged rationale description`.
+ELSE: abort with error: "Unexpected results.tsv column count: $header_cols. Expected 4 (v2) or 9 (v3)."
+
+All downstream parsing in this report must use the detected column layout.
 
 Read `results.tsv` and `session.yaml` to compile:
 
@@ -35,6 +62,29 @@ Read `results.tsv` and `session.yaml` to compile:
 git diff deep-evolve/<tag>...main
 ```
 
+### v3.0.0 Signals (v3 sessions only)
+
+IF $VERSION starts with "3.":
+
+Append to report.md:
+
+```markdown
+## v3.0.0 Signals
+
+- **Idea entropy trajectory**: <comma-separated entropy_bits per generation from journal entropy_snapshot events>
+- **Shortcut flagged (total)**: <session.shortcut.total_flagged> (<pct>% of kept experiments)
+- **Hard-rejected (flagged_unexplained)**: <count from journal.jsonl `discarded` events where reason="flagged_unexplained">
+  (Count by: `grep -c '"reason":"flagged_unexplained"' $SESSION_ROOT/journal.jsonl` or `jq -c 'select(.status=="discarded" and .reason=="flagged_unexplained")' | wc -l`.
+  Note: v3 results.tsv has no `reason` column — the journal `discarded` event
+  is the authoritative source per §5.5.)
+- **Diagnose-retry**: used <session.diagnose_retry.session_retries_used>/<strategy.judgment.diagnose_retry.max_per_session>, recovered <N>, gave up <session.diagnose_retry.gave_up_count>
+- **Rationale missing**: <session.legibility.missing_rationale_count> / <total kept> (<pct>%)
+- **Section D forced (from 6.a.5)**: <count of shortcut_escalation events in journal>
+- **Tier 3 flagged-trigger fires**: <count of tier3_flagged_reset events in journal>
+```
+
+ELSE (v2): skip (existing report format unchanged).
+
 Display the report to the user.
 
 ## Evolve Receipt Generation
@@ -44,7 +94,7 @@ Generate `$SESSION_ROOT/evolve-receipt.json` from `session.yaml` and `results.ts
 ```json
 {
   "plugin": "deep-evolve",
-  "version": "2.2.2",
+  "version": "<session.yaml.deep_evolve_version>",                        // string — MUST match session's recorded version (not hardcoded). v3 sessions emit "3.0.0"; v2 sessions continuing to complete emit "2.2.2".
   "receipt_schema_version": 2,                                           // number
   "timestamp": "<ISO 8601 now>",                                         // string
   "goal": "<session.yaml.goal>",                                         // string
