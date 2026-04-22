@@ -14,16 +14,40 @@ If it exists:
    c. Project scale (LOC, target file count)
 
 3. **If a similar entry is found** (LLM confirms relevance):
-   - Use its `final_strategy` as initial values for `strategy.yaml` in A.3 step 9
-   - Inject its `program_versions` diffs into program.md generation (A.3 step 6) under a "검증된 전략 전이" section:
-     ```markdown
-     ## 전이된 전략 (유사 프로젝트에서 검증됨)
-     - 소스: <goal_description> (<project type>)
-     - Q 궤적: <q_trajectory summary>
-     - 핵심 교훈: <program diff summary>
-     ```
-   - Record transfer source: set `session.yaml.transfer.source_id = <archive_id>`
-   - Do NOT increment `usage_count` here — it is updated only in Section E.0 after session completion.
+
+   **Schema compatibility branch (v3.0.0)**:
+
+   Extract `schema_version` safely — v2 entries written before 3.0.0 do NOT
+   have this field at all. Treat missing/null as `2`:
+
+   ```bash
+   entry_schema=$(echo "$entry" | jq -r '.schema_version // 2')
+   ```
+
+   IF `entry_schema >= 3`:
+     - Use `entry.final_strategy.weights` verbatim (already 10-category).
+   ELSE (v2 entry — `entry_schema < 3`, which includes the missing-field case
+   handled above):
+     - Translate weights via a **session-scoped temp file** (NOT shared `/tmp`):
+       ```bash
+       tmpfile=$(mktemp "${TMPDIR:-/tmp}/de-v2weights.XXXXXX")
+       trap 'rm -f "$tmpfile"' EXIT
+       printf '%s' "$entry_weights_json" > "$tmpfile"
+       translated=$(bash "$CLAUDE_PLUGIN_ROOT/hooks/scripts/session-helper.sh" \
+         migrate_v2_weights "$tmpfile")
+       rm -f "$tmpfile"
+       trap - EXIT
+       ```
+       Rationale: concurrent v3 session inits would race on a hard-coded path
+       (e.g., `/tmp/v2weights.json`), potentially importing another session's
+       archive weights. `mktemp` guarantees a unique filename per invocation.
+     - Use translated weights as initial values for `strategy.yaml.idea_selection.weights`
+       in the new session's A.3 Step 9 (init.md).
+     - Log the translation reason in `session.yaml.transfer.source_schema_version = 2`.
+
+   - Inject its `program_versions` diffs into program.md generation (A.3 step 6)
+     under a "검증된 전략 전이" section (existing behavior).
+   - Record transfer source: `session.yaml.transfer.source_id = <archive_id>`.
 
 4. **If no similar entry found**: proceed with default strategy.yaml.
 
