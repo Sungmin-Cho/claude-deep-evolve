@@ -295,7 +295,18 @@ treat the current generation as the new epoch's baseline:
 
 Check for Outer Loop stagnation:
 
-**3 consecutive generations without Q improvement** (check `q_history`):
+**Stagnation triggers (v3 extended)**:
+
+IF $VERSION starts with "3.":
+  stagnation fires if ANY of:
+  - 3 consecutive generations without Q improvement   (existing)
+  - `session.shortcut.flagged_since_last_tier3 >= strategy.shortcut_detection.tier3_flagged_threshold`
+    (sustained flagged density since the last Tier 3 — prevents perpetual re-fire
+    by using a counter that resets, not the lifetime `total_flagged`)
+ELSE (v2):
+  stagnation fires only on the 3-consecutive-no-improve criterion.
+
+(Check `q_history` and, when on v3, also `session.shortcut.flagged_since_last_tier3`.)
 
 → **Strategy Archive Fork**: Read `protocols/archive.md`, execute **Strategy Archive Fork** section.
 
@@ -306,7 +317,48 @@ Check for Outer Loop stagnation:
 **Post-fork stagnation (3 more generations without improvement after any archive fork)**:
 → **Tier 3: Automatic Prepare Expansion with Epoch Transition** — execute inline (NOT Section D):
 
-1. **Prepare expansion**: Re-analyze the project (Stage 3 code analysis only). Generate expanded prepare.py/protocol with new scenarios or stricter criteria. Increment `session.yaml.prepare.version`.
+1. **Prepare expansion** (v3 extension — flagged evidence injection):
+
+   IF $VERSION starts with "3." AND `session.shortcut.total_flagged > 0`:
+     Collect flagged evidence:
+     ```python
+     flagged_events = journal.select(event=="shortcut_flagged")
+     evidence = []
+     for evt in flagged_events:
+         try:
+             diff = run(["git", "show", "--stat", "--patch", evt.commit,
+                         "--", *target_files], check=True).stdout
+             source = "git_show"
+         except (CalledProcessError, FileNotFoundError):
+             diff = None
+             source = "journal_only"
+         evidence.append({
+             "commit": evt.commit,
+             "diff": diff[:2048] if diff else None,
+             "description": evt.description,
+             "score_jump": evt.score_delta,
+             "loc_delta": evt.loc_delta,
+             "source": source,
+         })
+     ```
+
+     Append the evidence to the LLM prompt used for re-generating prepare.py /
+     prepare-protocol.md as a suffix:
+     ```
+     This session flagged N suspicious score jumps. The new evaluation
+     harness MUST include adversarial scenarios that catch these patterns.
+     For each pattern below (diff may be null if source=journal_only — infer
+     from description + score_jump + loc_delta), design a held-out case that
+     breaks the shortcut if the target code relied on it:
+       {evidence}
+     ```
+
+   Then re-analyze the project (Stage 3 code analysis only) and generate the
+   expanded prepare.py/protocol as before. Increment `session.yaml.prepare.version`.
+
+   **After Tier 3 expansion completes**, reset
+   `session.shortcut.flagged_since_last_tier3 = 0`. Append:
+   `{"event": "tier3_flagged_reset", "generation": <g>, "timestamp": "..."}`
 
 2. **Epoch transition**:
    a. Close current epoch: finalize `session.yaml.evaluation_epoch.history[current]`
