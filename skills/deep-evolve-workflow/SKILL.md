@@ -1,6 +1,6 @@
 ---
 name: deep-evolve-workflow
-version: "2.2.2"
+version: "3.0.0"
 description: |
   Autonomous experimentation protocol with goal-driven experiment loops,
   session history, resume, and lineage tracking.
@@ -9,6 +9,8 @@ description: |
   "자동으로 개선", "프로젝트 개선", "코드 최적화", "self-evolution", "자기 진화",
   "strategy", "전략 진화", "outer loop", "strategy evolution", "meta-archive",
   "stepping stones", "session history", "resume", "lineage",
+  "entropy tracking", "shortcut detection", "diagnose retry", "legibility",
+  "evidence-rich hill-climbing",
   or tasks that benefit from systematic measured improvements
   through iterative experimentation.
 ---

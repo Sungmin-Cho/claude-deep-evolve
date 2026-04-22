@@ -18,6 +18,23 @@ deep-evolve는 표준 [Harness Engineering](https://martinfowler.com/articles/ha
 
 v2.0의 Outer Loop로 deep-evolve는 한 단계 더 나아갑니다: 대상 코드뿐 아니라 실험을 이끄는 **전략** 자체를 진화시키고, 수렴이 감지되면 **평가 harness** 자체를 확장할 수도 있습니다. 이 3계층 자기 진화(파라미터 → 전략 텍스트 → 평가 확장)는 시스템을 자체 개선 프로세스를 개선하는 진정한 메타 옵티마이저로 만듭니다.
 
+## 3.0.0 신규 기능
+
+AAR 논문에서 영감 받은 4개 동작 레이어를 Inner/Outer Loop에 추가. v3 세션에서만
+활성화 — v2.2.2 세션은 기존 코드 경로 그대로 유지.
+
+- **Idea-category entropy 추적** — 10 카테고리 taxonomy + Outer Loop마다
+  Shannon entropy 계산. Tier 1 overlay로 탐험 collapse 방지.
+- **Legibility Gate** — 모든 `kept` 이벤트에 rationale 강제. Flagged keep은
+  빈값 또는 description과 동일 시 discard로 전환.
+- **Shortcut Detector** — 작은 코드 변경으로 큰 score jump 발생 시 flag.
+  누적 3회 시 Section D prepare 확장 강제 발화, flagged commit의 diff를
+  기반으로 한 adversarial scenarios로 재생성.
+- **Diagnose-and-Retry** — crash / severe drop / 에러 키워드 시 1회 복구
+  재시도. 세션 상한 10회. Per-experiment 재시도 journal replay로 1회 강제.
+
+참고: Wen et al. 2026, "Automated Weak-to-Strong Researcher" (Anthropic Alignment Science Blog).
+
 ## 자기 진화 실험 루프 (v2.0)
 
 v2.0은 시스템이 대상 코드뿐 아니라 실험을 이끄는 **전략** 자체를 진화시키는 자기 진화 아키텍처를 도입합니다.

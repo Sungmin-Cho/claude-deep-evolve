@@ -18,6 +18,23 @@ deep-evolve operates **outside** the standard [Harness Engineering](https://mart
 
 With v2.0's Outer Loop, deep-evolve goes further: it not only improves the target code but also evolves the **strategy** that drives experiments — and can even expand the **evaluation harness** itself when convergence is detected. This 3-layer self-evolution (parameters → strategy text → evaluation expansion) makes the system a true meta-optimizer that improves its own improvement process.
 
+## What's New in 3.0.0
+
+Four AAR-inspired behavioral layers added to the Inner/Outer Loop. All new features
+activate only on v3 sessions; v2.2.2 sessions continue to run unchanged code paths.
+
+- **Idea-category entropy tracking** — 10-category taxonomy with Shannon entropy
+  computed per Outer Loop. Tier 1 entropy overlay prevents exploration collapse.
+- **Legibility Gate** — mandatory rationale on every `kept` event. Flagged keeps
+  require a non-empty, non-identical rationale or convert to discard.
+- **Shortcut Detector** — flags keeps where a tiny code change produces a large
+  score jump. Three flags force automatic Section D prepare expansion with
+  adversarial scenarios derived from the flagged commits' diffs.
+- **Diagnose-and-Retry** — one-shot recovery on crash / severe drop / error
+  keywords. Session cap 10 retries. Per-experiment retry capped at 1 via journal replay.
+
+Reference: Wen et al. 2026, "Automated Weak-to-Strong Researcher" (Anthropic Alignment Science Blog).
+
 ## Self-Evolutionary Experiment Loop (v2.0)
 
 v2.0 introduces a self-evolutionary architecture where the system not only improves target code but also evolves the **strategy** that drives experiments.
