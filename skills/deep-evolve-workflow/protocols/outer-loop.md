@@ -45,6 +45,20 @@ The 3-tier self-evolution hierarchy:
 
 All subsequent references to "current generation" in this protocol mean `current_gen`.
 
+## Protocol Entry — Version Gate
+
+Every entry to this protocol (from inner-loop.md Step 6.5 OR from resume.md's
+paused-session path) MUST initialize `$VERSION` locally. Do NOT rely on shell
+state inherited from the caller — Claude Code's Read tool loads a fresh context.
+
+```bash
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
+```
+
+All v3-gated sub-steps below (6.5.1 entropy snapshot, 6.5.3 entropy overlay,
+6.5.6 flagged-density stagnation, Tier 3 flagged evidence injection) check
+`$VERSION` locally.
+
 ## Step 6.5.1 — Meta Analysis
 
 Analyze experiment results for the current generation's interval:
