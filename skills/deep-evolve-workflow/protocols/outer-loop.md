@@ -188,6 +188,32 @@ Based on meta analysis results, adjust `strategy.yaml` parameters:
 Increment `strategy.yaml.version`. Record changes in journal.jsonl:
 `{"event": "strategy_update", "generation": <g>, "version": <new>, "changes": {...}, "timestamp": "..."}`
 
+### 6.5.3 (v3 addendum) — Entropy Overlay
+
+IF $VERSION starts with "3." AND the most recent `entropy_snapshot` event shows
+`entropy_bits < strategy.entropy_tracking.collapse_threshold_bits`:
+
+Apply AFTER the keep-rate adjustment above, AFTER the weights are intermediate
+but BEFORE final renormalize:
+
+1. Identify underexplored categories: `{c for c in CATEGORIES if dist[c] == 0 or dist[c] < 0.05}`
+   where `dist` is the distribution of `idea_category` over the current
+   generation's `planned` events.
+2. For each underexplored `c`: `weights[c] = max(weights[c], 0.08)` (floor up).
+3. Identify top-3 explored categories by `dist[c]`. For each: `weights[c] *= 0.9`.
+4. Renormalize once: `weights[c] /= sum(weights.values())` for all c.
+5. Append `strategy_update` journal event with **both** `generation: g` AND
+   `reason: "entropy_collapse_response"` — the two-field identity is the
+   idempotency key (see outer-loop.md Resume table row `6.5.3.ent`). Before
+   appending, check journal for an existing event matching both fields; skip
+   if found.
+
+The keep-rate adjustment touches categories with data; the overlay touches
+categories without data — disjoint sets. Single final renormalize avoids
+cross-coupling drift.
+
+ELSE: skip.
+
 ## Step 6.5.4 — Tier 2: program.md Revision
 
 Based on meta analysis, propose program.md revision:
