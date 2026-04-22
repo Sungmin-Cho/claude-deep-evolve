@@ -634,6 +634,56 @@ cmd_lineage_tree() {
   '
 }
 
+cmd_entropy_compute() {
+  local journal_path="${1:-}"
+  local window_size="${2:-20}"
+  if [[ -z "$journal_path" || ! -f "$journal_path" ]]; then
+    echo '{"error":"missing or nonexistent journal path"}' >&2
+    return 1
+  fi
+  python3 - "$journal_path" "$window_size" <<'PY'
+import json, sys, math
+from collections import Counter
+
+journal_path, window_size = sys.argv[1], int(sys.argv[2])
+planned = []
+with open(journal_path) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if evt.get("status") == "planned" and evt.get("idea_category"):
+            planned.append(evt["idea_category"])
+
+recent = planned[-window_size:]
+if len(recent) < 5:
+    print(json.dumps({
+        "entropy_bits": None,
+        "active_categories": len(set(recent)),
+        "reason": "insufficient_sample",
+        "sample_size": len(recent),
+    }))
+    sys.exit(0)
+
+dist = Counter(recent)
+total = sum(dist.values())
+H = 0.0
+for c in dist.values():
+    p = c / total
+    if p > 0:
+        H -= p * math.log2(p)
+print(json.dumps({
+    "entropy_bits": round(H, 6),
+    "active_categories": len(dist),
+    "sample_size": total,
+}))
+PY
+}
+
 # === Parse global flags ===
 ARGS=()
 for arg in "$@"; do
@@ -666,5 +716,6 @@ case "$SUBCMD" in
   append_meta_archive_local) cmd_append_meta_archive_local "$@" ;;
   render_inherited_context) cmd_render_inherited_context "$@" ;;
   lineage_tree) cmd_lineage_tree "$@" ;;
+  entropy_compute) cmd_entropy_compute "$@" ;;
   *) echo "session-helper: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
 esac
