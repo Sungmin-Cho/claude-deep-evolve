@@ -239,6 +239,51 @@ If at least one completed session exists:
      last_collapse_generation: null
    ```
 
+#### v3.1.0 extension (when $VERSION == "3.1.0")
+
+When `deep_evolve_version: "3.1.0"`, the session.yaml additionally includes the
+`virtual_parallel` block. Coordinator populates this during Section A.2/A.3:
+
+````yaml
+deep_evolve_version: "3.1.0"  # version gate
+
+virtual_parallel:
+  enabled: true                # always true in 3.1+; N=1 is just n_current: 1
+  n_current: <N>
+  n_initial: <N>               # snapshot of init N (before any n_adjusted)
+  n_range: {min: 1, max: 9}
+  project_type: "<narrow_tuning|standard_optimization|open_research>"
+  eval_parallelizability: "<serialized|parallel_capable>"
+  selection_reason: "<AI's reasoning string>"
+  budget_total: <total experiment budget>
+  budget_unallocated: 0        # initially 0 (all split across seeds); grows when kills free budget
+  synthesis:
+    budget_allocated: <min(2*N, 10)>
+    regression_tolerance: 0.05
+  seeds:
+    - id: 1
+      status: "active"          # active | killed_<condition> | completed_early
+      direction: "<β direction string, or null if N=1>"
+      hypothesis: "<β hypothesis string, or null if N=1>"
+      initial_rationale: "<β rationale, or 'single-seed session; no β generated' if N=1>"
+      worktree_path: "worktrees/seed_1"   # relative to $SESSION_ROOT
+      branch: "evolve/<session-id>/seed-1"
+      created_at: "<ISO 8601>"
+      created_by: "init_batch"  # init_batch | epoch_growth
+      experiments_used: 0
+      keeps: 0
+      borrows_given: 0
+      borrows_received: 0
+      current_q: 0.0
+      allocated_budget: <budget_total // N>   # equal split at init
+      killed_at: null
+      killed_reason: null
+    # ... seed_2 … seed_N similarly ...
+````
+
+When `$VERSION` is "2.x" or "3.0.x", use the pre-existing v2/v3.0 template
+unchanged (virtual_parallel block absent).
+
 5. Generate evaluation harness based on eval_mode:
 
    **If eval_mode is `cli`:**
