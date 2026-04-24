@@ -1291,6 +1291,13 @@ cmd_drain_kill_queue() {
     return 2
   fi
 
+  # W-R4: warn once if python3 is missing — same-second bump will
+  # fail, entries route to dead-letter, and the operator needs
+  # to know WHY the queue is accumulating.
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "drain_kill_queue: warning — python3 not found in PATH; same-second applied_at bump disabled. Entries drained within the same second as their queued_at will route to dead-letter until python3 is installed." >&2
+  fi
+
   local queue="$SESSION_ROOT/kill_queue.jsonl"
   # Missing or empty file → nothing to drain (no-op success)
   if [ ! -f "$queue" ] || [ ! -s "$queue" ]; then
@@ -1347,11 +1354,14 @@ cmd_drain_kill_queue() {
       # count by 3 per match (small perf win).
       local extracted
       if ! extracted="$(printf '%s' "$raw_line" | jq -r \
-          'if has("condition") and (.condition | IN("crash_give_up","sustained_regression","shortcut_quarantine","budget_exhausted_underperform","user_requested"))
+          'if has("condition")
+              and (.condition | IN("crash_give_up","sustained_regression","shortcut_quarantine","budget_exhausted_underperform","user_requested"))
+              and has("final_q") and (.final_q | type == "number")
+              and has("experiments_used") and (.experiments_used | type == "number") and ((.experiments_used | floor) == .experiments_used) and (.experiments_used >= 0)
            then
-             [.condition, .queued_at // "", (.final_q // 0 | tostring), (.experiments_used // 0 | tostring)] | join("\t")
+             [.condition, .queued_at // "", (.final_q | tostring), (.experiments_used | tostring)] | join("\t")
            else
-             error("missing or non-whitelisted condition")
+             error("missing or invalid required field(s)")
            end')"; then
         echo "drain_kill_queue: field extraction failed for seed $entry_seed — preserving entry" >&2
         printf '%s\n' "$raw_line" >> "$survivors"
@@ -1368,7 +1378,11 @@ cmd_drain_kill_queue() {
       # python3 isoformat for cross-platform compatibility (BSD date's
       # limited -d support). queued_at is passed via argv to avoid
       # code injection — C-R1 fix per review 2026-04-24-232731.
-      if [ -n "$queued_at" ] && [[ "$applied_ts" < "$queued_at" || "$applied_ts" = "$queued_at" ]]; then
+      # W-R2: use a loop-local variable so that a bump on one iteration
+      # does not leak into subsequent iterations via the outer
+      # applied_ts variable (pollutes time-to-kill analytics).
+      local this_applied_ts="$applied_ts"
+      if [ -n "$queued_at" ] && [[ "$this_applied_ts" < "$queued_at" || "$this_applied_ts" = "$queued_at" ]]; then
         local applied_ts_bumped
         if ! applied_ts_bumped="$(python3 -c '
 import sys
@@ -1385,7 +1399,7 @@ print((dt + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))
           emit_failed_count=$((emit_failed_count + 1))
           continue
         fi
-        applied_ts="$applied_ts_bumped"
+        this_applied_ts="$applied_ts_bumped"
       fi
 
       local killed_event
@@ -1395,7 +1409,7 @@ print((dt + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))
           --argjson fq "$final_q" \
           --argjson eu "$experiments_used" \
           --arg q_at "$queued_at" \
-          --arg a_at "$applied_ts" \
+          --arg a_at "$this_applied_ts" \
           '{event: "seed_killed",
             seed_id: $sid,
             condition: $cond,

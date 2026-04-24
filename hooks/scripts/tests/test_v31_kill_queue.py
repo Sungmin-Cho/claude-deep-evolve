@@ -41,6 +41,8 @@ import json
 import os
 import subprocess
 from pathlib import Path
+import pytest
+import json as _json
 
 HELPER = Path(__file__).parents[3] / "hooks/scripts/session-helper.sh"
 
@@ -539,3 +541,39 @@ def test_drain_kill_queue_untrusted_queued_at_does_not_execute_code(tmp_path):
     if j.exists():
         assert "seed_killed" not in j.read_text(encoding="utf-8"), \
             "no seed_killed must be emitted when bump fails"
+
+
+@pytest.mark.parametrize("bad_field,bad_payload,desc", [
+    ("final_q", {"seed_id": 3, "condition": "crash_give_up", "experiments_used": 8,
+                 "queued_at": "2026-04-24T10:00:00Z"}, "missing"),
+    ("final_q", {"seed_id": 3, "condition": "crash_give_up", "final_q": None,
+                 "experiments_used": 8, "queued_at": "2026-04-24T10:00:00Z"}, "null"),
+    ("final_q", {"seed_id": 3, "condition": "crash_give_up", "final_q": "0.4",
+                 "experiments_used": 8, "queued_at": "2026-04-24T10:00:00Z"}, "string"),
+    ("experiments_used", {"seed_id": 3, "condition": "crash_give_up", "final_q": 0.4,
+                          "queued_at": "2026-04-24T10:00:00Z"}, "missing"),
+    ("experiments_used", {"seed_id": 3, "condition": "crash_give_up", "final_q": 0.4,
+                          "experiments_used": -1, "queued_at": "2026-04-24T10:00:00Z"}, "negative"),
+    ("experiments_used", {"seed_id": 3, "condition": "crash_give_up", "final_q": 0.4,
+                          "experiments_used": 2.5, "queued_at": "2026-04-24T10:00:00Z"}, "non-integer-float"),
+])
+def test_drain_kill_queue_malformed_required_field_preserved(tmp_path, bad_field, bad_payload, desc):
+    """W-R2: final_q and experiments_used type/presence must be
+    strictly validated — otherwise malformed entries produce
+    misleading seed_killed with final_q: 0, corrupting the
+    synthesis baseline cascade."""
+    repo, sr, env = _setup(tmp_path)
+    (sr / "kill_queue.jsonl").write_text(
+        _json.dumps(bad_payload) + "\n", encoding="utf-8"
+    )
+    r = _run(["drain_kill_queue", "3"], repo, env)
+    assert r.returncode == 0, r.stderr
+    # Entry preserved in queue (dead-letter)
+    remaining = (sr / "kill_queue.jsonl").read_text(encoding="utf-8")
+    assert '"seed_id": 3' in remaining, \
+        f"{bad_field}={desc}: entry must be preserved (dead-letter)"
+    # No seed_killed emitted
+    j = sr / "journal.jsonl"
+    if j.exists():
+        assert "seed_killed" not in j.read_text(encoding="utf-8"), \
+            f"{bad_field}={desc}: no seed_killed must be emitted for malformed entry"
