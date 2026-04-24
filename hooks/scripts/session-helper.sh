@@ -122,6 +122,7 @@ cmd_help() {
   echo "  resolve_helper_path                             — Print absolute path of session-helper.sh"
   echo "  create_seed_worktree, validate_seed_worktree, remove_seed_worktree"
   echo "  compute_init_budget_split, compute_grow_allocation"
+  echo "  append_forum_event, tail_forum"
 }
 
 cmd_compute_session_id() {
@@ -1003,6 +1004,55 @@ cmd_compute_grow_allocation() {
   echo "$alloc"
 }
 
+# --- v3.1.0 forum.jsonl helpers (spec § 7.1, § 7.2) ---
+
+# Append one event to $SESSION_ROOT/forum.jsonl atomically.
+# Validates JSON, injects `ts` field, serializes via acquire_project_lock.
+# Usage: append_forum_event <json_string>
+cmd_append_forum_event() {
+  local json="${1:-}"
+  if [ -z "$json" ]; then
+    echo "usage: append_forum_event <json>" >&2
+    return 2
+  fi
+  if [ -z "${SESSION_ROOT:-}" ]; then
+    echo "SESSION_ROOT not set" >&2
+    return 2
+  fi
+
+  # Validate JSON
+  if ! echo "$json" | jq -e . >/dev/null 2>&1; then
+    echo "append_forum_event: invalid JSON" >&2
+    return 1
+  fi
+  # Inject ts field if absent
+  local ts
+  ts=$(iso_now)
+  local enriched
+  enriched=$(echo "$json" | jq -c --arg ts "$ts" 'if has("ts") then . else . + {ts:$ts} end')
+
+  local forum="$SESSION_ROOT/forum.jsonl"
+  acquire_project_lock || { echo "append_forum_event: lock failed" >&2; return 3; }
+  # printf '%s\n' is safe against escape-interpretation (\n/\t/\0 in JSON strings);
+  # echo can corrupt when xpg_echo is set. See review W-5.
+  printf '%s\n' "$enriched" >> "$forum"
+  release_project_lock
+  return 0
+}
+
+# Read last N lines from forum.jsonl (for subagent consumption).
+# Usage: tail_forum <N>
+cmd_tail_forum() {
+  local n="${1:-20}"
+  if [ -z "${SESSION_ROOT:-}" ]; then
+    echo "SESSION_ROOT not set" >&2
+    return 2
+  fi
+  local forum="$SESSION_ROOT/forum.jsonl"
+  [ -f "$forum" ] || return 0   # empty forum is valid
+  tail -n "$n" "$forum"
+}
+
 # === Parse global flags ===
 ARGS=()
 for arg in "$@"; do
@@ -1045,5 +1095,7 @@ case "$SUBCMD" in
   remove_seed_worktree)   cmd_remove_seed_worktree "$@" ;;
   compute_init_budget_split)  cmd_compute_init_budget_split "$@" ;;
   compute_grow_allocation)    cmd_compute_grow_allocation "$@" ;;
+  append_forum_event)    cmd_append_forum_event "$@" ;;
+  tail_forum)            cmd_tail_forum "$@" ;;
   *) echo "session-helper: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
 esac
