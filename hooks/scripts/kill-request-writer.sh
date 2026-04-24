@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # PROJECT_ROOT computation runs on source — both would otherwise be
 # evaluated against T23's own "$@" (W-1 fix: prevents session-helper's
 # `--dry-run` global flag from silently consuming T23's args).
-HELPER_SOURCED=1 source "$SCRIPT_DIR/session-helper.sh" 2>/dev/null || {
+HELPER_SOURCED=1 source "$SCRIPT_DIR/session-helper.sh" || {
   echo "error: failed to source session-helper.sh" >&2
   exit 2
 }
