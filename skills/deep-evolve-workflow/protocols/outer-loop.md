@@ -62,6 +62,220 @@ All v3-gated sub-steps below (6.5.1 entropy snapshot, 6.5.3 entropy overlay,
 6.5.6 flagged-density stagnation, Tier 3 flagged evidence injection) check
 `$VERSION` locally.
 
+## Step 6.5.0 — Epoch Boundary Sync (v3.1 only; v2 and v3.0.x skip this step)
+
+Spec references: § 7.2 (coordinator epoch-boundary writes), § 7.5 (3-class
+convergence detection), § 6.3–§ 6.4 (adaptive N re-evaluation).
+
+This step runs at the **start** of every epoch boundary transition, BEFORE
+Step 6.5.1 Meta Analysis. It is gated on `$VERSION` starting with "3.1";
+v2 and v3.0.x sessions skip to 6.5.1 without executing any substeps below.
+
+### 6.5.0.1 Forum summary generation (wires T5)
+
+Emit `$SESSION_ROOT/meta-analyses/gen-<g>/forum-summary.md` capturing this
+epoch's cross-seed activity:
+
+```bash
+HELPER_SCRIPTS_DIR="$(dirname "$DEEP_EVOLVE_HELPER_PATH")"
+CURRENT_GEN=$(python3 -c "import yaml; \
+  d=yaml.safe_load(open('$SESSION_ROOT/session.yaml')); \
+  print(d['evaluation_epoch']['current'])")
+OUT_DIR="$SESSION_ROOT/meta-analyses/gen-$CURRENT_GEN"
+mkdir -p "$OUT_DIR"
+python3 "$HELPER_SCRIPTS_DIR/generate-forum-summary.py" \
+  --forum "$SESSION_ROOT/forum.jsonl" \
+  --gen "$CURRENT_GEN" \
+  --out "$OUT_DIR/forum-summary.md"
+```
+
+If the forum is empty (`forum.jsonl` does not exist OR contains zero
+`seed_keep` events for this epoch), `generate-forum-summary.py` already
+emits a placeholder `_no events recorded this epoch_` line and exits 0.
+Do NOT abort the epoch transition.
+
+### 6.5.0.2 Convergence detection (wires T19)
+
+Compute pair-wise AI similarity among THIS EPOCH'S cross-seed `seed_keep`
+events, extract `inspired_by` trailers from the kept commits, then invoke
+`convergence-detect.py`:
+
+1. **Collect this epoch's keeps** (depends on G6.5 `8752ee4` foundation
+   patch that added `epoch` field to the seed_keep forum schema):
+   ```bash
+   EPOCH_KEEPS=$(jq -s --argjson gen "$CURRENT_GEN" \
+     '[.[] | select(.event=="seed_keep" and (.epoch // null) == $gen)]' \
+     "$SESSION_ROOT/forum.jsonl" 2>/dev/null || echo '[]')
+   ```
+   If `EPOCH_KEEPS` has fewer than 2 entries from distinct seeds, skip
+   to 6.5.0.3 (no convergence possible this epoch).
+
+   **T19 expects `experiments_used_before_keep`** per keep for P3 gating.
+   Compute it from journal (count prior kept events per seed):
+   ```bash
+   EPOCH_KEEPS=$(printf '%s' "$EPOCH_KEEPS" | python3 -c '
+   import json, sys
+   keeps = json.load(sys.stdin)
+   import pathlib
+   journal = pathlib.Path("'"$SESSION_ROOT"'/journal.jsonl")
+   events = []
+   if journal.exists():
+       for line in journal.read_text().splitlines():
+           line = line.strip()
+           if not line:
+               continue
+           try:
+               events.append(json.loads(line))
+           except Exception:
+               continue
+   for k in keeps:
+       sid = k.get("seed_id")
+       ts = k.get("ts", "")
+       k["experiments_used_before_keep"] = sum(
+           1 for e in events
+           if e.get("event") == "kept"
+           and e.get("seed_id") == sid
+           and e.get("ts", "") < ts
+       )
+   json.dump(keeps, sys.stdout)
+   ')
+   ```
+
+2. **Compute pair-wise similarity via AI**: for each unordered pair
+   `(keep_a, keep_b)` where `keep_a.seed_id != keep_b.seed_id`, prompt
+   yourself with the § 7.5 step 2 template:
+   ```
+   Compare these two kept commits' description + rationale. Return a single
+   number in [0,1] representing semantic similarity (0 = unrelated,
+   1 = same idea).
+
+   Commit A (seed {a.seed_id}): {a.description}
+   Rationale A: {a.rationale}
+
+   Commit B (seed {b.seed_id}): {b.description}
+   Rationale B: {b.rationale}
+   ```
+   Record the AI answers into a shell variable `SIMILARITIES_JSON` as a
+   JSON array (bind this exact name — step 5 below consumes it). If there
+   are zero eligible pairs, bind `SIMILARITIES_JSON='[]'` and skip to step 5:
+   ```bash
+   SIMILARITIES_JSON='[{"commit_a":"<sha_a>","commit_b":"<sha_b>","score":<float>}, ...]'
+   ```
+
+3. **Extract `inspired_by` trailers**: for each keep commit, run
+   `git log -1 --format=%B <commit>` from within `$SESSION_ROOT` (git's
+   parent-walk locates the project repo; the session root is always
+   `<project>/.deep-evolve/<sid>/`):
+   ```bash
+   INSPIRED_BY_MAP='{}'
+   for commit in $(printf '%s' "$EPOCH_KEEPS" | jq -r '.[].commit'); do
+     trailer=$(git -C "$SESSION_ROOT" log -1 --format=%B "$commit" 2>/dev/null \
+               | awk 'BEGIN{IGNORECASE=1} /^inspired[_-]by:/ {print $2; exit}')
+     INSPIRED_BY_MAP=$(printf '%s' "$INSPIRED_BY_MAP" | \
+       jq --arg c "$commit" --arg p "$trailer" \
+       '. + { ($c): ($p | select(. != "") // null) }')
+   done
+   ```
+
+4. **Collect this epoch's cross_seed_borrow events** (fallback ancestry path):
+   ```bash
+   CROSS_SEED_BORROWS=$(jq -s --argjson gen "$CURRENT_GEN" \
+     '[.[] | select(.event=="cross_seed_borrow" and (.epoch // null) == $gen)]' \
+     "$SESSION_ROOT/forum.jsonl" 2>/dev/null || echo '[]')
+   ```
+
+5. **Invoke the classifier**:
+   ```bash
+   CLASSIFY=$(python3 "$HELPER_SCRIPTS_DIR/convergence-detect.py" \
+     --args "$(jq -nc \
+       --argjson keeps "$EPOCH_KEEPS" \
+       --argjson sims "$SIMILARITIES_JSON" \
+       --argjson ibm "$INSPIRED_BY_MAP" \
+       --argjson csb "$CROSS_SEED_BORROWS" \
+       --argjson epoch "$CURRENT_GEN" \
+       '{keeps:$keeps, similarities:$sims, inspired_by_map:$ibm,
+         cross_seed_borrow_events:$csb, threshold:0.85, p3_floor:3,
+         epoch:$epoch}')")
+   ```
+
+6. **Emit each convergence_event** to BOTH journal and forum per spec § 7.2.
+   Wrap the writes in `(unset SEED_ID; ...)` subshells — the coordinator
+   runs in the main session shell, where SEED_ID MUST NOT leak into
+   coordinator-owned events. T16's `cmd_append_journal_event` auto-injects
+   `seed_id` from `$SEED_ID` if set, which would corrupt the
+   `convergence_event` payload (plural `seed_ids: [...]` array schema +
+   a spurious scalar `seed_id` field):
+   ```bash
+   printf '%s' "$CLASSIFY" | jq -c '.convergence_events[]' | while read -r ev; do
+     (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" append_journal_event "$ev")
+     (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" append_forum_event "$ev")
+   done
+   ```
+
+   The events are also automatically surfaced inside `forum-summary.md`:
+   T5 re-reads `forum.jsonl` and includes any convergence events that
+   landed during Step 6.5.0.1 or 6.5.0.2. (If a convergence event fires
+   AFTER 6.5.0.1 ran, the summary won't include it this epoch — it'll
+   appear in next epoch's summary. Acceptable drift for a per-epoch
+   artifact.)
+
+### 6.5.0.3 N re-evaluation (adaptive hook; § 6.3)
+
+After convergence processing, ask the Adaptive Scheduler whether N should
+change for the NEXT epoch. This is AI-judged; the output feeds
+`session.yaml.virtual_parallel.n_current` via an `n_adjusted` event.
+
+Prompt yourself:
+```
+Current N: {session.yaml.virtual_parallel.n_current}
+Budget remaining: {signals.budget_unallocated + sum(seed.remaining_budget)}
+Convergence events this epoch: {count by judged_as}
+Active seeds: {count where status == "active"}
+Killed seeds: {count where status.startswith("killed_")}
+
+Should N change for the next epoch?
+  - Keep current N: if exploration diversity remains high and budget sustains
+  - Grow N (if budget_unallocated + kill-freed budget >= budget_total / n_current):
+    justified when no convergence or only contagion_suspected
+  - Shrink N via kill: justified when budget tight + multiple seeds stuck
+
+Return JSON: {"decision": "keep|grow|shrink", "new_n": <int>, "reasoning": "..."}
+```
+
+If decision is `keep`, continue to Step 6.5.1. Otherwise append (wrap in
+`(unset SEED_ID; ...)` — same coordinator-context reasoning as 6.5.0.2 step 6):
+```bash
+(unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" append_journal_event '{
+  "event":"n_adjusted","from_n":<old>,"to_n":<new>,
+  "reason":"<AI reasoning>","new_seed_ids":[...]
+}')
+```
+then execute the seed creation (grow — invoke `session-helper.sh
+create_seed_worktree` plus β generator from T7) or kill (shrink — emit
+`seed_killed` per § 5.5 `budget_exhausted_underperform` heuristic).
+
+**Note on n-adjust validation**: Step 6.5.0 does NOT add a dedicated
+`n-adjust-preflight.py` helper. Rationale: the AI answering the prompt
+already sees budget_remaining + n_current + seed counts; rejecting invalid
+decisions (grow when budget insufficient, shrink below min) is enforced at
+the prompt level via explicit constraints. If budget reality differs from
+the AI's judgment, the grow path's existing `compute_grow_allocation`
+helper (T3) returns rc=1 "insufficient pool" and the coordinator logs
+`grow_rejected_insufficient_pool` without creating a seed — the hard guard
+sits downstream. Defer a dedicated preflight to v3.1.1 if this proves
+insufficient in practice.
+
+### 6.5.0 Summary / Gate
+
+After 6.5.0.1, 6.5.0.2, and 6.5.0.3 complete, proceed to Step 6.5.1. Note
+that 6.5.1–6.5.6 continue to operate on the SESSION's Q metric (not per-seed),
+so the existing Outer Loop logic still applies; G6/G7 additions only WIDEN
+the signal set, they do not replace it.
+
+**v2 and v3.0.x sessions: skip Step 6.5.0 entirely.** The version gate at
+the top of this protocol (see § "Protocol Entry — Version Gate") routes
+non-v3.1 sessions directly to Step 6.5.1 without executing any substep above.
+
 ## Step 6.5.1 — Meta Analysis
 
 Analyze experiment results for the current generation's interval:
