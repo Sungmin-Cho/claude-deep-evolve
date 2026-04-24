@@ -64,3 +64,36 @@ def test_grow_allocation_pool_insufficient_for_floor():
     out, err, rc = run_helper("compute_grow_allocation", "2", "9")
     assert rc == 1, "must reject when pool < P3 floor"
     assert "insufficient" in (out + err).lower()
+
+
+# --- Regression tests: usage errors (rc=2) must be distinct from
+# "insufficient pool" business signal (rc=1) that T10/T11 scheduler uses. ---
+
+def test_usage_error_missing_args_returns_rc2():
+    """Missing args must return rc=2 (operator error), NOT rc=1 (insufficient signal)."""
+    out, err, rc = run_helper("compute_init_budget_split")
+    assert rc == 2, f"missing args must give rc=2, got {rc}"
+    assert "usage" in (out + err).lower()
+
+
+def test_usage_error_zero_N_returns_rc2():
+    """N=0 must return rc=2, not crash with division-by-zero at rc=1."""
+    out, err, rc = run_helper("compute_init_budget_split", "50", "0")
+    assert rc == 2, f"N=0 must give rc=2, got {rc}"
+    assert "positive" in (out + err).lower()
+
+
+def test_usage_error_non_numeric_returns_rc2():
+    out, err, rc = run_helper("compute_init_budget_split", "abc", "3")
+    assert rc == 2, f"non-numeric must give rc=2, got {rc}"
+
+
+def test_usage_error_negative_returns_rc2():
+    """Negative inputs are rejected (not silently treated as 'insufficient')."""
+    out, err, rc = run_helper("compute_init_budget_split", "-10", "3")
+    assert rc == 2, f"negative must give rc=2, got {rc}"
+
+
+def test_grow_usage_error_zero_curN_returns_rc2():
+    out, err, rc = run_helper("compute_grow_allocation", "100", "0")
+    assert rc == 2, f"curN=0 must give rc=2, got {rc}"

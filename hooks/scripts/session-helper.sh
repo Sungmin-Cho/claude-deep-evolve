@@ -923,9 +923,26 @@ cmd_remove_seed_worktree() {
 # Rejects when each seed would receive fewer than P3 floor experiments (3).
 # Usage: compute_init_budget_split <total> <N>
 cmd_compute_init_budget_split() {
-  local total="$1" n="$2"
+  # C-1: ${VAR:-} survives `set -u` (nounset); without defaults, missing args
+  # would abort at rc=1 via "unbound variable" BEFORE our -z check fires,
+  # masking operator errors as the documented rc=1 "insufficient" signal.
+  local total="${1:-}" n="${2:-}"
   local P3_FLOOR=3
-  [ -z "$total" ] || [ -z "$n" ] && { echo "usage: compute_init_budget_split <total> <N>" >&2; return 2; }
+  # I-3: explicit if-fi instead of compound `||`/`&&` (precedence foot-gun)
+  if [ -z "$total" ] || [ -z "$n" ]; then
+    echo "usage: compute_init_budget_split <total> <N>" >&2
+    return 2
+  fi
+  # C-2: numeric-positive guards return rc=2 (operator error) to keep rc=1
+  # reserved for the "insufficient pool" business signal the scheduler relies on.
+  if ! [[ "$n" =~ ^[0-9]+$ ]] || [ "$n" -le 0 ]; then
+    echo "compute_init_budget_split: N must be a positive integer, got: $n" >&2
+    return 2
+  fi
+  if ! [[ "$total" =~ ^[0-9]+$ ]]; then
+    echo "compute_init_budget_split: total must be a non-negative integer, got: $total" >&2
+    return 2
+  fi
   # S-6: reject when the smallest resulting allocation would fall below P3 floor,
   # otherwise coordinator would create un-killable, un-useful seeds.
   local min_per_seed=$(( total / n ))
@@ -952,9 +969,23 @@ cmd_compute_init_budget_split() {
 # If pool < P3_floor, reject (caller must kill before grow).
 # Usage: compute_grow_allocation <pool> <current_N>
 cmd_compute_grow_allocation() {
-  local pool="$1" curN="$2"
+  # C-1: ${VAR:-} survives `set -u` (nounset) — see compute_init_budget_split.
+  local pool="${1:-}" curN="${2:-}"
   local P3_FLOOR=3
-  [ -z "$pool" ] || [ -z "$curN" ] && { echo "usage: compute_grow_allocation <pool> <current_N>" >&2; return 2; }
+  # I-3: explicit if-fi instead of compound `||`/`&&`
+  if [ -z "$pool" ] || [ -z "$curN" ]; then
+    echo "usage: compute_grow_allocation <pool> <current_N>" >&2
+    return 2
+  fi
+  # C-2: numeric-positive guards — reserve rc=1 for "insufficient pool" signal.
+  if ! [[ "$curN" =~ ^[0-9]+$ ]] || [ "$curN" -le 0 ]; then
+    echo "compute_grow_allocation: current_N must be a positive integer, got: $curN" >&2
+    return 2
+  fi
+  if ! [[ "$pool" =~ ^[0-9]+$ ]]; then
+    echo "compute_grow_allocation: pool must be a non-negative integer, got: $pool" >&2
+    return 2
+  fi
   # ceil(pool / (2*curN)) = (pool + 2*curN - 1) / (2*curN)   (integer div truncates)
   local denom=$(( 2 * curN ))
   local tentative=$(( (pool + denom - 1) / denom ))
