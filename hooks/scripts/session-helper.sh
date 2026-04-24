@@ -123,6 +123,7 @@ cmd_help() {
   echo "  create_seed_worktree, validate_seed_worktree, remove_seed_worktree"
   echo "  compute_init_budget_split, compute_grow_allocation"
   echo "  append_forum_event, tail_forum"
+  echo "  append_journal_event                            — Append validated event to journal.jsonl (§ 6.5, § 9.2)"
 }
 
 cmd_compute_session_id() {
@@ -1053,6 +1054,49 @@ cmd_tail_forum() {
   tail -n "$n" "$forum"
 }
 
+# --- v3.1.0 journal event helper (spec § 6.5, § 9.2) ---
+
+# Append one event to $SESSION_ROOT/journal.jsonl atomically.
+# Validates JSON, injects `ts` and `session_id` fields, serializes via acquire_project_lock.
+# Usage: append_journal_event <json_string>
+cmd_append_journal_event() {
+  local json="${1:-}"
+  if [ -z "$json" ]; then
+    echo "usage: append_journal_event <json>" >&2
+    return 2
+  fi
+  if [ -z "${SESSION_ROOT:-}" ]; then
+    echo "SESSION_ROOT not set" >&2
+    return 2
+  fi
+  if [ -z "${SESSION_ID:-}" ]; then
+    echo "SESSION_ID not set" >&2
+    return 2
+  fi
+
+  # Validate JSON
+  if ! echo "$json" | jq -e . >/dev/null 2>&1; then
+    echo "append_journal_event: invalid JSON" >&2
+    return 1
+  fi
+
+  # Inject ts + session_id if absent
+  local ts
+  ts=$(iso_now)
+  local enriched
+  enriched=$(echo "$json" | jq -c --arg ts "$ts" --arg sid "$SESSION_ID" \
+    'if has("ts") then . else . + {ts:$ts} end
+     | if has("session_id") then . else . + {session_id:$sid} end')
+
+  local journal="$SESSION_ROOT/journal.jsonl"
+  acquire_project_lock || { echo "append_journal_event: lock failed" >&2; return 3; }
+  # printf '%s\n' is safe against escape-interpretation (\n/\t/\0 in JSON strings);
+  # echo can corrupt when xpg_echo is set. See review W-5.
+  printf '%s\n' "$enriched" >> "$journal"
+  release_project_lock
+  return 0
+}
+
 # === Parse global flags ===
 ARGS=()
 for arg in "$@"; do
@@ -1097,5 +1141,6 @@ case "$SUBCMD" in
   compute_grow_allocation)    cmd_compute_grow_allocation "$@" ;;
   append_forum_event)    cmd_append_forum_event "$@" ;;
   tail_forum)            cmd_tail_forum "$@" ;;
+  append_journal_event)  cmd_append_journal_event "$@" ;;
   *) echo "session-helper: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
 esac
