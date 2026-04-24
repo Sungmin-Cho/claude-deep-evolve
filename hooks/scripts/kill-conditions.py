@@ -170,7 +170,15 @@ def _validate_schema(payload):
     if ukr is not None:
         if not isinstance(ukr, dict):
             _die("user_kill_request must be an object or null")
-        if "confirmed" in ukr and not isinstance(ukr["confirmed"], bool):
+        # Silent-masking guard (T22 review fix): require `confirmed` to be
+        # explicitly present. ukr.get("confirmed", False) would silently
+        # treat an absent field as "not confirmed", suppressing a real
+        # user kill intent if the caller forgot to populate it. Same class
+        # as the T14/aff23c9 contract violations.
+        if "confirmed" not in ukr:
+            _die("user_kill_request.confirmed is required when "
+                 "user_kill_request is provided")
+        if not isinstance(ukr["confirmed"], bool):
             _die("user_kill_request.confirmed must be bool")
 
 
@@ -294,11 +302,11 @@ def evaluate_budget_exhausted(seed, session):
 def evaluate_user_requested(ukr):
     if ukr is None:
         return {"triggered": False, "requested_at": None}
-    # confirmed has already passed _validate_schema's bool guard when the
-    # field is present. Don't bool()-coerce here — explicit code prevents
-    # silent acceptance of `confirmed: 1` if someone removes the schema
-    # guard later (I-3).
-    confirmed = ukr.get("confirmed", False)
+    # confirmed has been validated as a present bool by _validate_schema
+    # (T22 review fix — was previously ukr.get("confirmed", False), which
+    # silently masked an absent field). Direct access is safe and makes
+    # the "required" contract explicit at the read site.
+    confirmed = ukr["confirmed"]
     return {"triggered": confirmed,
             "requested_at": ukr.get("requested_at")}
 

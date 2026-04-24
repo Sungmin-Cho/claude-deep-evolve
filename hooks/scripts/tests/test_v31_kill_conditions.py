@@ -237,8 +237,9 @@ def test_sustained_regression_clause_4_fail_recovered_equals_peak():
 # ---- shortcut_quarantine ----------------------------------------------
 
 def test_shortcut_quarantine_threshold_met_with_ai_agreement():
+    """Strictly above threshold + AI agreement → fires."""
     out = _run_ok(_base_payload(
-        seed=_base_seed(flagged_keeps_count=3),
+        seed=_base_seed(flagged_keeps_count=5),       # > threshold
         session=_base_session(shortcut_quarantine_threshold=3),
         ai_judgments={"direction_unrecoverable": False,
                       "shortcut_prone": True},
@@ -247,9 +248,9 @@ def test_shortcut_quarantine_threshold_met_with_ai_agreement():
 
 
 def test_shortcut_quarantine_boundary_inclusive():
-    """'≥ threshold' → exactly threshold fires when AI also agrees."""
+    """Exactly at threshold (`>=` inclusive) + AI agreement → fires."""
     out = _run_ok(_base_payload(
-        seed=_base_seed(flagged_keeps_count=3),
+        seed=_base_seed(flagged_keeps_count=3),       # == threshold
         session=_base_session(shortcut_quarantine_threshold=3),
         ai_judgments={"direction_unrecoverable": False,
                       "shortcut_prone": True},
@@ -443,3 +444,13 @@ def test_int_field_rejects_non_integral_float():
     bad["experiments_used"] = 5.5
     r = _run_err(_base_payload(seed=bad))
     assert r.returncode == 2
+
+
+def test_user_kill_request_missing_confirmed_rc_2():
+    """Silent-masking guard: when user_kill_request is provided but
+    omits `confirmed`, rc=2 — never silently default to False which
+    would suppress a real user kill intent."""
+    payload = _base_payload(user_kill_request={"requested_at": "2026-04-24T10:00:00Z"})
+    r = _run_err(payload)
+    assert r.returncode == 2
+    assert "confirmed" in r.stderr
