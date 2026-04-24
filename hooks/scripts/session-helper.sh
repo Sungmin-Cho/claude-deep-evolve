@@ -1123,6 +1123,17 @@ cmd_append_journal_event() {
   return 0
 }
 
+# === END of helper function definitions ===
+
+# If sourced (not executed), skip ALL execution-time side effects:
+# global flag parsing, PROJECT_ROOT computation, and subcommand dispatch.
+# Sourcing scripts (kill-request-writer.sh, future G11 helpers) get only
+# the function bodies — they're responsible for setting their own
+# PROJECT_ROOT and parsing their own flags.
+if [ -n "${HELPER_SOURCED:-}" ]; then
+  return 0 2>/dev/null || true
+fi
+
 # === Parse global flags ===
 ARGS=()
 for arg in "$@"; do
