@@ -534,6 +534,110 @@ IF $VERSION starts with "3.":
 ELSE (v2):
   stagnation fires only on the 3-consecutive-no-improve criterion.
 
+**v3.1 addendum — convergence-class stagnation credit** (only when
+`$VERSION` starts with "3.1"; v3.0.x and v2 sessions skip this clause):
+
+After computing the base `consecutive_no_improve` from `q_history` (per the
+existing v2/v3 path above) but BEFORE comparing against the `>= 3`
+stagnation threshold, apply a **rolling-window credit offset** derived from
+convergence_event records in the last N generations (N = stagnation
+threshold = 3). This implements the spec § 7.5 Outer Loop interpretation
+without requiring a new persisted counter in session.yaml — every scan
+recomputes from journal, matching the § 11.3 "git-log-is-truth" posture
+already used for `in_flight_block` synthesis in T18.
+
+Rationale for the design (addresses the "counter target" concern from G7
+plan review): an earlier draft of this addendum wrote
+`consecutive_no_improve -= 2` as if it were a mutable counter, but
+`consecutive_no_improve` is a runtime-derived value from q_history — there
+is no persistent field to decrement. The rolling-window approach derives
+the credit from the same durable source (journal) that produced the
+convergence events in the first place, so the offset is reproducible
+across resume / replay.
+
+Compute the rolling credit:
+
+```bash
+THIS_EPOCH=$(python3 -c "import yaml; \
+  d=yaml.safe_load(open('$SESSION_ROOT/session.yaml')); \
+  print(d['evaluation_epoch']['current'])")
+STAGNATION_WINDOW=3   # matches threshold
+WINDOW_START=$((THIS_EPOCH - STAGNATION_WINDOW + 1))   # inclusive
+
+# This-epoch-only slice for credit + escalation distinctions:
+#   THIS_EPOCH_CONVERGENCE → credit this turn (already emitted in 6.5.0.2)
+#   SESSION_CONTAGION_COUNT → cumulative contagion warnings, no epoch filter
+THIS_EPOCH_CONVERGENCE=$(jq -s --argjson gen "$THIS_EPOCH" \
+  '[.[] | select(.event=="convergence_event" and (.epoch // null) == $gen)]' \
+  "$SESSION_ROOT/journal.jsonl" 2>/dev/null || echo '[]')
+
+WINDOW_CONVERGENCE=$(jq -s --argjson start "$WINDOW_START" --argjson gen "$THIS_EPOCH" \
+  '[.[] | select(.event=="convergence_event"
+                 and (.epoch // null) >= $start
+                 and (.epoch // null) <= $gen)]' \
+  "$SESSION_ROOT/journal.jsonl" 2>/dev/null || echo '[]')
+
+SESSION_CONTAGION_COUNT=$(jq -s \
+  '[.[] | select(.event=="convergence_event"
+                 and .judged_as == "contagion_suspected")] | length' \
+  "$SESSION_ROOT/journal.jsonl" 2>/dev/null || echo 0)
+
+# Sum credits over the window per spec § 7.5 Outer Loop interpretation:
+#   evidence_based           → +2 credit (independent corroboration)
+#   borrow_chain_convergence → +1 credit (one progenitor idea survived)
+#   contagion_suspected      → 0 credit  (P3 bypass; handled separately)
+TOTAL_CREDIT=$(printf '%s' "$WINDOW_CONVERGENCE" | jq \
+  '[.[] | .judged_as]
+   | map(if . == "evidence_based" then 2
+         elif . == "borrow_chain_convergence" then 1
+         else 0 end)
+   | add // 0')
+
+# Offset the stagnation check; floor at 0 to prevent cascade
+EFFECTIVE_NO_IMPROVE=$((consecutive_no_improve - TOTAL_CREDIT))
+if [ $EFFECTIVE_NO_IMPROVE -lt 0 ]; then
+  EFFECTIVE_NO_IMPROVE=0
+fi
+```
+
+Substitute `EFFECTIVE_NO_IMPROVE` for `consecutive_no_improve` in the
+threshold check below. If `EFFECTIVE_NO_IMPROVE < 3`, the stagnation branch
+does NOT fire this generation — the rolling-window convergence evidence is
+treated as sufficient forward progress even when raw Q has not moved.
+
+**Contagion-suspected handling** (separate from credit; applies once per
+this-epoch contagion occurrence):
+
+For each `convergence_event` in `THIS_EPOCH_CONVERGENCE` with
+`judged_as == "contagion_suspected"`:
+  1. Emit a user-visible WARN to stderr:
+     ```
+     WARN: contagion_suspected convergence in epoch <g> — seeds {ids} kept
+     before clearing P3 floor. This indicates a P3 bypass bug; review
+     Step 5.f implementation.
+     ```
+     (No separate `convergence_warn` journal event — the original
+     `convergence_event` already carries `judged_as == "contagion_suspected"`
+     and its full payload; duplicating it would add schema without value.)
+  2. If `SESSION_CONTAGION_COUNT >= 2` (cumulative across the whole session,
+     not just this epoch), escalate via AskUserQuestion:
+     ```
+     "Contagion-suspected convergence fired <N> times in this session (P3
+     floor bypassed). This should be impossible under a correct Step 5.f
+     implementation. Continue the session, or abort to debug?"
+     ```
+     If user chooses abort, mark session status as `paused_user_abort` in
+     session.yaml and exit the Outer Loop cleanly.
+
+**Q improvement behavior**: the spec implies credits carry forward until a
+real Q improvement happens. This design handles that naturally: when Q
+improves in generation `g+1`, the q_history-derived `consecutive_no_improve`
+resets to 0; `EFFECTIVE_NO_IMPROVE = 0 - TOTAL_CREDIT` floors to 0. No
+stored state to reset explicitly.
+
+v3.0.x / v2 sessions: skip this addendum. Those session types lack forum
+infrastructure and cannot produce convergence_event records.
+
 (Check `q_history` and, when on v3, also `session.shortcut.flagged_since_last_tier3`.)
 
 → **Strategy Archive Fork**: Read `protocols/archive.md`, execute **Strategy Archive Fork** section.

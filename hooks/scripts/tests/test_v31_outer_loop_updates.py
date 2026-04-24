@@ -109,3 +109,57 @@ def test_step_6_5_0_t19_invocation_is_rc_guarded():
     assert "error: convergence-detect.py failed" in body, (
         "T19 failure must emit an `error:` prefixed stderr line"
     )
+
+
+def test_step_6_5_6_v31_addendum_exists():
+    c = _content()
+    step_6_5_6 = re.search(
+        r"(## Step 6\.5\.6.*?)(?=^## |\Z)", c, re.DOTALL | re.MULTILINE
+    )
+    assert step_6_5_6, "could not locate Step 6.5.6"
+    body = step_6_5_6.group(1)
+    assert re.search(r"v3\.1.*convergence|convergence.*v3\.1", body,
+                     re.IGNORECASE | re.DOTALL), (
+        "Step 6.5.6 must contain a v3.1-gated convergence-credit clause"
+    )
+
+
+def test_step_6_5_6_names_all_three_convergence_classes():
+    c = _content()
+    step_6_5_6 = re.search(
+        r"(## Step 6\.5\.6.*?)(?=^## |\Z)", c, re.DOTALL | re.MULTILINE
+    ).group(1)
+    assert "evidence_based" in step_6_5_6
+    assert "borrow_chain_convergence" in step_6_5_6
+    assert "contagion_suspected" in step_6_5_6
+
+
+def test_step_6_5_6_specifies_credit_magnitudes():
+    c = _content()
+    step_6_5_6 = re.search(
+        r"(## Step 6\.5\.6.*?)(?=^## |\Z)", c, re.DOTALL | re.MULTILINE
+    ).group(1)
+    # evidence_based -2, borrow_chain -1, contagion 0 — § 7.5 Outer Loop interpretation
+    assert re.search(r"evidence_based.*(-\s*2|decrement.*2|by\s*2|\+\s*2|\+2)",
+                     step_6_5_6, re.IGNORECASE | re.DOTALL), (
+        "Step 6.5.6 must specify evidence_based gets +2/-2 credit magnitude"
+    )
+    assert re.search(r"borrow_chain_convergence.*(-\s*1|decrement.*1|by\s*1|\+\s*1|\+1)",
+                     step_6_5_6, re.IGNORECASE | re.DOTALL), (
+        "Step 6.5.6 must specify borrow_chain_convergence gets +1/-1 credit magnitude"
+    )
+    assert re.search(r"contagion_suspected.*(no.*credit|0\s|warn)",
+                     step_6_5_6, re.IGNORECASE | re.DOTALL), (
+        "Step 6.5.6 must specify contagion_suspected gets 0 credit + warning"
+    )
+
+
+def test_step_6_5_6_recurring_contagion_escalates_to_askuser():
+    c = _content()
+    step_6_5_6 = re.search(
+        r"(## Step 6\.5\.6.*?)(?=^## |\Z)", c, re.DOTALL | re.MULTILINE
+    ).group(1)
+    assert re.search(r"(AskUserQuestion|prompt.*user|ask.*user|recurring)",
+                     step_6_5_6, re.IGNORECASE | re.DOTALL), (
+        "Step 6.5.6 must mention AskUserQuestion escalation for recurring contagion"
+    )
