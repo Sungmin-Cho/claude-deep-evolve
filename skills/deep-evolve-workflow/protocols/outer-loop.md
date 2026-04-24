@@ -558,9 +558,32 @@ across resume / replay.
 Compute the rolling credit:
 
 ```bash
-THIS_EPOCH=$(python3 -c "import yaml; \
+# Derive consecutive_no_improve explicitly from session.yaml.q_history — same
+# source the v2/v3 base stagnation check uses. Bash would silently treat an
+# unbound name as 0 in $(( )) arithmetic below, so we bind it here and
+# defensively assert via ${...:?} that the shell-out succeeded. Matches the
+# aff23c9 / T20 rc-propagation contract: no silent T14-class masking.
+consecutive_no_improve=$(python3 -c "
+import yaml
+d = yaml.safe_load(open('$SESSION_ROOT/session.yaml')) or {}
+q_history = d.get('q_history', [])
+count = 0
+best = max(q_history) if q_history else float('-inf')
+for q in reversed(q_history):
+    if q < best:
+        count += 1
+    else:
+        break
+print(count)
+")
+: "${consecutive_no_improve:?consecutive_no_improve unbound — base q_history computation failed}"
+
+if ! THIS_EPOCH=$(python3 -c "import yaml; \
   d=yaml.safe_load(open('$SESSION_ROOT/session.yaml')); \
-  print(d['evaluation_epoch']['current'])")
+  print(d['evaluation_epoch']['current'])"); then
+  echo "error: could not read evaluation_epoch.current from session.yaml" >&2
+  exit 2
+fi
 STAGNATION_WINDOW=3   # matches threshold
 WINDOW_START=$((THIS_EPOCH - STAGNATION_WINDOW + 1))   # inclusive
 
@@ -634,6 +657,19 @@ real Q improvement happens. This design handles that naturally: when Q
 improves in generation `g+1`, the q_history-derived `consecutive_no_improve`
 resets to 0; `EFFECTIVE_NO_IMPROVE = 0 - TOTAL_CREDIT` floors to 0. No
 stored state to reset explicitly.
+
+**Log field augmentation**: when stagnation fires in a v3.1 session, extend
+the `strategy_stagnation` journal event to include all three values so
+post-hoc audit can reconstruct the decision:
+```json
+{"event":"strategy_stagnation",
+ "consecutive_no_improve": <raw from q_history>,
+ "credit_applied": <TOTAL_CREDIT>,
+ "effective_no_improve": <EFFECTIVE_NO_IMPROVE>,
+ "action": "<fork|continue>", "parent_gen": <g>, "timestamp": "..."}
+```
+Emit via `(unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" append_journal_event <json>)`.
+For v2/v3.0 sessions, keep the legacy 3-field log shape — backwards compat.
 
 v3.0.x / v2 sessions: skip this addendum. Those session types lack forum
 infrastructure and cannot produce convergence_event records.

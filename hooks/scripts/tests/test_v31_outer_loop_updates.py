@@ -163,3 +163,50 @@ def test_step_6_5_6_recurring_contagion_escalates_to_askuser():
                      step_6_5_6, re.IGNORECASE | re.DOTALL), (
         "Step 6.5.6 must mention AskUserQuestion escalation for recurring contagion"
     )
+
+
+def test_step_6_5_6_consecutive_no_improve_is_explicitly_bound():
+    """IMPORTANT fix 1: the addendum must bind consecutive_no_improve as a
+    bash variable (from q_history) before using it in arithmetic. An unbound
+    reference would silently treat it as 0 → classic T14 silent-masking."""
+    c = _content()
+    step_6_5_6 = re.search(
+        r"(## Step 6\.5\.6.*?)(?=^## |\Z)", c, re.DOTALL | re.MULTILINE
+    ).group(1)
+    assert re.search(r"consecutive_no_improve=\$\(", step_6_5_6), (
+        "Step 6.5.6 v3.1 addendum must explicitly bind consecutive_no_improve "
+        "as a bash variable (not reference an undefined name)"
+    )
+    # Defensive :? check
+    assert re.search(r"\$\{consecutive_no_improve:\?", step_6_5_6), (
+        "Step 6.5.6 v3.1 addendum must defensively assert consecutive_no_improve "
+        "is bound before using it (aff23c9 contract)"
+    )
+
+
+def test_step_6_5_6_this_epoch_extraction_is_rc_guarded():
+    """IMPORTANT fix 2: THIS_EPOCH shell-out must be guarded with
+    if ! ... then ... exit 2; fi (same T20 aff23c9 contract)."""
+    c = _content()
+    step_6_5_6 = re.search(
+        r"(## Step 6\.5\.6.*?)(?=^## |\Z)", c, re.DOTALL | re.MULTILINE
+    ).group(1)
+    assert re.search(r"if\s*!\s*THIS_EPOCH=\$\(python3", step_6_5_6, re.DOTALL), (
+        "Step 6.5.6 v3.1 addendum's THIS_EPOCH extraction must be wrapped in "
+        "`if ! THIS_EPOCH=$(python3 ...); then ... exit 2; fi` rc guard"
+    )
+
+
+def test_step_6_5_6_strategy_stagnation_log_has_three_v31_fields():
+    """IMPORTANT fix 3: stagnation log event must carry all three
+    decision-reconstruction fields (raw, credit, effective) in v3.1 sessions."""
+    c = _content()
+    step_6_5_6 = re.search(
+        r"(## Step 6\.5\.6.*?)(?=^## |\Z)", c, re.DOTALL | re.MULTILINE
+    ).group(1)
+    assert "credit_applied" in step_6_5_6, (
+        "v3.1 stagnation log must include credit_applied field"
+    )
+    assert "effective_no_improve" in step_6_5_6, (
+        "v3.1 stagnation log must include effective_no_improve field"
+    )
