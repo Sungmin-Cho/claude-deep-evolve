@@ -57,6 +57,8 @@ virtual_parallel:
     # Q history for seed-1: [0.38, 0.40, 0.42] → delta 0.04 > 0.02 threshold → "up"
     assert s1["recent_Q_trend"] == "up", \
         "seed-1 Q monotonically increasing should yield 'up'"
+    assert s1["convergence_indicators"] is None, \
+        "placeholder field must exist for T10 consumer schema stability"
     # Session-wide
     assert "session_Q_trend" in data
     assert "entropy_current" in data

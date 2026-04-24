@@ -102,6 +102,8 @@ def main():
             "allocated_budget": s.get("allocated_budget", 0),
             "remaining_budget": s.get("allocated_budget", 0) - s.get("experiments_used", 0),
             "independent_exploration_satisfied": s.get("experiments_used", 0) >= 3,
+            "convergence_indicators": None,  # deferred to T25 (semantic similarity);
+                                             # placeholder for schema shape stability
         })
 
     # Session-wide signals
