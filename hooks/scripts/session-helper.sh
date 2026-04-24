@@ -120,6 +120,7 @@ cmd_help() {
   echo ""
   echo "v3.1.0 subcommands (Virtual Parallel N-seed):"
   echo "  resolve_helper_path                             — Print absolute path of session-helper.sh"
+  echo "  create_seed_worktree, validate_seed_worktree, remove_seed_worktree,"
 }
 
 cmd_compute_session_id() {
@@ -829,6 +830,83 @@ cmd_resolve_helper_path() {
   echo "$self"
 }
 
+# --- v3.1.0 virtual_parallel worktree helpers (spec § 4.1, § 5.1 Step 4) ---
+
+cmd_create_seed_worktree() {
+  local seed_id="$1"
+  [ -z "$seed_id" ] && { echo "usage: create_seed_worktree <seed_id>" >&2; return 2; }
+  [ -z "$SESSION_ROOT" ] && { echo "SESSION_ROOT not set" >&2; return 2; }
+  [ -z "$SESSION_ID" ]   && { echo "SESSION_ID not set" >&2; return 2; }
+
+  local wt_parent="$SESSION_ROOT/worktrees"
+  local wt_path="$wt_parent/seed_$seed_id"
+  local branch="evolve/$SESSION_ID/seed-$seed_id"
+
+  mkdir -p "$wt_parent"
+  if [ -d "$wt_path" ]; then
+    echo "create_seed_worktree: worktree already exists at $wt_path" >&2
+    return 1
+  fi
+  # Create worktree + branch from current HEAD
+  if ! git worktree add "$wt_path" -b "$branch" >/dev/null 2>&1; then
+    echo "create_seed_worktree: git worktree add failed for seed $seed_id" >&2
+    return 1
+  fi
+  printf '%s\t%s\t%s\n' "$seed_id" "$wt_path" "$branch"
+}
+
+# Post-dispatch validation per spec § 4.1: HEAD-is-descendant OR same-as-pre-dispatch,
+# clean working tree (allow .deep-evolve/ untracked), no off-branch commits.
+# Usage: validate_seed_worktree <seed_id> [<pre_dispatch_head_sha>]
+cmd_validate_seed_worktree() {
+  local seed_id="$1"
+  local pre_head="$2"     # optional; when provided, verify descendancy
+  [ -z "$seed_id" ] && { echo "usage: validate_seed_worktree <seed_id> [pre_head]" >&2; return 2; }
+  [ -z "$SESSION_ROOT" ] && { echo "SESSION_ROOT not set" >&2; return 2; }
+
+  local wt_path="$SESSION_ROOT/worktrees/seed_$seed_id"
+  local branch="evolve/$SESSION_ID/seed-$seed_id"
+  [ -d "$wt_path" ] || { echo "validate: worktree missing at $wt_path" >&2; return 3; }
+
+  # Branch must be checked out in this worktree
+  local head_branch
+  head_branch=$(git -C "$wt_path" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  if [ "$head_branch" != "$branch" ]; then
+    echo "validate: worktree checked out $head_branch, expected $branch" >&2
+    return 4
+  fi
+
+  # Working tree clean except .deep-evolve/
+  local dirty
+  dirty=$(git -C "$wt_path" status --porcelain | grep -v '^?? \.deep-evolve/' || true)
+  if [ -n "$dirty" ]; then
+    echo "validate: worktree not clean: $dirty" >&2
+    return 5
+  fi
+
+  # If pre-head provided, current HEAD must be pre-head OR descendant
+  if [ -n "$pre_head" ]; then
+    local cur_head
+    cur_head=$(git -C "$wt_path" rev-parse HEAD)
+    if [ "$cur_head" != "$pre_head" ]; then
+      if ! git -C "$wt_path" merge-base --is-ancestor "$pre_head" "$cur_head" 2>/dev/null; then
+        echo "validate: current HEAD ($cur_head) is not descendant of pre-dispatch HEAD ($pre_head)" >&2
+        return 6
+      fi
+    fi
+  fi
+  echo "clean"
+  return 0
+}
+
+cmd_remove_seed_worktree() {
+  local seed_id="$1"
+  [ -z "$seed_id" ] && { echo "usage: remove_seed_worktree <seed_id>" >&2; return 2; }
+  local wt_path="$SESSION_ROOT/worktrees/seed_$seed_id"
+  [ -d "$wt_path" ] || return 0
+  git worktree remove --force "$wt_path" >/dev/null 2>&1 || rm -rf "$wt_path"
+}
+
 # === Parse global flags ===
 ARGS=()
 for arg in "$@"; do
@@ -866,5 +944,8 @@ case "$SUBCMD" in
   count_flagged_since_last_expansion) cmd_count_flagged_since_last_expansion "$@" ;;
   retry_budget_remaining) cmd_retry_budget_remaining "$@" ;;
   resolve_helper_path) cmd_resolve_helper_path "$@" ;;
+  create_seed_worktree)   cmd_create_seed_worktree "$@" ;;
+  validate_seed_worktree) cmd_validate_seed_worktree "$@" ;;
+  remove_seed_worktree)   cmd_remove_seed_worktree "$@" ;;
   *) echo "session-helper: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
 esac
