@@ -471,11 +471,15 @@ IF $VERSION starts with "3.":
      - If N=1 (you are the only seed), skip Step 5.f entirely — there is nothing
        to borrow.
 
-  2. **Collect candidates** (from the shared forum). Derive `DEEP_EVOLVE_REPO`
-     from the exported helper path, and guard the `tail_forum` invocation
-     against transient failures (empty/missing forum.jsonl is a valid state):
+  2. **Collect candidates** (from the shared forum). Derive the preflight
+     script path directly from `$DEEP_EVOLVE_HELPER_PATH` (they share the
+     `hooks/scripts/` directory), avoiding a `DEEP_EVOLVE_REPO` indirection
+     that is easy to get wrong by dirname-count. Guard the `tail_forum`
+     invocation against transient failures (empty/missing forum.jsonl is a
+     valid state):
      ```bash
-     DEEP_EVOLVE_REPO="$(dirname "$(dirname "$DEEP_EVOLVE_HELPER_PATH")")"
+     HELPER_SCRIPTS_DIR="$(dirname "$DEEP_EVOLVE_HELPER_PATH")"  # <repo>/hooks/scripts
+     PREFLIGHT_SCRIPT="$HELPER_SCRIPTS_DIR/borrow-preflight.py"
      CANDIDATES_JSON=$(bash "$DEEP_EVOLVE_HELPER_PATH" tail_forum 40 2>/dev/null \
        | jq -s --argjson sid "$SEED_ID" \
          '[.[] | select(.event=="seed_keep" and .seed_id != $sid)] | .[-10:]' \
@@ -499,7 +503,7 @@ IF $VERSION starts with "3.":
      FORUM_RELEVANT=$(jq -s --argjson sid "$SEED_ID" \
        '[.[] | select(.event=="cross_seed_borrow" and .to_seed==$sid)]' \
        "$SESSION_ROOT/forum.jsonl" 2>/dev/null || echo '[]')
-     if ! PREFLIGHT=$(python3 "$DEEP_EVOLVE_REPO/hooks/scripts/borrow-preflight.py" \
+     if ! PREFLIGHT=$(python3 "$PREFLIGHT_SCRIPT" \
          --args "$(jq -nc \
            --argjson sid "$SEED_ID" \
            --argjson used "$SELF_EXPERIMENTS_USED" \

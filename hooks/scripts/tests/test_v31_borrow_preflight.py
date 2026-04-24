@@ -216,3 +216,26 @@ def test_malformed_journal_entry_skipped_gracefully():
     ))
     assert len(out["eligible"]) == 1
     assert out["eligible"][0]["commit"] == "abc"
+
+
+def test_bool_self_seed_id_rejected():
+    """bool is an int subclass in Python — guard against accidental True/False
+    for numeric fields. Defense-in-depth per foundation Gap 3."""
+    r = subprocess.run(
+        ["python3", str(SCRIPT), "--args",
+         json.dumps({"self_seed_id": True, "self_experiments_used": 5,
+                     "candidates": [], "journal": [], "forum": []})],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 2
+    assert "bool" in r.stderr.lower() or "int" in r.stderr.lower()
+
+
+def test_bool_self_experiments_used_rejected():
+    r = subprocess.run(
+        ["python3", str(SCRIPT), "--args",
+         json.dumps({"self_seed_id": 2, "self_experiments_used": True,
+                     "candidates": [], "journal": [], "forum": []})],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 2

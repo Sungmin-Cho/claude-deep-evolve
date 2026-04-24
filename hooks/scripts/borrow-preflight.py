@@ -119,12 +119,12 @@ def main():
         _die(f"missing required fields: {sorted(missing)}")
 
     self_seed_id = payload["self_seed_id"]
-    if not isinstance(self_seed_id, int):
-        _die(f"self_seed_id must be int, got {type(self_seed_id).__name__}")
+    if not isinstance(self_seed_id, int) or isinstance(self_seed_id, bool):
+        _die(f"self_seed_id must be int (not bool), got {type(self_seed_id).__name__}")
 
     self_used = payload["self_experiments_used"]
-    if not isinstance(self_used, int):
-        _die(f"self_experiments_used must be int, got {type(self_used).__name__}")
+    if not isinstance(self_used, int) or isinstance(self_used, bool):
+        _die(f"self_experiments_used must be int (not bool), got {type(self_used).__name__}")
 
     candidates = payload["candidates"]
     if not isinstance(candidates, list):
