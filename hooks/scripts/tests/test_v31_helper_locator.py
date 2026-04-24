@@ -44,3 +44,27 @@ def test_env_var_pointing_to_nonexistent_file_falls_back():
     resolved = r.stdout.strip()
     assert resolved.endswith("session-helper.sh")
     assert "/nonexistent" not in resolved
+
+
+def test_env_var_pointing_to_directory_falls_back(tmp_path):
+    """Env var pointing to a directory must fall back to realpath (I-1 fix)."""
+    env = os.environ.copy()
+    env["DEEP_EVOLVE_HELPER_PATH"] = str(tmp_path)  # directory, not file
+    r = subprocess.run(["bash", str(HELPER), "resolve_helper_path"],
+                       env=env, capture_output=True, text=True)
+    assert r.returncode == 0
+    resolved = r.stdout.strip()
+    assert resolved.endswith("session-helper.sh")
+    assert str(tmp_path) not in resolved
+
+
+def test_env_var_empty_string_falls_back():
+    """Empty env var (e.g. from `export FOO=`) must fall through to realpath (M-4)."""
+    env = os.environ.copy()
+    env["DEEP_EVOLVE_HELPER_PATH"] = ""
+    r = subprocess.run(["bash", str(HELPER), "resolve_helper_path"],
+                       env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    resolved = r.stdout.strip()
+    assert resolved.endswith("session-helper.sh")
+    assert Path(resolved).is_file()

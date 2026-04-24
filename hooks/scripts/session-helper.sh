@@ -119,7 +119,7 @@ cmd_help() {
   echo "  retry_budget_remaining <journal> [cap]          — Diagnose-retry budget remaining"
   echo ""
   echo "v3.1.0 subcommands (Virtual Parallel N-seed):"
-  echo "  resolve_helper_path                             — Print absolute path of session-helper.sh (for coordinator → subagent handoff)"
+  echo "  resolve_helper_path                             — Print absolute path of session-helper.sh"
 }
 
 cmd_compute_session_id() {
@@ -798,14 +798,25 @@ PY
 # via the prose contract. This avoids brittle ${SESSION_ROOT}/../hooks/... math.
 #
 # Precedence:
-#   1. DEEP_EVOLVE_HELPER_PATH env var (if set and points to an existing executable)
+#   1. DEEP_EVOLVE_HELPER_PATH env var (if set to a regular executable file)
 #   2. realpath of the currently-running session-helper.sh (BASH_SOURCE)
+#
+# If the env var is set but invalid (directory, nonexistent, not executable),
+# emit a stderr warning and fall through to realpath — stale exports are common
+# in dev dogfooding sessions, so hard-failing is more disruptive than helpful.
 #
 # Usage: resolve_helper_path
 cmd_resolve_helper_path() {
-  if [ -n "${DEEP_EVOLVE_HELPER_PATH:-}" ] && [ -x "$DEEP_EVOLVE_HELPER_PATH" ]; then
+  if [ -n "${DEEP_EVOLVE_HELPER_PATH:-}" ] \
+     && [ -f "$DEEP_EVOLVE_HELPER_PATH" ] \
+     && [ -x "$DEEP_EVOLVE_HELPER_PATH" ]; then
     echo "$DEEP_EVOLVE_HELPER_PATH"
     return 0
+  elif [ -n "${DEEP_EVOLVE_HELPER_PATH:-}" ]; then
+    # Env var set but invalid (nonexistent / directory / not executable).
+    # Emit warning to stderr, then fall through to realpath (don't fail hard —
+    # stale exports are common in dev dogfooding sessions).
+    echo "session-helper: DEEP_EVOLVE_HELPER_PATH=$DEEP_EVOLVE_HELPER_PATH invalid, falling back to realpath" >&2
   fi
   # Fallback: $BASH_SOURCE holds the script path we're currently running
   local self
