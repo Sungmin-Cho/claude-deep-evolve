@@ -121,6 +121,7 @@ cmd_help() {
   echo "v3.1.0 subcommands (Virtual Parallel N-seed):"
   echo "  resolve_helper_path                             — Print absolute path of session-helper.sh"
   echo "  create_seed_worktree, validate_seed_worktree, remove_seed_worktree"
+  echo "  compute_init_budget_split, compute_grow_allocation"
 }
 
 cmd_compute_session_id() {
@@ -915,6 +916,62 @@ cmd_remove_seed_worktree() {
   }
 }
 
+# --- v3.1.0 budget allocation helpers (spec § 5.1, § 15.1 Q6) ---
+
+# Split total budget across N seeds as evenly as possible.
+# Any remainder goes to the LAST seed(s) deterministically.
+# Rejects when each seed would receive fewer than P3 floor experiments (3).
+# Usage: compute_init_budget_split <total> <N>
+cmd_compute_init_budget_split() {
+  local total="$1" n="$2"
+  local P3_FLOOR=3
+  [ -z "$total" ] || [ -z "$n" ] && { echo "usage: compute_init_budget_split <total> <N>" >&2; return 2; }
+  # S-6: reject when the smallest resulting allocation would fall below P3 floor,
+  # otherwise coordinator would create un-killable, un-useful seeds.
+  local min_per_seed=$(( total / n ))
+  if [ "$min_per_seed" -lt "$P3_FLOOR" ]; then
+    echo "insufficient: each seed would get $min_per_seed experiments (below P3 floor $P3_FLOOR); require total >= N*$P3_FLOOR" >&2
+    return 1
+  fi
+  local base=$(( total / n ))
+  local rem=$(( total - base * n ))
+  local out=""
+  local i
+  for i in $(seq 1 "$n"); do
+    if [ "$i" -le $(( n - rem )) ]; then
+      out+="$base "
+    else
+      out+="$(( base + 1 )) "
+    fi
+  done
+  printf '%s' "$out" | sed 's/[[:space:]]*$//'
+}
+
+# Compute allocation for a new seed created via n_adjusted growth.
+# Formula: ceil(pool / (2 * current_N)), then max against P3 floor (3).
+# If pool < P3_floor, reject (caller must kill before grow).
+# Usage: compute_grow_allocation <pool> <current_N>
+cmd_compute_grow_allocation() {
+  local pool="$1" curN="$2"
+  local P3_FLOOR=3
+  [ -z "$pool" ] || [ -z "$curN" ] && { echo "usage: compute_grow_allocation <pool> <current_N>" >&2; return 2; }
+  # ceil(pool / (2*curN)) = (pool + 2*curN - 1) / (2*curN)   (integer div truncates)
+  local denom=$(( 2 * curN ))
+  local tentative=$(( (pool + denom - 1) / denom ))
+  [ "$tentative" -lt 1 ] && tentative=1
+  local alloc=$tentative
+  [ "$alloc" -lt "$P3_FLOOR" ] && alloc=$P3_FLOOR
+  if [ "$pool" -lt "$P3_FLOOR" ]; then
+    echo "insufficient: pool=$pool < P3_floor=$P3_FLOOR; scheduler must kill before grow" >&2
+    return 1
+  fi
+  if [ "$pool" -lt "$alloc" ]; then
+    echo "insufficient: pool=$pool < alloc=$alloc; scheduler must kill before grow" >&2
+    return 1
+  fi
+  echo "$alloc"
+}
+
 # === Parse global flags ===
 ARGS=()
 for arg in "$@"; do
@@ -955,5 +1012,7 @@ case "$SUBCMD" in
   create_seed_worktree)   cmd_create_seed_worktree "$@" ;;
   validate_seed_worktree) cmd_validate_seed_worktree "$@" ;;
   remove_seed_worktree)   cmd_remove_seed_worktree "$@" ;;
+  compute_init_budget_split)  cmd_compute_init_budget_split "$@" ;;
+  compute_grow_allocation)    cmd_compute_grow_allocation "$@" ;;
   *) echo "session-helper: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
 esac
