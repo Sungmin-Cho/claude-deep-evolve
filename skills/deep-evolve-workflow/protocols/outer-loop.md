@@ -83,10 +83,15 @@ CURRENT_GEN=$(python3 -c "import yaml; \
   print(d['evaluation_epoch']['current'])")
 OUT_DIR="$SESSION_ROOT/meta-analyses/gen-$CURRENT_GEN"
 mkdir -p "$OUT_DIR"
-python3 "$HELPER_SCRIPTS_DIR/generate-forum-summary.py" \
+if ! python3 "$HELPER_SCRIPTS_DIR/generate-forum-summary.py" \
   --forum "$SESSION_ROOT/forum.jsonl" \
   --gen "$CURRENT_GEN" \
-  --out "$OUT_DIR/forum-summary.md"
+  --out "$OUT_DIR/forum-summary.md"; then
+  rc=$?
+  echo "error: generate-forum-summary.py failed (rc=$rc) in epoch $CURRENT_GEN — forum-summary.md NOT written" >&2
+  # Non-fatal: Step 6.5.0.2 and downstream can still proceed. Missing
+  # summary is a user-visible degradation, not a coordinator abort.
+fi
 ```
 
 If the forum is empty (`forum.jsonl` does not exist OR contains zero
@@ -186,16 +191,25 @@ events, extract `inspired_by` trailers from the kept commits, then invoke
 
 5. **Invoke the classifier**:
    ```bash
-   CLASSIFY=$(python3 "$HELPER_SCRIPTS_DIR/convergence-detect.py" \
-     --args "$(jq -nc \
-       --argjson keeps "$EPOCH_KEEPS" \
-       --argjson sims "$SIMILARITIES_JSON" \
-       --argjson ibm "$INSPIRED_BY_MAP" \
-       --argjson csb "$CROSS_SEED_BORROWS" \
-       --argjson epoch "$CURRENT_GEN" \
-       '{keeps:$keeps, similarities:$sims, inspired_by_map:$ibm,
-         cross_seed_borrow_events:$csb, threshold:0.85, p3_floor:3,
-         epoch:$epoch}')")
+   if ! CLASSIFY=$(python3 "$HELPER_SCRIPTS_DIR/convergence-detect.py" \
+       --args "$(jq -nc \
+         --argjson keeps "$EPOCH_KEEPS" \
+         --argjson sims "$SIMILARITIES_JSON" \
+         --argjson ibm "$INSPIRED_BY_MAP" \
+         --argjson csb "$CROSS_SEED_BORROWS" \
+         --argjson epoch "$CURRENT_GEN" \
+         '{keeps:$keeps, similarities:$sims, inspired_by_map:$ibm,
+           cross_seed_borrow_events:$csb, threshold:0.85, p3_floor:3,
+           epoch:$epoch}')"); then
+     rc=$?
+     echo "error: convergence-detect.py failed (rc=$rc) in epoch $CURRENT_GEN — skipping 6.5.0.2 this epoch" >&2
+     # rc=2 operator/schema error or rc=1 business failure: do NOT emit
+     # any convergence_event this epoch. Coordinator proceeds to 6.5.0.3
+     # (N re-eval) with empty convergence signal. This preserves progress
+     # without masking the fact that classification failed — the stderr
+     # line is load-bearing for operator debugging.
+     CLASSIFY='{"convergence_events": []}'
+   fi
    ```
 
 6. **Emit each convergence_event** to BOTH journal and forum per spec § 7.2.

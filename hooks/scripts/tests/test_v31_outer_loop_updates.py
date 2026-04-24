@@ -74,3 +74,38 @@ def test_step_6_5_0_is_v31_gated_not_always_on():
                      body, re.IGNORECASE), (
         "Step 6.5.0 must explicitly gate on v3.1 and document v2/v3.0 skip"
     )
+
+
+def test_step_6_5_0_t5_invocation_is_rc_guarded():
+    """Opus code review fix: T5 must be guarded with if-then-fi + error:
+    stderr line, not invoked bare. Matches the aff23c9 rc-propagation
+    contract established for T14-class silent-masking prevention."""
+    c = _content()
+    m = re.search(r"(Step 6\.5\.0.*?)(?=^## Step 6\.5\.1\b)", c,
+                  re.DOTALL | re.MULTILINE)
+    body = m.group(1)
+    assert re.search(r"if\s*!\s*python3.*generate-forum-summary\.py",
+                     body, re.DOTALL), (
+        "Step 6.5.0.1 must wrap generate-forum-summary.py in `if ! ...; then` "
+        "rc guard (T5 non-zero exit must surface, not be silently swallowed)"
+    )
+    assert "error: generate-forum-summary.py failed" in body, (
+        "T5 failure must emit an `error:` prefixed stderr line for operator "
+        "debugging (foundation pattern)"
+    )
+
+
+def test_step_6_5_0_t19_invocation_is_rc_guarded():
+    """Same rc-propagation contract for T19."""
+    c = _content()
+    m = re.search(r"(Step 6\.5\.0.*?)(?=^## Step 6\.5\.1\b)", c,
+                  re.DOTALL | re.MULTILINE)
+    body = m.group(1)
+    assert re.search(r"if\s*!\s*CLASSIFY=\$\(python3.*convergence-detect\.py",
+                     body, re.DOTALL), (
+        "Step 6.5.0.2 step 5 must wrap convergence-detect.py in "
+        "`if ! CLASSIFY=$(...); then` rc guard"
+    )
+    assert "error: convergence-detect.py failed" in body, (
+        "T19 failure must emit an `error:` prefixed stderr line"
+    )
