@@ -234,6 +234,27 @@ already enforces this separation; Step 0.5 only runs when that gate matches
 - Generate `candidates_per_step` (from strategy.yaml, default 3) candidate ideas
 - For each candidate, analyze: expected improvement, risk (crash/regression likelihood), novelty vs recent attempts
 - Select the BEST candidate based on this analysis
+- **v3.1 forum consultation (only when `$VERSION` starts with "3.1")**:
+  before the "Append to `journal.jsonl`" step below, run
+  ```bash
+  bash "$DEEP_EVOLVE_HELPER_PATH" tail_forum 20 > /tmp/recent_forum_$$.jsonl
+  ```
+  to read the last 20 forum events across all seeds. For each candidate idea
+  you ranked above, compare against the other seeds' recent non-flagged
+  `seed_keep` descriptions. If a candidate duplicates (semantically or
+  verbatim) another seed's recent keep, demote it unless your direction
+  genuinely differs — the goal is independent exploration (§ 3 AAR Q1),
+  not convergent reinvention. Do NOT block selection outright; this is a
+  soft-filter used to nudge the ranked list. Cleanup: `rm -f /tmp/recent_forum_$$.jsonl`
+  before leaving Step 1.
+
+  This consultation is distinct from the post-keep borrow (see later step
+  5.f): Step 1 is "avoid already kept ideas before exploring"; the post-keep
+  borrow is "after a keep, evaluate adapting others' ideas". Both honor P2
+  (no flagged propagation): Step 1 filters by `flagged=false`; the borrow
+  step is enforced via `borrow-preflight.py`.
+
+  v2 and v3.0.x sessions: forum.jsonl does not exist; skip this bullet.
 - Append to `journal.jsonl`: `{"id": <next_id>, "status": "planned", "idea": "<description>", "candidates_considered": <N>, "timestamp": "<now>"}`
 
 **Step 1.5 — Category Tagging (v3 only):**

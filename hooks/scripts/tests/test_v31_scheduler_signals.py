@@ -97,3 +97,125 @@ virtual_parallel:
     s1 = data["seeds"][0]
     assert s1["independent_exploration_satisfied"] is False, \
         "experiments_used=2 is below P3 floor (3)"
+
+
+def test_in_flight_block_synthesized_for_scheduled_without_completion(tmp_path):
+    """Gap 1 closure: T11 expects in_flight_block per seed; T9 must populate it.
+
+    Synthesis rule (spec § 6.3): a seed is in-flight iff the most recent
+    event keyed to it is `seed_scheduled` (via chosen_seed_id) with NO
+    subsequent `seed_block_completed` / `seed_block_failed` (via seed_id).
+    """
+    import json, subprocess, yaml
+    sy = tmp_path / "session.yaml"
+    sy.write_text(yaml.safe_dump({
+        "deep_evolve_version": "3.1.0",
+        "virtual_parallel": {
+            "n_current": 2,
+            "budget_unallocated": 0,
+            "seeds": [
+                {"id": 1, "status": "active", "experiments_used": 3,
+                 "allocated_budget": 10, "current_q": 0.4, "keeps": 1,
+                 "borrows_given": 0, "borrows_received": 0},
+                {"id": 2, "status": "active", "experiments_used": 5,
+                 "allocated_budget": 10, "current_q": 0.3, "keeps": 2,
+                 "borrows_given": 0, "borrows_received": 0},
+            ],
+        },
+    }))
+    journal = tmp_path / "journal.jsonl"
+    events = [
+        {"event": "seed_scheduled", "chosen_seed_id": 1,
+         "block_size": 3, "ts": "2026-04-24T10:00:00Z"},
+        {"event": "seed_scheduled", "chosen_seed_id": 2,
+         "block_size": 3, "ts": "2026-04-24T10:05:00Z"},
+        {"event": "seed_block_completed", "seed_id": 2,
+         "experiments_executed": 3, "final_q": 0.3,
+         "ts": "2026-04-24T10:15:00Z"},
+    ]
+    journal.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    forum = tmp_path / "forum.jsonl"
+    forum.write_text("")
+
+    script = Path(__file__).parents[3] / "hooks/scripts/scheduler-signals.py"
+    r = subprocess.run(
+        ["python3", str(script),
+         "--session-yaml", str(sy),
+         "--journal", str(journal),
+         "--forum", str(forum)],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    by_id = {s["id"]: s for s in out["seeds"]}
+    assert by_id[1]["in_flight_block"] is True
+    assert by_id[2]["in_flight_block"] is False
+
+
+def test_in_flight_block_handles_seed_block_failed(tmp_path):
+    """seed_block_failed must also clear in_flight_block."""
+    import json, subprocess, yaml
+    sy = tmp_path / "session.yaml"
+    sy.write_text(yaml.safe_dump({
+        "deep_evolve_version": "3.1.0",
+        "virtual_parallel": {
+            "n_current": 1,
+            "budget_unallocated": 0,
+            "seeds": [{"id": 1, "status": "active", "experiments_used": 1,
+                       "allocated_budget": 5, "current_q": 0.0, "keeps": 0,
+                       "borrows_given": 0, "borrows_received": 0}],
+        },
+    }))
+    journal = tmp_path / "journal.jsonl"
+    events = [
+        {"event": "seed_scheduled", "chosen_seed_id": 1,
+         "block_size": 2, "ts": "2026-04-24T10:00:00Z"},
+        {"event": "seed_block_failed", "seed_id": 1,
+         "failure_type": "crash_give_up", "partial_progress": 1,
+         "ts": "2026-04-24T10:10:00Z"},
+    ]
+    journal.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    (tmp_path / "forum.jsonl").write_text("")
+
+    script = Path(__file__).parents[3] / "hooks/scripts/scheduler-signals.py"
+    r = subprocess.run(
+        ["python3", str(script),
+         "--session-yaml", str(sy),
+         "--journal", str(journal),
+         "--forum", str(tmp_path / "forum.jsonl")],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["seeds"][0]["in_flight_block"] is False
+
+
+def test_in_flight_block_defaults_false_when_no_events(tmp_path):
+    """A fresh seed with no scheduler events must report in_flight_block=False."""
+    import json, subprocess, yaml
+    sy = tmp_path / "session.yaml"
+    sy.write_text(yaml.safe_dump({
+        "deep_evolve_version": "3.1.0",
+        "virtual_parallel": {
+            "n_current": 1,
+            "budget_unallocated": 0,
+            "seeds": [{"id": 1, "status": "active", "experiments_used": 0,
+                       "allocated_budget": 5, "current_q": 0.0, "keeps": 0,
+                       "borrows_given": 0, "borrows_received": 0}],
+        },
+    }))
+    journal = tmp_path / "journal.jsonl"
+    journal.write_text("")
+    (tmp_path / "forum.jsonl").write_text("")
+
+    script = Path(__file__).parents[3] / "hooks/scripts/scheduler-signals.py"
+    r = subprocess.run(
+        ["python3", str(script),
+         "--session-yaml", str(sy),
+         "--journal", str(journal),
+         "--forum", str(tmp_path / "forum.jsonl")],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["seeds"][0]["in_flight_block"] is False

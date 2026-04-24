@@ -106,6 +106,28 @@ def main():
                                              # placeholder for schema shape stability
         })
 
+    # Per-seed in_flight_block synthesis (closes foundation Gap 1; spec § 6.3).
+    #
+    # A seed is "in-flight" iff the most recent scheduler-related event for
+    # this seed is `seed_scheduled` (keyed via chosen_seed_id) with NO
+    # subsequent `seed_block_completed` / `seed_block_failed` (keyed via
+    # seed_id). Synthesized from journal so session.yaml stays authoritative
+    # for durable state and the journal is the single source of truth for
+    # ephemeral block state — matches § 11.3 git-log-is-truth posture.
+    in_flight = {}  # seed_id -> bool
+    for e in journal_events:
+        et = e.get("event")
+        if et == "seed_scheduled":
+            sid = e.get("chosen_seed_id")
+            if sid is not None:
+                in_flight[sid] = True
+        elif et in ("seed_block_completed", "seed_block_failed"):
+            sid = e.get("seed_id")
+            if sid is not None:
+                in_flight[sid] = False
+    for entry in per_seed:
+        entry["in_flight_block"] = in_flight.get(entry["id"], False)
+
     # Session-wide signals
     # Best-seed-so-far Q trend: track max Q across seeds over time (latest 10 timestamps)
     best_q_series = []

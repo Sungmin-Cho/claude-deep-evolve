@@ -116,3 +116,33 @@ def test_step_5_f_keep_branch_only_and_v31_gate():
     body = m.group(1)
     assert "keep branch only" in body.lower() or "keep-branch only" in body.lower()
     assert "3.1" in body and ("v2" in body.lower() or "v3.0" in body.lower())
+
+
+def test_step_1_has_v31_forum_consultation_addendum():
+    c = _content()
+    step1_and_after = re.search(
+        r"(\*\*Step 1 —.*?)(?=\*\*Step 2\b)", c, re.DOTALL
+    )
+    assert step1_and_after, "could not locate Step 1 block"
+    body = step1_and_after.group(1)
+    assert "tail_forum" in body or re.search(r"forum\.jsonl", body), (
+        "Step 1 must reference tail_forum or forum.jsonl consultation"
+    )
+    assert "3.1" in body, "Step 1 forum consultation must be v3.1-gated"
+
+
+def test_step_1_forum_consultation_is_read_only_duplicate_avoidance():
+    c = _content()
+    step1 = re.search(r"(\*\*Step 1 —.*?)(?=\*\*Step 2\b)", c, re.DOTALL).group(1)
+    assert re.search(r"(avoid|duplicate|already kept|another seed)",
+                     step1, re.IGNORECASE), (
+        "Step 1 v3.1 addendum must instruct the subagent to avoid duplicate "
+        "ideas relative to other seeds' recent forum keeps"
+    )
+
+
+def test_step_1_forum_addendum_preserves_v3_0_content():
+    c = _content()
+    step1 = re.search(r"(\*\*Step 1 —.*?)(?=\*\*Step 2\b)", c, re.DOTALL).group(1)
+    assert "candidates_per_step" in step1
+    assert "idea_selection.min_novelty_distance" in step1
