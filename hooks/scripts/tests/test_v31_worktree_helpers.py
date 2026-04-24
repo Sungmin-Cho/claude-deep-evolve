@@ -158,3 +158,40 @@ def test_validate_detects_off_branch_commits(tmp_path):
                        cwd=repo, env=env, capture_output=True, text=True)
     assert r.returncode != 0
     assert "expected evolve/sess-off/seed-1" in r.stderr or "wrong-branch" in r.stderr
+
+
+def test_create_seed_worktree_missing_arg_returns_rc2(tmp_path):
+    """Silent-masking T14 sibling: missing seed_id must return rc=2, not rc=0.
+    Under set -Eeuo pipefail, bare local x="$1" was aborting with 'unbound
+    variable' before the usage guard; EXIT trap's `|| true` masked to rc=0."""
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=t@t.t", "-c", "user.name=T",
+                    "commit", "--allow-empty", "-m", "init"],
+                   cwd=repo, check=True, capture_output=True)
+    sr = repo / ".deep-evolve" / "s"
+    sr.mkdir(parents=True)
+    env = os.environ.copy()
+    env.update({"EVOLVE_DIR": str(repo / ".deep-evolve"),
+                "SESSION_ID": "s", "SESSION_ROOT": str(sr)})
+    r = subprocess.run(["bash", str(HELPER), "create_seed_worktree"],
+                       cwd=repo, env=env, capture_output=True, text=True)
+    assert r.returncode == 2, f"missing arg must return rc=2, got {r.returncode}"
+    assert "usage" in (r.stdout + r.stderr).lower()
+
+
+def test_remove_seed_worktree_missing_arg_returns_rc2(tmp_path):
+    """Same silent-masking hazard as create_seed_worktree."""
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    sr = repo / ".deep-evolve" / "s"
+    sr.mkdir(parents=True)
+    env = os.environ.copy()
+    env.update({"EVOLVE_DIR": str(repo / ".deep-evolve"),
+                "SESSION_ID": "s", "SESSION_ROOT": str(sr)})
+    r = subprocess.run(["bash", str(HELPER), "remove_seed_worktree"],
+                       cwd=repo, env=env, capture_output=True, text=True)
+    assert r.returncode == 2
+    assert "usage" in (r.stdout + r.stderr).lower()

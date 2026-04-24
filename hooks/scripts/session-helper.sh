@@ -836,8 +836,14 @@ cmd_resolve_helper_path() {
 # --- v3.1.0 virtual_parallel worktree helpers (spec § 4.1, § 5.1 Step 4) ---
 
 cmd_create_seed_worktree() {
-  local seed_id="$1"
-  [ -z "$seed_id" ] && { echo "usage: create_seed_worktree <seed_id>" >&2; return 2; }
+  # T14-class silent-masking: under `set -Eeuo pipefail`, bare `local x="$1"`
+  # aborts with "$1: unbound variable" before the usage guard runs, and the
+  # EXIT trap's `|| true` masks the exit to rc=0. Use ${1:-} + explicit if-fi.
+  local seed_id="${1:-}"
+  if [ -z "$seed_id" ]; then
+    echo "usage: create_seed_worktree <seed_id>" >&2
+    return 2
+  fi
   [ -z "$SESSION_ROOT" ] && { echo "SESSION_ROOT not set" >&2; return 2; }
   [ -z "$SESSION_ID" ]   && { echo "SESSION_ID not set" >&2; return 2; }
 
@@ -910,8 +916,12 @@ cmd_validate_seed_worktree() {
 }
 
 cmd_remove_seed_worktree() {
-  local seed_id="$1"
-  [ -z "$seed_id" ] && { echo "usage: remove_seed_worktree <seed_id>" >&2; return 2; }
+  # T14-class silent-masking: see cmd_create_seed_worktree for rationale.
+  local seed_id="${1:-}"
+  if [ -z "$seed_id" ]; then
+    echo "usage: remove_seed_worktree <seed_id>" >&2
+    return 2
+  fi
   [ -z "$SESSION_ROOT" ] && { echo "SESSION_ROOT not set" >&2; return 2; }
   local wt_path="$SESSION_ROOT/worktrees/seed_$seed_id"
   [ -d "$wt_path" ] || return 0
