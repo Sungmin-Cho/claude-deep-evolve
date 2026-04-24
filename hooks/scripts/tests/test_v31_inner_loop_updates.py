@@ -85,3 +85,34 @@ def test_step_0_5_is_v31_gated_not_always_on():
                      body, re.IGNORECASE), (
         "Step 0.5 must explicitly state that v2/v3.0 sessions skip it"
     )
+
+
+def test_step_5_f_cross_seed_borrow_exists():
+    c = _content()
+    assert re.search(r"Step 5\.f.*(semantic borrow|cross-seed)",
+                     c, re.IGNORECASE), (
+        "inner-loop.md missing Step 5.f cross-seed borrow section"
+    )
+
+
+def test_step_5_f_preflight_invocation_referenced():
+    c = _content()
+    assert "borrow-preflight.py" in c, (
+        "Step 5.f must invoke borrow-preflight.py (P2/P3 enforcement)"
+    )
+
+
+def test_step_5_f_two_phase_state_machine_documented():
+    c = _content()
+    assert "borrow_planned" in c
+    assert "cross_seed_borrow" in c
+    assert "inspired_by" in c
+
+
+def test_step_5_f_keep_branch_only_and_v31_gate():
+    c = _content()
+    m = re.search(r"(Step 5\.f.*?)(?=\*\*Step|### |ELSE \(v2\))", c, re.DOTALL)
+    assert m, "could not extract Step 5.f body"
+    body = m.group(1)
+    assert "keep branch only" in body.lower() or "keep-branch only" in body.lower()
+    assert "3.1" in body and ("v2" in body.lower() or "v3.0" in body.lower())

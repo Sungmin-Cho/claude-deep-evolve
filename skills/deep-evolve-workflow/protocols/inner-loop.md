@@ -456,6 +456,128 @@ IF $VERSION starts with "3.":
   (results.tsv row + journal `discarded` event + reset + `rollback_completed` +
   counter increments) — do NOT duplicate in 5.e.
 
+  **Step 5.f — Cross-Seed Semantic Borrow** (v3.1 only — `$VERSION` starts with
+  "3.1"; keep branch only; runs after Step 5.e Keep finishes persisting):
+
+  Rationale: your seed has just accepted an experiment. Other seeds' recent keeps
+  may contain ideas you can productively adapt. Step 5.f decides (this turn)
+  whether to plan a `semantic_borrow` for your NEXT experiment, enforced by
+  `hooks/scripts/borrow-preflight.py` to prevent § 7.4 P2 flagged propagation and
+  P3 under-exploration borrow cascades.
+
+  1. **Pre-condition gate** (cheap local checks before any subprocess):
+     - `self.experiments_used >= 3` (P3 floor — mirrored in preflight as a
+       defense-in-depth check).
+     - If N=1 (you are the only seed), skip Step 5.f entirely — there is nothing
+       to borrow.
+
+  2. **Collect candidates** (from the shared forum). Derive `DEEP_EVOLVE_REPO`
+     from the exported helper path, and guard the `tail_forum` invocation
+     against transient failures (empty/missing forum.jsonl is a valid state):
+     ```bash
+     DEEP_EVOLVE_REPO="$(dirname "$(dirname "$DEEP_EVOLVE_HELPER_PATH")")"
+     CANDIDATES_JSON=$(bash "$DEEP_EVOLVE_HELPER_PATH" tail_forum 40 2>/dev/null \
+       | jq -s --argjson sid "$SEED_ID" \
+         '[.[] | select(.event=="seed_keep" and .seed_id != $sid)] | .[-10:]' \
+       || echo '[]')
+     ```
+     Take the last 10 non-self seed_keep events from the last 40 forum lines.
+     If `CANDIDATES_JSON` is `[]`, skip Step 5.f.
+
+  3. **Preflight filter** (enforces P2 flagged + P2 legibility + dedup). The
+     preflight needs BOTH the journal (for self-keyed `borrow_planned` dedup —
+     phase 1 of the § 7.4 P1 state machine) AND the forum (for self-`to_seed`
+     `cross_seed_borrow` dedup — phase 2; per spec § 7.1 that event lives in
+     forum.jsonl, NOT journal). Guard the subprocess call so operator
+     errors surface as warnings rather than masquerading as "no eligible
+     candidates":
+     ```bash
+     JOURNAL_RELEVANT=$(jq -s --argjson sid "$SEED_ID" \
+       '[.[] | select(.event=="borrow_planned" and .seed_id==$sid)
+             , .[] | select(.event=="borrow_abandoned" and .seed_id==$sid)]' \
+       "$SESSION_ROOT/journal.jsonl" 2>/dev/null || echo '[]')
+     FORUM_RELEVANT=$(jq -s --argjson sid "$SEED_ID" \
+       '[.[] | select(.event=="cross_seed_borrow" and .to_seed==$sid)]' \
+       "$SESSION_ROOT/forum.jsonl" 2>/dev/null || echo '[]')
+     if ! PREFLIGHT=$(python3 "$DEEP_EVOLVE_REPO/hooks/scripts/borrow-preflight.py" \
+         --args "$(jq -nc \
+           --argjson sid "$SEED_ID" \
+           --argjson used "$SELF_EXPERIMENTS_USED" \
+           --argjson cands "$CANDIDATES_JSON" \
+           --argjson journal "$JOURNAL_RELEVANT" \
+           --argjson forum "$FORUM_RELEVANT" \
+           '{self_seed_id:$sid, self_experiments_used:$used, candidates:$cands, journal:$journal, forum:$forum}')"); then
+       echo "warn: borrow-preflight.py exited non-zero — skipping Step 5.f this turn" >&2
+       return 0 2>/dev/null || :
+     fi
+     ```
+     `$SELF_EXPERIMENTS_USED` must be derived before this block from session.yaml:
+     ```bash
+     SELF_EXPERIMENTS_USED=$(python3 -c "import yaml,sys; \
+       d=yaml.safe_load(open('$SESSION_ROOT/session.yaml')); \
+       print(next(s['experiments_used'] for s in \
+         d['virtual_parallel']['seeds'] if s['id']==int('$SEED_ID')))")
+     ```
+     Parse `eligible` and `p3_gate_open`. If `p3_gate_open` is `false` or
+     `eligible` is empty, skip Step 5.f (no borrow this turn).
+
+  4. **AI evaluation** (only runs if eligible is non-empty): prompt yourself
+     with the candidate list and decide — for each candidate — whether the idea
+     is semantically relevant to your direction and worth re-implementing. The
+     AI judgement is § 7.3's prompt verbatim (includes "re-implement, do not
+     cherry-pick").
+
+  5. **Phase 1: `borrow_planned`** (journal, § 7.4 P1 state machine). For each
+     candidate you commit to borrow, append:
+     ```json
+     {"event":"borrow_planned","seed_id":<SEED_ID>,"source_commit":"<sha>",
+      "source_seed":<n>,"plan_rationale":"<≤200 chars>",
+      "planned_for_experiment_id":<next_experiment_id>,"block_id":<current_block_id>}
+     ```
+     via `bash "$DEEP_EVOLVE_HELPER_PATH" append_journal_event <json>`.
+     Counters `borrows_given` / `borrows_received` in session.yaml MUST NOT
+     increment yet — this is intent only (P1 Phase 1).
+
+  6. **Phase 2 deferred to next experiment's Step 2 (Code Modification)**: when
+     the next experiment runs, Step 2 re-implements the borrowed idea. The
+     subsequent Step 3 Git Commit MUST include a trailer
+     `inspired_by: <source_commit>`. Immediately after the successful commit
+     (before Step 4 evaluation), recover the planned-event context and append
+     a `cross_seed_borrow` event to `forum.jsonl`:
+     ```bash
+     TARGET_COMMIT=$(git rev-parse HEAD)
+     CURRENT_EXP_ID=<id of the experiment you just committed>
+     PLANNED=$(jq -s --argjson sid "$SEED_ID" --argjson eid "$CURRENT_EXP_ID" \
+       '[.[] | select(.event=="borrow_planned" and .seed_id==$sid
+                      and .planned_for_experiment_id==$eid)] | .[-1]' \
+       "$SESSION_ROOT/journal.jsonl" 2>/dev/null)
+     if [ -z "$PLANNED" ] || [ "$PLANNED" = "null" ]; then
+       echo "warn: no matching borrow_planned found for seed $SEED_ID exp $CURRENT_EXP_ID" >&2
+     else
+       SOURCE_COMMIT=$(printf '%s' "$PLANNED" | jq -r '.source_commit')
+       SOURCE_SEED=$(printf '%s' "$PLANNED"  | jq -r '.source_seed')
+       PLAN_RATIONALE=$(printf '%s' "$PLANNED" | jq -r '.plan_rationale')
+       bash "$DEEP_EVOLVE_HELPER_PATH" append_forum_event "$(jq -nc \
+         --argjson src "$SOURCE_SEED" --argjson tgt "$SEED_ID" \
+         --arg sc "$SOURCE_COMMIT" --arg tc "$TARGET_COMMIT" \
+         --arg mode "semantic_borrow" --arg reason "$PLAN_RATIONALE" \
+         '{event:"cross_seed_borrow",from_seed:$src,to_seed:$tgt,
+           source_commit:$sc,target_commit:$tc,mode:$mode,
+           inspired_by:$sc,reason:$reason}')"
+     fi
+     ```
+     Only on this forum Phase 2 append do the counters
+     `source_seed.borrows_given` / `self.borrows_received` increment (handled
+     by coordinator at epoch boundary from forum scan).
+
+  7. **Abandonment**: if you never execute Phase 2 within 2 blocks of the
+     `borrow_planned`, `borrow-abandoned-scan.py` (T15b) emits a
+     `borrow_abandoned` event at the coordinator's post-dispatch turn. You do
+     not need to emit it yourself.
+
+  v2 and v3.0.x sessions: there is no Step 5.f — the shared forum does not
+  exist in those session types. Skip entirely.
+
 ELSE (v2):
   
   Compare `score` with `session.yaml.metric.current`:
