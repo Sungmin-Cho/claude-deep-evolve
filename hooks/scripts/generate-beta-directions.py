@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""β direction generator for v3.1 init (spec § 5.1 Step 3).
+"""β direction generator for v3.1 init (spec § 5.1 Step 3) + growth (§ 5.2).
 
 Contract: the AI call happens ONE LAYER UP (coordinator dispatches a subagent
 via the Task tool; that subagent emits an 'attempts' or 'directions' JSON).
@@ -8,10 +8,17 @@ a file path or an inline JSON string). This script does NOT make any AI call;
 it implements the deterministic post-processing (similarity gate, retry
 accounting, N=1 short-circuit).
 
-Modes:
-  N == 1 → emit skip marker (N=1 short-circuit per § 5.1a)
-  N <= 4 → single-turn acceptance of directions from --input
-  N >= 5 → iterative with pairwise similarity gate; ≤0.70 target; 2 retries max
+Modes (select via --mode, default=init):
+  init:
+    N == 1 → emit skip marker (N=1 short-circuit per § 5.1a)
+    N <= 4 → single-turn acceptance of directions from --input
+    N >= 5 → iterative with pairwise similarity gate; ≤0.70 target; 2 retries max
+  growth (spec § 5.2):
+    Generate ONE new direction that doesn't overlap with existing seeds.
+    Inherits § 5.1's 0.70 similarity threshold and 2-retry exhaustion policy,
+    but compares against existing active seeds' directions (passed via
+    --existing-seeds) and tags the warning with context=epoch_growth on
+    exhaustion.
 
 Defensive programming (per T5 review pattern):
   - Malformed top-level JSON → exit rc=2 with stderr message (no KeyError)
@@ -135,6 +142,85 @@ def process(n, payload):
     }
 
 
+def _valid_growth_attempt(attempt, idx):
+    """Return True if a growth attempt has required fields; warn + skip otherwise."""
+    if not isinstance(attempt, dict):
+        print(f"warn: growth attempt[{idx}] is not an object; skipping",
+              file=sys.stderr)
+        return False
+    if "direction" not in attempt or not isinstance(attempt["direction"], dict):
+        print(f"warn: growth attempt[{idx}] missing 'direction' object; skipping",
+              file=sys.stderr)
+        return False
+    if "max_similarity_to_existing" not in attempt or not isinstance(
+            attempt["max_similarity_to_existing"], (int, float)):
+        print(f"warn: growth attempt[{idx}] missing numeric "
+              f"'max_similarity_to_existing'; skipping", file=sys.stderr)
+        return False
+    return True
+
+
+def process_growth(existing, payload):
+    """Iterate through fixture attempts; accept first under 0.70 sim, else best-of-3.
+
+    Spec § 5.2: growth β generates ONE new direction that doesn't overlap
+    with existing active seeds. Shares the 0.70 similarity threshold and
+    2-retry-max policy with init mode (§ 5.1 Step 3), but reports
+    warning_context='epoch_growth' on exhaustion.
+
+    Input schema:
+      {"attempts": [
+        {"direction": {seed_id, direction, hypothesis, rationale},
+         "max_similarity_to_existing": float,
+         "closest_existing_seed_id": int},
+        ...
+      ]}
+
+    'existing' (list of {seed_id, direction}) is passed through for upstream
+    traceability; the upstream subagent has already computed
+    max_similarity_to_existing against this list, so this script does not
+    recompute similarity.
+    """
+    if not isinstance(payload, dict) or "attempts" not in payload:
+        _die("growth input missing 'attempts' key")
+    attempts = payload["attempts"]
+    if not isinstance(attempts, list) or not attempts:
+        _die("growth 'attempts' must be a non-empty list")
+
+    best = None  # attempt with the lowest max_similarity_to_existing seen so far
+    valid_count = 0
+    for idx, attempt in enumerate(attempts):
+        if not _valid_growth_attempt(attempt, idx):
+            continue
+        valid_count += 1
+        sim = float(attempt["max_similarity_to_existing"])
+        if sim <= SIMILARITY_THRESHOLD:
+            return {
+                "direction": attempt["direction"],
+                "retries_used": valid_count - 1,  # 0 on first-try success
+                "max_similarity_observed": sim,
+                "warning_emitted": None,
+                "warning_context": None,
+            }
+        if best is None or sim < float(best["max_similarity_to_existing"]):
+            best = attempt
+        # Stop after initial + MAX_RETRIES valid attempts
+        if valid_count >= 1 + MAX_RETRIES:
+            break
+
+    if best is None:
+        _die(f"growth: all {len(attempts)} attempts were malformed")
+
+    # Exhausted retries → emit diversity warning tagged with epoch_growth context
+    return {
+        "direction": best["direction"],
+        "retries_used": MAX_RETRIES,
+        "max_similarity_observed": float(best["max_similarity_to_existing"]),
+        "warning_emitted": "beta_diversity_warning",
+        "warning_context": "epoch_growth",
+    }
+
+
 def _load_input(raw):
     """--input may be a path to a JSON file OR inline JSON string OR the
     literal 'skip' sentinel. Return the payload as a string (leaving JSON
@@ -152,19 +238,51 @@ def _load_input(raw):
 def main():
     ap = argparse.ArgumentParser(
         description="v3.1 β direction generator: deterministic post-processing "
-                    "of a subagent's direction-generation output (spec § 5.1 Step 3).")
-    ap.add_argument("--n", type=int, required=True,
-                    help="Number of seeds decided by Project Deep Analysis.")
-    ap.add_argument("--project-analysis", required=True,
-                    help="JSON string from Section A.1 Project Deep Analysis. "
-                         "Used by the upstream subagent prompt; this script does "
-                         "not consume it but requires it for traceability.")
+                    "of a subagent's direction-generation output "
+                    "(spec § 5.1 Step 3 for init, § 5.2 for growth).")
+    ap.add_argument("--mode", choices=["init", "growth"], default="init",
+                    help="init (default): N-tier init β generation (§ 5.1). "
+                         "growth: single new direction check against existing "
+                         "seeds for mid-session N growth (§ 5.2).")
+    ap.add_argument("--n", type=int,
+                    help="(init mode) Number of seeds decided by Project Deep "
+                         "Analysis. Required when --mode=init.")
+    ap.add_argument("--project-analysis",
+                    help="(init mode) JSON string from Section A.1 Project Deep "
+                         "Analysis. Required when --mode=init. Used by the "
+                         "upstream subagent prompt; this script does not "
+                         "consume it but requires it for traceability.")
+    ap.add_argument("--existing-seeds",
+                    help="(growth mode) JSON array of {seed_id, direction} for "
+                         "existing active seeds. Required when --mode=growth.")
     ap.add_argument("--input", required=True,
-                    help="Path to JSON file OR inline JSON string containing the "
+                    help="Path to JSON file OR inline JSON string. For init: "
                          "AI subagent's 'attempts' list (N>=5) or 'directions' "
-                         "list (N<=4), or the literal 'skip' sentinel for N=1.")
+                         "list (N<=4), or literal 'skip' sentinel for N=1. For "
+                         "growth: object with 'attempts' list of growth candidates.")
     args = ap.parse_args()
 
+    if args.mode == "growth":
+        if not args.existing_seeds:
+            _die("--mode growth requires --existing-seeds")
+        try:
+            existing = json.loads(args.existing_seeds)
+        except json.JSONDecodeError as e:
+            _die(f"--existing-seeds is not valid JSON: {e}")
+        input_raw = _load_input(args.input)
+        try:
+            payload = json.loads(input_raw)
+        except json.JSONDecodeError as e:
+            _die(f"--input is not valid JSON: {e}")
+        result = process_growth(existing, payload)
+        print(json.dumps(result, ensure_ascii=False))
+        return
+
+    # init mode (default)
+    if args.n is None:
+        _die("--mode init requires --n")
+    if not args.project_analysis:
+        _die("--mode init requires --project-analysis")
     if args.n < 1:
         _die(f"--n must be >= 1 (got {args.n})")
 
