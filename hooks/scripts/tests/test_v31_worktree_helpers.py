@@ -89,3 +89,41 @@ def test_validate_seed_worktree_clean_returns_ok(tmp_path):
     )
     assert rc == 0, f"validate_seed_worktree failed on clean tree: stderr={stderr}"
     assert "clean" in stdout.lower() or rc == 0
+
+
+def test_validate_seed_worktree_tolerates_tool_scratch_dirs(tmp_path):
+    """validate_seed_worktree must ignore untracked tool-scratch dirs
+    (.deep-docs/, .deep-review/, .serena/) in addition to .deep-evolve/.
+    Without this, co-installed plugins that write scratch files would trigger
+    spurious 'not clean' rejections. See review I-1."""
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=t@t.t", "-c", "user.name=T",
+                    "commit", "--allow-empty", "-m", "init"],
+                   cwd=repo, check=True, capture_output=True)
+
+    session_root = repo / ".deep-evolve" / "sess-001"
+    session_root.mkdir(parents=True)
+    env = {
+        "EVOLVE_DIR": str(repo / ".deep-evolve"),
+        "SESSION_ID": "sess-001",
+        "SESSION_ROOT": str(session_root),
+    }
+    run_helper("create_seed_worktree", "1", cwd=str(repo), env=env)
+
+    # Drop untracked scratch files into each tolerated prefix inside the worktree
+    wt = session_root / "worktrees" / "seed_1"
+    for subdir in (".deep-docs", ".deep-review", ".serena"):
+        d = wt / subdir
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "scratch.txt").write_text("tool scratch\n")
+
+    stdout, stderr, rc = run_helper(
+        "validate_seed_worktree", "1",
+        cwd=str(repo), env=env,
+    )
+    assert rc == 0, (
+        f"validate_seed_worktree must tolerate tool-scratch dirs; "
+        f"got rc={rc} stderr={stderr}"
+    )

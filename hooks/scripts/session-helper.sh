@@ -120,7 +120,7 @@ cmd_help() {
   echo ""
   echo "v3.1.0 subcommands (Virtual Parallel N-seed):"
   echo "  resolve_helper_path                             — Print absolute path of session-helper.sh"
-  echo "  create_seed_worktree, validate_seed_worktree, remove_seed_worktree,"
+  echo "  create_seed_worktree, validate_seed_worktree, remove_seed_worktree"
 }
 
 cmd_compute_session_id() {
@@ -848,8 +848,9 @@ cmd_create_seed_worktree() {
     return 1
   fi
   # Create worktree + branch from current HEAD
-  if ! git worktree add "$wt_path" -b "$branch" >/dev/null 2>&1; then
-    echo "create_seed_worktree: git worktree add failed for seed $seed_id" >&2
+  local err
+  if ! err=$(git worktree add "$wt_path" -b "$branch" 2>&1 >/dev/null); then
+    echo "create_seed_worktree: git worktree add failed for seed $seed_id: $err" >&2
     return 1
   fi
   printf '%s\t%s\t%s\n' "$seed_id" "$wt_path" "$branch"
@@ -876,9 +877,12 @@ cmd_validate_seed_worktree() {
     return 4
   fi
 
-  # Working tree clean except .deep-evolve/
+  # Working tree clean except tool-scratch dirs
+  # (.deep-evolve/ from this framework; .deep-docs/, .deep-review/, .serena/
+  #  from co-installed plugins that legitimately write to untracked paths)
   local dirty
-  dirty=$(git -C "$wt_path" status --porcelain | grep -v '^?? \.deep-evolve/' || true)
+  dirty=$(git -C "$wt_path" status --porcelain \
+    | grep -Ev '^\?\? \.(deep-evolve|deep-docs|deep-review|serena)/' || true)
   if [ -n "$dirty" ]; then
     echo "validate: worktree not clean: $dirty" >&2
     return 5
@@ -902,9 +906,13 @@ cmd_validate_seed_worktree() {
 cmd_remove_seed_worktree() {
   local seed_id="$1"
   [ -z "$seed_id" ] && { echo "usage: remove_seed_worktree <seed_id>" >&2; return 2; }
+  [ -z "$SESSION_ROOT" ] && { echo "SESSION_ROOT not set" >&2; return 2; }
   local wt_path="$SESSION_ROOT/worktrees/seed_$seed_id"
   [ -d "$wt_path" ] || return 0
-  git worktree remove --force "$wt_path" >/dev/null 2>&1 || rm -rf "$wt_path"
+  local err
+  git worktree remove --force "$wt_path" 2>/dev/null || {
+    err=$(rm -rf "$wt_path" 2>&1) || echo "remove_seed_worktree: fallback rm failed: $err" >&2
+  }
 }
 
 # === Parse global flags ===
