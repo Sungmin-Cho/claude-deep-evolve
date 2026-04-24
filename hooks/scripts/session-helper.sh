@@ -117,6 +117,9 @@ cmd_help() {
   echo "  migrate_v2_weights <v2_json>                    — Translate 4-cat v2 weights to 10-cat v3"
   echo "  count_flagged_since_last_expansion <journal>    — Count shortcut_flagged since last reset"
   echo "  retry_budget_remaining <journal> [cap]          — Diagnose-retry budget remaining"
+  echo ""
+  echo "v3.1.0 subcommands (Virtual Parallel N-seed):"
+  echo "  resolve_helper_path                             — Print absolute path of session-helper.sh (for coordinator → subagent handoff)"
 }
 
 cmd_compute_session_id() {
@@ -788,6 +791,33 @@ print(json.dumps({"used": used, "remaining": remaining, "cap": cap}))
 PY
 }
 
+# --- v3.1.0 helper path locator (C-4 fix: plugin-cache vs dev-repo) ---
+
+# Resolves the absolute path of session-helper.sh itself. Coordinator exports
+# the result as $DEEP_EVOLVE_HELPER_PATH and passes it into subagent prompts
+# via the prose contract. This avoids brittle ${SESSION_ROOT}/../hooks/... math.
+#
+# Precedence:
+#   1. DEEP_EVOLVE_HELPER_PATH env var (if set and points to an existing executable)
+#   2. realpath of the currently-running session-helper.sh (BASH_SOURCE)
+#
+# Usage: resolve_helper_path
+cmd_resolve_helper_path() {
+  if [ -n "${DEEP_EVOLVE_HELPER_PATH:-}" ] && [ -x "$DEEP_EVOLVE_HELPER_PATH" ]; then
+    echo "$DEEP_EVOLVE_HELPER_PATH"
+    return 0
+  fi
+  # Fallback: $BASH_SOURCE holds the script path we're currently running
+  local self
+  if command -v realpath >/dev/null 2>&1; then
+    self=$(realpath "${BASH_SOURCE[0]}")
+  else
+    # macOS fallback: use python if realpath absent
+    self=$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE[0]}")
+  fi
+  echo "$self"
+}
+
 # === Parse global flags ===
 ARGS=()
 for arg in "$@"; do
@@ -824,5 +854,6 @@ case "$SUBCMD" in
   migrate_v2_weights) cmd_migrate_v2_weights "$@" ;;
   count_flagged_since_last_expansion) cmd_count_flagged_since_last_expansion "$@" ;;
   retry_budget_remaining) cmd_retry_budget_remaining "$@" ;;
+  resolve_helper_path) cmd_resolve_helper_path "$@" ;;
   *) echo "session-helper: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
 esac
