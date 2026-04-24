@@ -495,3 +495,47 @@ def test_drain_kill_queue_preserves_entry_on_field_extraction_failure(tmp_path):
                   for ln in journal_path.read_text(encoding="utf-8").strip().splitlines()]
         killed = [e for e in events if e.get("event") == "seed_killed"]
         assert len(killed) == 0, f"Expected no seed_killed event, got: {killed}"
+
+
+def test_drain_kill_queue_untrusted_queued_at_does_not_execute_code(tmp_path):
+    """C-R1 security regression: queued_at from kill_queue.jsonl is
+    untrusted per the C-3 dead-letter contract. The same-second
+    bump must not interpolate queued_at into python3 source —
+    crafted values containing single quotes / python expressions
+    must NOT execute code."""
+    repo, sr, env = _setup(tmp_path)
+    canary = tmp_path / "DRAIN_PWNED_CANARY"
+    # Crafted malicious entry: queued_at contains Python code-
+    # injection payload. The entry is otherwise valid JSON (parses
+    # via jq) but queued_at's string value contains syntax that
+    # would execute if naively interpolated into python3 -c.
+    payload = {
+        "seed_id": 3,
+        "condition": "crash_give_up",
+        "final_q": 0.4,
+        "experiments_used": 8,
+        "queued_at": "2099-01-01T00:00:00Z' + str(__import__(\"os\").system(\"touch " + str(canary) + "\")) + 'Z",
+    }
+    import json
+    (sr / "kill_queue.jsonl").write_text(
+        json.dumps(payload) + "\n", encoding="utf-8"
+    )
+    r = _run(["drain_kill_queue", "3"], repo, env)
+    # Canonical invariant: no code executed. The canary file MUST
+    # NOT exist regardless of whether the entry was drained,
+    # preserved, or rejected.
+    assert not canary.exists(), \
+        f"code injection fired! canary at {canary} was created by drain"
+    # The malformed queued_at (not a valid ISO timestamp after
+    # rstrip) will cause python3 to exit 2, routing through the
+    # dead-letter preserve branch. The entry must remain in the
+    # queue for operator inspection.
+    remaining = (sr / "kill_queue.jsonl").read_text(encoding="utf-8")
+    assert '"seed_id": 3' in remaining, \
+        "malformed-queued_at entry must be preserved (dead-letter)"
+    # No seed_killed must be emitted for an entry that failed the
+    # bump step.
+    j = sr / "journal.jsonl"
+    if j.exists():
+        assert "seed_killed" not in j.read_text(encoding="utf-8"), \
+            "no seed_killed must be emitted when bump fails"

@@ -1364,12 +1364,23 @@ cmd_drain_kill_queue() {
       # W-6 fix: iso_now has 1-second precision, so drain within the
       # same second as the original append would produce applied_at
       # == queued_at — violates the strict-ordering invariant. Bump
-      # applied_ts to queued_at + 1s when the race happens. GNU date
-      # primary, python3 fallback for BSD date compatibility.
+      # applied_ts to queued_at + 1s when the race happens. Uses
+      # python3 isoformat for cross-platform compatibility (BSD date's
+      # limited -d support). queued_at is passed via argv to avoid
+      # code injection — C-R1 fix per review 2026-04-24-232731.
       if [ -n "$queued_at" ] && [[ "$applied_ts" < "$queued_at" || "$applied_ts" = "$queued_at" ]]; then
         local applied_ts_bumped
-        if ! applied_ts_bumped="$(python3 -c "from datetime import datetime, timedelta; print((datetime.fromisoformat('${queued_at}'.rstrip('Z'))+timedelta(seconds=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))" 2>/dev/null)"; then
-          echo "drain_kill_queue: failed to bump applied_ts for seed $entry_seed — preserving entry" >&2
+        if ! applied_ts_bumped="$(python3 -c '
+import sys
+from datetime import datetime, timedelta
+q = sys.argv[1].rstrip("Z")
+try:
+    dt = datetime.fromisoformat(q)
+except ValueError:
+    sys.exit(2)
+print((dt + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+' "$queued_at" 2>/dev/null)"; then
+          echo "drain_kill_queue: failed to bump applied_ts for seed $entry_seed (malformed queued_at?) — preserving entry" >&2
           printf '%s\n' "$raw_line" >> "$survivors"
           emit_failed_count=$((emit_failed_count + 1))
           continue
