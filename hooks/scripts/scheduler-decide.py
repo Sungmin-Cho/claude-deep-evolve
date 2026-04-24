@@ -50,6 +50,9 @@ def nearest_allowed(x):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--decision", required=True, help="JSON decision from AI scheduler")
+    ap.add_argument("--signals", default=None,
+                    help="(optional) JSON signals object from scheduler-signals.py -- "
+                         "enables fairness_violation and kill_deferred checks")
     args = ap.parse_args()
 
     try:
@@ -100,6 +103,44 @@ def main():
             "decision_id": None,  # filled by caller if known
         })
     result["journal_events_to_append"] = journal_events
+
+    # Optional fairness + kill-atomicity checks (spec section 6.6, 5.5 W-9)
+    if args.signals is not None:
+        try:
+            signals = json.loads(args.signals)
+        except json.JSONDecodeError as e:
+            _die(f"--signals is not valid JSON: {e}")
+        if not isinstance(signals, dict):
+            _die("--signals must be a JSON object")
+
+        seeds = signals.get("seeds", []) or []
+
+        # Soft fairness floor: any active seed with 0 experiments_used_this_epoch
+        # (other than the chosen seed itself) triggers a warning.
+        starved = []
+        for s in seeds:
+            if not isinstance(s, dict):
+                continue
+            sid = s.get("id")
+            if sid is None or sid == d["chosen_seed_id"]:
+                continue
+            if s.get("status") == "active" and s.get("experiments_used_this_epoch", 0) == 0:
+                starved.append(sid)
+        result["fairness_violation"] = len(starved) > 0
+        result["starved_seed_ids"] = starved
+
+        # Kill atomicity (W-9): if kill_target is currently running a block,
+        # defer the kill to the queue instead of applying immediately.
+        kill_deferred = False
+        if d["decision"] == "kill_then_schedule" and d.get("kill_target") is not None:
+            kt = d["kill_target"]
+            target = next((s for s in seeds
+                           if isinstance(s, dict) and s.get("id") == kt),
+                          None)
+            if target and target.get("in_flight_block"):
+                kill_deferred = True
+        result["kill_deferred"] = kill_deferred
+
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
