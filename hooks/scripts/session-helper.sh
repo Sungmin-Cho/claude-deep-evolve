@@ -1208,7 +1208,14 @@ cmd_append_kill_queue_entry() {
     return 3
   }
   # printf '%s\n' is safe vs xpg_echo reinterpretation (W-5).
-  printf '%s\n' "$line" >> "$queue"
+  # rc-guard the write: disk-full / permission failures must surface
+  # as rc=2 + stderr message rather than silently aborting under
+  # set -Eeuo pipefail (aff23c9 contract — no silent masking).
+  if ! printf '%s\n' "$line" >> "$queue"; then
+    echo "append_kill_queue_entry: write to $queue failed" >&2
+    release_project_lock
+    return 2
+  fi
   release_project_lock
   return 0
 }
@@ -1274,6 +1281,8 @@ cmd_drain_kill_queue() {
     return 3
   }
   if ! cp "$queue" "$snapshot"; then
+    # cp may leave a partial $snapshot on failure — clean up orphan.
+    rm -f "$snapshot"
     release_project_lock
     echo "drain_kill_queue: failed to snapshot queue" >&2
     return 2
@@ -1307,12 +1316,25 @@ cmd_drain_kill_queue() {
     fi
 
     if [ "$entry_seed" = "$completed_seed_id" ]; then
-      # Match: extract fields + emit seed_killed
+      # Match: extract fields + emit seed_killed.
+      # Consolidated into ONE rc-guarded jq call (vs 4 bare assignments)
+      # so a jq crash/OOM falls through to the dead-letter path rather
+      # than aborting the function under set -Eeuo pipefail (T20 rc-guard
+      # contract + C-3 dead-letter invariant). Also reduces jq process
+      # count by 3 per match (small perf win).
+      local extracted
+      if ! extracted="$(printf '%s' "$raw_line" | jq -r \
+          '[.condition // "unknown",
+            .queued_at // "",
+            (.final_q // 0 | tostring),
+            (.experiments_used // 0 | tostring)] | join("\t")')"; then
+        echo "drain_kill_queue: field extraction failed for seed $entry_seed — preserving entry" >&2
+        printf '%s\n' "$raw_line" >> "$survivors"
+        emit_failed_count=$((emit_failed_count + 1))
+        continue
+      fi
       local cond queued_at final_q experiments_used
-      cond="$(printf '%s' "$raw_line" | jq -r '.condition // "unknown"')"
-      queued_at="$(printf '%s' "$raw_line" | jq -r '.queued_at // empty')"
-      final_q="$(printf '%s' "$raw_line" | jq -r '.final_q // 0')"
-      experiments_used="$(printf '%s' "$raw_line" | jq -r '.experiments_used // 0')"
+      IFS=$'\t' read -r cond queued_at final_q experiments_used <<< "$extracted"
 
       local killed_event
       if ! killed_event="$(jq -cn \

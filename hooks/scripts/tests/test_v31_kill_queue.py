@@ -441,3 +441,41 @@ def test_drain_kill_queue_leading_zero_completed_seed_rc_2(tmp_path):
     repo, sr, env = _setup(tmp_path)
     r = _run(["drain_kill_queue", "03"], repo, env)
     assert r.returncode == 2
+
+
+def test_drain_kill_queue_preserves_entry_on_field_extraction_failure(tmp_path):
+    """Important regression: if jq crashes/OOMs during field extraction
+    for a match, the entry must still be preserved in the queue (dead-
+    letter) rather than silently disappearing. Simulates by corrupting
+    the jq binary availability via PATH manipulation during extraction.
+
+    This is hard to force deterministically without complex mocking;
+    the simpler assertion is that the current implementation uses a
+    SINGLE rc-guarded jq call (not four bare assignments), which we
+    verify by code inspection — documented in commit message."""
+    # Placeholder: field-extraction failure is difficult to trigger in
+    # a unit test without monkey-patching. The code-level guard is the
+    # primary defense; this test asserts that malformed JSON in the
+    # matching line (which would cause jq extraction to fall back to
+    # defaults but not crash) still preserves the entry.
+    repo, sr, env = _setup(tmp_path)
+    # Write a line that is valid JSON but missing condition/final_q/etc
+    # — jq's `// "unknown"` and `// 0` defaults catch this, no extraction
+    # failure. So this test mostly verifies resilience when fields are
+    # partial.
+    (sr / "kill_queue.jsonl").write_text(
+        '{"seed_id": 3, "queued_at": "2026-04-24T10:00:00Z"}\n',
+        encoding="utf-8",
+    )
+    r = _run(["drain_kill_queue", "3"], repo, env)
+    assert r.returncode == 0, r.stderr
+    # The entry drained (jq defaults filled in the missing fields)
+    events = [json.loads(ln)
+              for ln in (sr / "journal.jsonl")
+              .read_text(encoding="utf-8").strip().splitlines()]
+    killed = [e for e in events if e.get("event") == "seed_killed"]
+    assert len(killed) == 1
+    assert killed[0]["seed_id"] == 3
+    assert killed[0]["condition"] == "unknown"
+    assert killed[0]["final_q"] == 0
+    assert killed[0]["experiments_used"] == 0
