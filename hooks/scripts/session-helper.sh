@@ -1123,6 +1123,283 @@ cmd_append_journal_event() {
   return 0
 }
 
+# --- v3.1.0 kill queue helpers (spec § 5.5 W-9 kill atomicity) ---
+#
+# kill_queue.jsonl captures scheduler-decided kills that cannot fire
+# immediately because the target seed has an in-flight block (per T18's
+# in_flight_block synthesis). Entries are drained when the block
+# completes, at which point the kill applies and a seed_killed journal
+# event is emitted with queued_at + applied_at timestamps + final_q +
+# experiments_used (spec § 9.2 key fields for downstream synthesis
+# baseline-select cascade).
+
+# Whitelist of spec § 5.5 condition strings. Callers MUST supply one of
+# these verbatim — a typo'd condition would otherwise pollute seed_killed
+# events and downstream consumers (synthesis, --status view, meta-archive).
+_KILL_CONDITION_WHITELIST="crash_give_up sustained_regression shortcut_quarantine budget_exhausted_underperform user_requested"
+
+# Append one entry to $SESSION_ROOT/kill_queue.jsonl.
+# Usage: append_kill_queue_entry <seed_id> <condition> <final_q> <experiments_used>
+#   final_q: numeric (may be fractional); downstream synthesis
+#     baseline-select cascade reads this to distinguish killed-at-high-Q
+#     from killed-at-zero-Q.
+#   experiments_used: non-negative integer; meta-archive aggregation.
+cmd_append_kill_queue_entry() {
+  local seed_id="${1:-}"
+  local condition="${2:-}"
+  local final_q="${3:-}"
+  local experiments_used="${4:-}"
+
+  if [ -z "$seed_id" ] || [ -z "$condition" ] \
+      || [ -z "$final_q" ] || [ -z "$experiments_used" ]; then
+    echo "usage: append_kill_queue_entry <seed_id> <condition> <final_q> <experiments_used>" >&2
+    return 2
+  fi
+  if [ -z "${SESSION_ROOT:-}" ]; then
+    echo "append_kill_queue_entry: SESSION_ROOT not set" >&2
+    return 2
+  fi
+
+  # Seed ID validation — positive integer, no leading zeros (W-5)
+  if ! [[ "$seed_id" =~ ^[1-9][0-9]*$ ]]; then
+    echo "append_kill_queue_entry: seed_id must be a positive integer with no leading zeros, got: $seed_id" >&2
+    return 2
+  fi
+
+  # Condition whitelist (I-5 — prevent typo'd condition strings)
+  local found=0
+  for allowed in $_KILL_CONDITION_WHITELIST; do
+    if [ "$condition" = "$allowed" ]; then
+      found=1
+      break
+    fi
+  done
+  if [ "$found" -eq 0 ]; then
+    echo "append_kill_queue_entry: condition must be one of: $_KILL_CONDITION_WHITELIST. Got: $condition" >&2
+    return 2
+  fi
+
+  # final_q: numeric (may be negative, may be fractional)
+  if ! [[ "$final_q" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "append_kill_queue_entry: final_q must be numeric, got: $final_q" >&2
+    return 2
+  fi
+  # experiments_used: non-negative integer
+  if ! [[ "$experiments_used" =~ ^[0-9]+$ ]]; then
+    echo "append_kill_queue_entry: experiments_used must be non-negative integer, got: $experiments_used" >&2
+    return 2
+  fi
+
+  local queue="$SESSION_ROOT/kill_queue.jsonl"
+  local ts
+  ts="$(iso_now)"
+
+  local line
+  if ! line="$(jq -cn --argjson sid "$seed_id" --arg cond "$condition" \
+      --argjson fq "$final_q" --argjson eu "$experiments_used" \
+      --arg ts "$ts" \
+      '{seed_id: $sid, condition: $cond, final_q: $fq, experiments_used: $eu, queued_at: $ts}')"; then
+    echo "append_kill_queue_entry: jq failed to build entry" >&2
+    return 2
+  fi
+
+  acquire_project_lock || {
+    echo "append_kill_queue_entry: lock failed" >&2
+    return 3
+  }
+  # printf '%s\n' is safe vs xpg_echo reinterpretation (W-5).
+  printf '%s\n' "$line" >> "$queue"
+  release_project_lock
+  return 0
+}
+
+# Drain any queued kills for a seed whose block just completed.
+# Usage: drain_kill_queue <completed_seed_id>
+#
+# Atomicity design (C-1/W-9 fix — snapshot-then-process):
+#   Phase 1: acquire lock, cp $queue → $snapshot, release lock.
+#   Phase 2: process $snapshot WITHOUT lock — emit seed_killed for
+#            matches (each cmd_append_journal_event acquires its own
+#            short-lived lock), accumulate survivors.
+#   Phase 3: re-acquire lock; compute set-difference of current $queue
+#            vs $snapshot to find concurrent appends that landed during
+#            Phase 2; merge them into survivors; mv survivors → $queue.
+#
+# This bounds lock-hold time to the snapshot copy + the merge step
+# rather than the O(N · jq-startup-time) parse loop, and guarantees
+# concurrent appends during the unlocked Phase 2 are not lost.
+#
+# For each matching entry in kill_queue.jsonl, emits a seed_killed
+# journal event with queued_at + applied_at + final_q + experiments_used
+# (spec § 9.2 key fields). Malformed lines are PRESERVED in the
+# survivors partition (dead-letter) for operator inspection — never
+# silently deleted (C-3). The journal append runs inside
+# `(unset SEED_ID; cmd_append_journal_event "$event")` subshell so the
+# coordinator's ambient SEED_ID does not override the queued seed_id
+# (T16 auto-inject prevention).
+cmd_drain_kill_queue() {
+  local completed_seed_id="${1:-}"
+
+  if [ -z "$completed_seed_id" ]; then
+    echo "usage: drain_kill_queue <completed_seed_id>" >&2
+    return 2
+  fi
+  if [ -z "${SESSION_ROOT:-}" ]; then
+    echo "drain_kill_queue: SESSION_ROOT not set" >&2
+    return 2
+  fi
+  # W-2: SESSION_ID required by downstream cmd_append_journal_event;
+  # fail fast here rather than letting the inner call fail and hit the
+  # preserve-queue-entry branch.
+  if [ -z "${SESSION_ID:-}" ]; then
+    echo "drain_kill_queue: SESSION_ID not set (required for journal append)" >&2
+    return 2
+  fi
+  # Positive integer, no leading zeros (mirrors W-5 in append)
+  if ! [[ "$completed_seed_id" =~ ^[1-9][0-9]*$ ]]; then
+    echo "drain_kill_queue: completed_seed_id must be a positive integer with no leading zeros, got: $completed_seed_id" >&2
+    return 2
+  fi
+
+  local queue="$SESSION_ROOT/kill_queue.jsonl"
+  # Missing or empty file → nothing to drain (no-op success)
+  if [ ! -f "$queue" ] || [ ! -s "$queue" ]; then
+    return 0
+  fi
+
+  # ---- Phase 1: snapshot under lock ----
+  local snapshot="$queue.snap.$$"
+  acquire_project_lock || {
+    echo "drain_kill_queue: lock failed (snapshot phase)" >&2
+    return 3
+  }
+  if ! cp "$queue" "$snapshot"; then
+    release_project_lock
+    echo "drain_kill_queue: failed to snapshot queue" >&2
+    return 2
+  fi
+  release_project_lock
+
+  # ---- Phase 2: process snapshot WITHOUT lock ----
+  local survivors="$queue.survivors.$$"
+  : > "$survivors"
+  local applied_ts
+  applied_ts="$(iso_now)"
+  local matches_count=0
+  local emit_failed_count=0
+
+  while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+    # Skip blank lines silently
+    [ -z "$raw_line" ] && continue
+
+    local entry_seed
+    if ! entry_seed="$(printf '%s' "$raw_line" \
+        | jq -r '.seed_id // empty' 2>/dev/null)"; then
+      # C-3: preserve malformed line (dead-letter). Never silently drop.
+      echo "drain_kill_queue: malformed queue line preserved for inspection: $raw_line" >&2
+      printf '%s\n' "$raw_line" >> "$survivors"
+      continue
+    fi
+    if [ -z "$entry_seed" ]; then
+      echo "drain_kill_queue: line without seed_id preserved: $raw_line" >&2
+      printf '%s\n' "$raw_line" >> "$survivors"
+      continue
+    fi
+
+    if [ "$entry_seed" = "$completed_seed_id" ]; then
+      # Match: extract fields + emit seed_killed
+      local cond queued_at final_q experiments_used
+      cond="$(printf '%s' "$raw_line" | jq -r '.condition // "unknown"')"
+      queued_at="$(printf '%s' "$raw_line" | jq -r '.queued_at // empty')"
+      final_q="$(printf '%s' "$raw_line" | jq -r '.final_q // 0')"
+      experiments_used="$(printf '%s' "$raw_line" | jq -r '.experiments_used // 0')"
+
+      local killed_event
+      if ! killed_event="$(jq -cn \
+          --argjson sid "$entry_seed" \
+          --arg cond "$cond" \
+          --argjson fq "$final_q" \
+          --argjson eu "$experiments_used" \
+          --arg q_at "$queued_at" \
+          --arg a_at "$applied_ts" \
+          '{event: "seed_killed",
+            seed_id: $sid,
+            condition: $cond,
+            final_q: $fq,
+            experiments_used: $eu,
+            queued_at: $q_at,
+            applied_at: $a_at,
+            reasoning: ("queued kill drained at block completion: " + $cond)}')"; then
+        echo "drain_kill_queue: jq failed to build seed_killed event for seed $entry_seed — preserving entry" >&2
+        printf '%s\n' "$raw_line" >> "$survivors"
+        emit_failed_count=$((emit_failed_count + 1))
+        continue
+      fi
+
+      # (unset SEED_ID; ...) subshell: only the append call is wrapped;
+      # surrounding lock/state stays in the parent shell (I-4). The
+      # append helper takes its own lock, so we are NOT holding our
+      # project lock here (Phase 2 is unlocked by design).
+      local rc=0
+      (unset SEED_ID; cmd_append_journal_event "$killed_event") || rc=$?
+      if [ "$rc" -ne 0 ]; then
+        echo "drain_kill_queue: append_journal_event failed (rc=$rc) — preserving entry" >&2
+        printf '%s\n' "$raw_line" >> "$survivors"
+        emit_failed_count=$((emit_failed_count + 1))
+        continue
+      fi
+      matches_count=$((matches_count + 1))
+    else
+      # Non-match: preserve in survivors
+      printf '%s\n' "$raw_line" >> "$survivors"
+    fi
+  done < "$snapshot"
+
+  # ---- Phase 3: merge concurrent appends under lock, then replace ----
+  # During Phase 2, concurrent cmd_append_kill_queue_entry calls may
+  # have appended new lines to $queue. Detect them by set-difference
+  # of current $queue vs $snapshot (entire lines as opaque tokens),
+  # append to survivors before atomic replace.
+  acquire_project_lock || {
+    echo "drain_kill_queue: lock failed (merge phase)" >&2
+    rm -f "$snapshot" "$survivors"
+    return 3
+  }
+
+  if [ -f "$queue" ]; then
+    # awk preserves order; NR==FNR builds a seen-set from $snapshot,
+    # then emits only lines in $queue not in $snapshot.
+    if ! awk 'NR==FNR{seen[$0]=1; next} !seen[$0]' "$snapshot" "$queue" >> "$survivors"; then
+      echo "drain_kill_queue: failed to compute concurrent-append delta" >&2
+      release_project_lock
+      rm -f "$snapshot" "$survivors"
+      return 2
+    fi
+  fi
+
+  if ! mv "$survivors" "$queue"; then
+    echo "drain_kill_queue: failed to replace queue with survivors" >&2
+    release_project_lock
+    rm -f "$snapshot" "$survivors"
+    return 2
+  fi
+  rm -f "$snapshot"
+  release_project_lock
+
+  # Diagnostic: how many drained + how many emit-failures remain queued.
+  # W-7: use jq + printf for JSON emit (never echo manually-built JSON —
+  # xpg_echo may re-interpret `\"` escapes).
+  local diag
+  if ! diag="$(jq -cn --argjson n "$matches_count" \
+      --argjson sid "$completed_seed_id" \
+      --argjson failed "$emit_failed_count" \
+      '{drained: $n, seed_id: $sid, emit_failed: $failed}')"; then
+    diag="{\"drained\":$matches_count,\"seed_id\":$completed_seed_id,\"emit_failed\":$emit_failed_count}"
+  fi
+  printf '%s\n' "$diag"
+  return 0
+}
+
 # === END of helper function definitions ===
 
 # If sourced (not executed), skip ALL execution-time side effects:
@@ -1179,5 +1456,7 @@ case "$SUBCMD" in
   append_forum_event)    cmd_append_forum_event "$@" ;;
   tail_forum)            cmd_tail_forum "$@" ;;
   append_journal_event)  cmd_append_journal_event "$@" ;;
+  append_kill_queue_entry)  cmd_append_kill_queue_entry "$@" ;;
+  drain_kill_queue)         cmd_drain_kill_queue "$@" ;;
   *) echo "session-helper: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
 esac
