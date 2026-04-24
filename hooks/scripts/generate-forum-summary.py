@@ -35,12 +35,25 @@ def per_seed_stats(events):
     for e in events:
         et = e.get("event")
         if et == "seed_keep":
-            stats[e["seed_id"]]["keeps"].append(e)
+            sid = e.get("seed_id")
+            if sid is None:
+                print(f"warn: skipping seed_keep missing seed_id: {e}", file=sys.stderr)
+                continue
+            stats[sid]["keeps"].append(e)
         elif et == "seed_discard":
-            stats[e["seed_id"]]["discards"].append(e)
+            sid = e.get("seed_id")
+            if sid is None:
+                print(f"warn: skipping seed_discard missing seed_id: {e}", file=sys.stderr)
+                continue
+            stats[sid]["discards"].append(e)
         elif et == "cross_seed_borrow":
-            stats[e.get("from_seed")]["borrows_given"].append(e)
-            stats[e.get("to_seed")]["borrows_received"].append(e)
+            from_seed = e.get("from_seed")
+            to_seed = e.get("to_seed")
+            if from_seed is None or to_seed is None:
+                print(f"warn: skipping cross_seed_borrow missing endpoints: {e}", file=sys.stderr)
+                continue
+            stats[from_seed]["borrows_given"].append(e)
+            stats[to_seed]["borrows_received"].append(e)
     return stats
 
 
@@ -72,7 +85,8 @@ def render(stats, convs, gen_n):
         for k in s["keeps"][:3]:
             desc = k.get("description", "(no description)")
             delta = k.get("score_delta", "?")
-            lines.append(f"  - keep {k['commit'][:8]}: {desc} (Δ={delta})")
+            commit = k.get("commit") or "????????"
+            lines.append(f"  - keep {commit[:8]}: {desc} (Δ={delta})")
         given_suffix = _format_borrow_list(s['borrows_given'], "to", "to_seed")
         recv_suffix = _format_borrow_list(s['borrows_received'], "from", "from_seed")
         given_line = f"- Borrow given: {len(s['borrows_given'])}"
