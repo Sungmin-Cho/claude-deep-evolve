@@ -444,38 +444,35 @@ def test_drain_kill_queue_leading_zero_completed_seed_rc_2(tmp_path):
 
 
 def test_drain_kill_queue_preserves_entry_on_field_extraction_failure(tmp_path):
-    """Important regression: if jq crashes/OOMs during field extraction
-    for a match, the entry must still be preserved in the queue (dead-
-    letter) rather than silently disappearing. Simulates by corrupting
-    the jq binary availability via PATH manipulation during extraction.
+    """Strict condition validation: an entry with valid JSON but missing
+    (or non-whitelisted) .condition must be PRESERVED in the queue as a
+    dead-letter entry — drain must NOT emit a seed_killed event and must
+    NOT substitute a synthetic "unknown" value (§ 5.5 whitelist contract).
 
-    This is hard to force deterministically without complex mocking;
-    the simpler assertion is that the current implementation uses a
-    SINGLE rc-guarded jq call (not four bare assignments), which we
-    verify by code inspection — documented in commit message."""
-    # Placeholder: field-extraction failure is difficult to trigger in
-    # a unit test without monkey-patching. The code-level guard is the
-    # primary defense; this test asserts that malformed JSON in the
-    # matching line (which would cause jq extraction to fall back to
-    # defaults but not crash) still preserves the entry.
+    Verifies:
+      (a) The entry is still present in kill_queue.jsonl after drain.
+      (b) No seed_killed event is written to journal.jsonl.
+      (c) drain returns rc=0 (entry preserved, not a fatal error)."""
     repo, sr, env = _setup(tmp_path)
-    # Write a line that is valid JSON but missing condition/final_q/etc
-    # — jq's `// "unknown"` and `// 0` defaults catch this, no extraction
-    # failure. So this test mostly verifies resilience when fields are
-    # partial.
+    # Write a line that is valid JSON but missing .condition — this
+    # previously triggered the ".condition // 'unknown'" fallback which
+    # violated § 5.5. After the fix, jq errors and the dead-letter path
+    # fires: entry preserved in queue, no seed_killed emitted.
     (sr / "kill_queue.jsonl").write_text(
         '{"seed_id": 3, "queued_at": "2026-04-24T10:00:00Z"}\n',
         encoding="utf-8",
     )
     r = _run(["drain_kill_queue", "3"], repo, env)
     assert r.returncode == 0, r.stderr
-    # The entry drained (jq defaults filled in the missing fields)
-    events = [json.loads(ln)
-              for ln in (sr / "journal.jsonl")
-              .read_text(encoding="utf-8").strip().splitlines()]
-    killed = [e for e in events if e.get("event") == "seed_killed"]
-    assert len(killed) == 1
-    assert killed[0]["seed_id"] == 3
-    assert killed[0]["condition"] == "unknown"
-    assert killed[0]["final_q"] == 0
-    assert killed[0]["experiments_used"] == 0
+    # (a) Entry preserved in kill_queue.jsonl (dead-letter, not removed)
+    queue_lines = (sr / "kill_queue.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(queue_lines) == 1, f"Expected entry preserved in queue, got: {queue_lines}"
+    preserved = json.loads(queue_lines[0])
+    assert preserved["seed_id"] == 3
+    # (b) No seed_killed event in journal
+    journal_path = sr / "journal.jsonl"
+    if journal_path.exists() and journal_path.stat().st_size > 0:
+        events = [json.loads(ln)
+                  for ln in journal_path.read_text(encoding="utf-8").strip().splitlines()]
+        killed = [e for e in events if e.get("event") == "seed_killed"]
+        assert len(killed) == 0, f"Expected no seed_killed event, got: {killed}"

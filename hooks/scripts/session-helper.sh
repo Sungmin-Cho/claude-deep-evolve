@@ -1244,6 +1244,29 @@ cmd_append_kill_queue_entry() {
 # `(unset SEED_ID; cmd_append_journal_event "$event")` subshell so the
 # coordinator's ambient SEED_ID does not override the queued seed_id
 # (T16 auto-inject prevention).
+#
+# Known limitations (v3.1.0 ship; full fix scheduled for v3.1.1):
+#   C-2 Retry non-idempotence: if Phase 3 awk/mv fails after Phase 2
+#       emits seed_killed events to journal, a caller retry re-drains
+#       matched entries and emits duplicate seed_killed. Real impact
+#       requires Phase 3 filesystem failure — rare on healthy disks.
+#       Full fix (v3.1.1): entry_id per queue record + idempotent
+#       drain matching via journal.seed_killed.entry_id dedup.
+#   C-3-A Cross-drain race: two simultaneous drain_kill_queue
+#       invocations (e.g. distinct completed seeds) each snapshot the
+#       queue + rewrite independently. The last mv wins; earlier
+#       drain's removed entries can be resurrected. Only fires with
+#       parallel drain paths — v3.1.0's sequential coordinator does
+#       not trigger this. Full fix (v3.1.1): drain-exclusive flock
+#       on a dedicated .drain-lock file.
+#   C-3-B Identical-append multiset collapse: awk's set-difference
+#       uses line-as-token equality (seen[$0]). Byte-identical
+#       concurrent appends within the same second (same seed,
+#       condition, final_q, experiments_used — queued_at is 1-second
+#       precision) are classified as "already seen" and dropped.
+#       Full fix (v3.1.1): entry_id-based multiset matching instead
+#       of line-hash set-difference.
+# See .deep-review/reports/2026-04-24-224316-review.md C-2 + C-3.
 cmd_drain_kill_queue() {
   local completed_seed_id="${1:-}"
 
@@ -1324,10 +1347,12 @@ cmd_drain_kill_queue() {
       # count by 3 per match (small perf win).
       local extracted
       if ! extracted="$(printf '%s' "$raw_line" | jq -r \
-          '[.condition // "unknown",
-            .queued_at // "",
-            (.final_q // 0 | tostring),
-            (.experiments_used // 0 | tostring)] | join("\t")')"; then
+          'if has("condition") and (.condition | IN("crash_give_up","sustained_regression","shortcut_quarantine","budget_exhausted_underperform","user_requested"))
+           then
+             [.condition, .queued_at // "", (.final_q // 0 | tostring), (.experiments_used // 0 | tostring)] | join("\t")
+           else
+             error("missing or non-whitelisted condition")
+           end')"; then
         echo "drain_kill_queue: field extraction failed for seed $entry_seed — preserving entry" >&2
         printf '%s\n' "$raw_line" >> "$survivors"
         emit_failed_count=$((emit_failed_count + 1))
