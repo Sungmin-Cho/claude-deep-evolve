@@ -127,3 +127,34 @@ def test_validate_seed_worktree_tolerates_tool_scratch_dirs(tmp_path):
         f"validate_seed_worktree must tolerate tool-scratch dirs; "
         f"got rc={rc} stderr={stderr}"
     )
+
+
+def test_validate_detects_off_branch_commits(tmp_path):
+    """A commit on a non-seed branch within the worktree must fail validation."""
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=t@t.t", "-c", "user.name=T",
+                    "commit", "--allow-empty", "-m", "init"],
+                   cwd=repo, check=True, capture_output=True)
+
+    session_root = repo / ".deep-evolve" / "sess-off"
+    session_root.mkdir(parents=True)
+    env = os.environ.copy()
+    env.update({
+        "EVOLVE_DIR": str(repo / ".deep-evolve"),
+        "SESSION_ID": "sess-off",
+        "SESSION_ROOT": str(session_root),
+    })
+    # Create seed_1 worktree
+    subprocess.run(["bash", str(HELPER), "create_seed_worktree", "1"],
+                   cwd=repo, env=env, check=True)
+    wt = session_root / "worktrees" / "seed_1"
+    # Check out a DIFFERENT branch in the worktree (violation)
+    subprocess.run(["git", "-C", str(wt), "checkout", "-b", "evolve/wrong-branch"],
+                   check=True, capture_output=True)
+    # Validation must fail (not on seed-1 branch)
+    r = subprocess.run(["bash", str(HELPER), "validate_seed_worktree", "1"],
+                       cwd=repo, env=env, capture_output=True, text=True)
+    assert r.returncode != 0
+    assert "expected evolve/sess-off/seed-1" in r.stderr or "wrong-branch" in r.stderr

@@ -863,8 +863,11 @@ cmd_create_seed_worktree() {
 # clean working tree (allow .deep-evolve/ untracked), no off-branch commits.
 # Usage: validate_seed_worktree <seed_id> [<pre_dispatch_head_sha>]
 cmd_validate_seed_worktree() {
-  local seed_id="$1"
-  local pre_head="$2"     # optional; when provided, verify descendancy
+  # C-1: ${VAR:-} survives `set -u` (nounset) — without defaults, a missing
+  # optional pre_head would abort at "$2: unbound variable" before our usage
+  # guard, and the EXIT trap's `|| true` would mask rc, returning 0 spuriously.
+  local seed_id="${1:-}"
+  local pre_head="${2:-}"     # optional; when provided, verify descendancy
   [ -z "$seed_id" ] && { echo "usage: validate_seed_worktree <seed_id> [pre_head]" >&2; return 2; }
   [ -z "$SESSION_ROOT" ] && { echo "SESSION_ROOT not set" >&2; return 2; }
 
