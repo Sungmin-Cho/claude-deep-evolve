@@ -76,6 +76,13 @@ Set `experiment_count` to 0. Set `max_count` to `session.yaml.experiments.reques
 Set `inner_count` to `session.yaml.outer_loop.inner_count` (0 for new sessions, restored value for resume).
 Set `outer_interval` to `session.yaml.outer_loop.interval` (default 20).
 
+**v3.1 additional contract**: when `$VERSION` starts with "3.1", every journal
+event appended from within the inner loop MUST carry `"seed_id": <int>`. See
+the Block-Parameters Intake step (Section C, first sub-step below) for the
+`SEED_ID` derivation and the `append_journal_event` invocation pattern.
+`scheduler-signals.py` relies on this tag for per-seed recent_Q_trend and
+forum_activity computation (foundation Gap 4 closure).
+
 ### Branch & Clean-Tree Guard
 
 Before ANY experiment work, verify safety preconditions. This check runs:
@@ -143,6 +150,77 @@ Before starting, check last entry in `journal.jsonl`:
 ### Loop
 
 Repeat until `experiment_count >= max_count` or diminishing returns detected:
+
+**Step 0.5 — v3.1 Block-Parameters Intake** (only when `$VERSION` starts with
+"3.1"; v2 and v3.0 sessions skip this step entirely):
+
+At the very top of every inner-loop iteration inside a v3.1 session, the
+subagent MUST confirm its block-level parameters before touching code or state.
+This step is the contract enforcement point for § 4.1 worktree isolation and
+§ 5.7 per-seed state separation.
+
+1. **CWD pin check (prose-contract § 4.1)**: run `pwd`. The output MUST equal
+   exactly the `worktree_path` printed in your dispatch prompt. If mismatched:
+   emit a final JSON summary with `"status": "failed"` and `"notes": "CWD
+   mismatch: expected <worktree_path>, got <pwd>"`, and exit without appending
+   any journal events. CWD mismatch is a contract violation — do not attempt
+   self-recovery via `cd`.
+2. **`N_block` readout**: your dispatch prompt contains the sentence "run
+   exactly N experiments" (see T13 subagent prompt builder). Record this N
+   as `N_block`; your block MUST execute exactly N iterations of Steps 1–5
+   unless a `crash_give_up` condition (Step 5.a fallback) or user-initiated
+   kill halts the block early.
+3. **Seed identity**: derive `SEED_ID` from `pwd` (the CWD you just pinned
+   in step 1). This keeps Step 0.5 self-contained — the prose contract
+   never exports `$worktree_path`, so deriving from a pinned `pwd` is the
+   only portable path:
+   ```bash
+   SEED_ID=$(basename "$(pwd)" | sed 's/^seed_//')
+   export SEED_ID
+   ```
+   Because step 1 already verified `pwd == worktree_path` and the path is
+   always `.deep-evolve/<sid>/worktrees/seed_<k>`, `basename` yields
+   `seed_<k>` and the `sed` strips the prefix to yield `<k>`.
+4. **Per-seed program.md**: read `"$worktree_path/program.md"`. This is the
+   SEED-SPECIFIC program.md written by the coordinator at init (see T8
+   `write-seed-program.py`), NOT the base `$SESSION_ROOT/program.md`. It
+   contains this seed's β direction, hypothesis, and initial rationale.
+   For N=1 sessions the seed program.md is a verbatim copy of the base (per
+   § 5.1a short-circuit) — this step reads the same content in both cases, so
+   downstream Steps 1–5 have uniform scaffolding.
+5. **Tagging contract (closes foundation Gap 4)**: EVERY journal event you
+   append during this block — `planned`, `committed`, `evaluated`, `kept`,
+   `discarded`, `rollback_completed`, `diagnose_retry_started`,
+   `diagnose_retry_completed`, `shortcut_flagged`, `rationale_missing`,
+   `borrow_planned` — MUST include `"seed_id": <SEED_ID>`. Enforcement is
+   dual-layer (defense-in-depth):
+   - Layer 1 (this prose contract): pass seed_id explicitly in every event JSON.
+   - Layer 2 (`session-helper.sh` enforcement — T16 Step 6 below): when
+     `$SEED_ID` is exported, `append_journal_event` auto-injects seed_id
+     into the enriched event, **overriding any stale value** in the payload.
+     This is the actual Gap 4 closure — prose alone was insufficient.
+
+   Subagent invocation pattern (explicit layer 1):
+   ```bash
+   bash "$DEEP_EVOLVE_HELPER_PATH" append_journal_event "$(
+     jq -nc --arg sid "$SEED_ID" --argjson rest "$EVENT_JSON" \
+       '$rest + {seed_id: ($sid|tonumber)}'
+   )"
+   ```
+   Note jq merge order: `$rest + {seed_id: ...}`. In jq, object `+` makes
+   the RHS win on key conflict — so the auto-injected seed_id overrides
+   any seed_id that drifted into `$EVENT_JSON`. If the order were reversed
+   (`{seed_id:...} + $rest`), a stale seed_id in the payload would silently
+   defeat the auto-inject.
+
+   `scheduler-signals.py` keys `recent_Q_trend` off of `kept.seed_id`; a
+   missing or wrong tag silently returns neutral trend and the Adaptive
+   Scheduler makes blind decisions. Tag at emission; never post-hoc.
+
+v2 / v3.0.x sessions: skip Step 0.5 entirely. These sessions have no worktree,
+no N_block, and no SEED_ID. The `$VERSION` gate at the top of Section C
+already enforces this separation; Step 0.5 only runs when that gate matches
+`3.1.*`.
 
 **Step 1 — Idea Selection** (uses `strategy.yaml` parameters):
 - Read `results.tsv` to learn from previous keep/discard history

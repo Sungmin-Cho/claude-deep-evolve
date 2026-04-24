@@ -1097,9 +1097,22 @@ cmd_append_journal_event() {
   local ts
   ts=$(iso_now)
   local enriched
-  enriched=$(echo "$json" | jq -c --arg ts "$ts" --arg sid "$SESSION_ID" \
-    'if has("ts") then . else . + {ts:$ts} end
-     | if has("session_id") then . else . + {session_id:$sid} end')
+  if [ -n "${SEED_ID:-}" ]; then
+    # v3.1 Gap 4 closure: when SEED_ID is exported by the dispatching
+    # subagent (inner-loop.md Step 0.5), auto-inject it as seed_id —
+    # overriding any seed_id in the payload (RHS wins in jq's object +).
+    # SEED_ID is a numeric string; jq's tonumber coerces to JSON number.
+    enriched=$(echo "$json" | jq -c \
+      --arg ts "$ts" --arg sid "$SESSION_ID" --arg seed "${SEED_ID}" \
+      'if has("ts") then . else . + {ts:$ts} end
+       | if has("session_id") then . else . + {session_id:$sid} end
+       | . + {seed_id: ($seed|tonumber)}')
+  else
+    # v3.0 / v2 backward-compat path — no seed_id injection
+    enriched=$(echo "$json" | jq -c --arg ts "$ts" --arg sid "$SESSION_ID" \
+      'if has("ts") then . else . + {ts:$ts} end
+       | if has("session_id") then . else . + {session_id:$sid} end')
+  fi
 
   local journal="$SESSION_ROOT/journal.jsonl"
   acquire_project_lock || { echo "append_journal_event: lock failed" >&2; return 3; }
