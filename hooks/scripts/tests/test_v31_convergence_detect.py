@@ -239,3 +239,70 @@ def test_bool_threshold_rejected():
     )
     assert r.returncode == 2
     assert "bool" in r.stderr.lower() or "number" in r.stderr.lower()
+
+
+def test_keep_missing_commit_returns_rc_2():
+    """I-2 fix: keep without commit field must return rc=2 via _die, not
+    raise KeyError with rc=1 (violates T3/T15/T17 defensive contract)."""
+    r = subprocess.run(
+        ["python3", str(SCRIPT), "--args",
+         json.dumps({
+             "keeps": [{"seed_id": 1, "ts": "t",
+                        "experiments_used_before_keep": 5}],  # no commit
+             "similarities": [], "inspired_by_map": {},
+             "cross_seed_borrow_events": [],
+         })],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 2
+    assert "error:" in r.stderr
+    assert "commit" in r.stderr
+
+
+def test_keep_with_string_seed_id_returns_rc_2():
+    """I-1 fix: seed_id must be int (not str, not bool). A payload mixing
+    types would otherwise propagate a TypeError from sorted() at rc=1."""
+    r = subprocess.run(
+        ["python3", str(SCRIPT), "--args",
+         json.dumps({
+             "keeps": [{"commit": "a", "seed_id": "1", "ts": "t",
+                        "experiments_used_before_keep": 5}],  # str seed_id
+             "similarities": [], "inspired_by_map": {},
+             "cross_seed_borrow_events": [],
+         })],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 2
+    assert "error:" in r.stderr
+    assert "seed_id" in r.stderr
+
+
+def test_keep_with_bool_seed_id_returns_rc_2():
+    """Same bool-as-int Python pitfall that T17 BLOCKER surfaced."""
+    r = subprocess.run(
+        ["python3", str(SCRIPT), "--args",
+         json.dumps({
+             "keeps": [{"commit": "a", "seed_id": True, "ts": "t",
+                        "experiments_used_before_keep": 5}],
+             "similarities": [], "inspired_by_map": {},
+             "cross_seed_borrow_events": [],
+         })],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 2
+    assert "bool" in r.stderr.lower()
+
+
+def test_keep_not_a_dict_returns_rc_2():
+    """Malformed list element (string instead of dict) must rc=2, not crash."""
+    r = subprocess.run(
+        ["python3", str(SCRIPT), "--args",
+         json.dumps({
+             "keeps": ["not-a-dict"],
+             "similarities": [], "inspired_by_map": {},
+             "cross_seed_borrow_events": [],
+         })],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 2
+    assert "error:" in r.stderr

@@ -168,6 +168,15 @@ def main():
     keeps = payload["keeps"]
     if not isinstance(keeps, list):
         _die("keeps must be a list")
+    for i, k in enumerate(keeps):
+        if not isinstance(k, dict):
+            _die(f"keeps[{i}] must be a dict, got {type(k).__name__}")
+        sid = k.get("seed_id")
+        if isinstance(sid, bool) or not isinstance(sid, int):
+            _die(f"keeps[{i}].seed_id must be int (not bool), got {type(sid).__name__}")
+        commit = k.get("commit")
+        if not isinstance(commit, str) or not commit:
+            _die(f"keeps[{i}].commit must be non-empty str, got {type(commit).__name__}")
     similarities = payload["similarities"]
     if not isinstance(similarities, list):
         _die("similarities must be a list")
