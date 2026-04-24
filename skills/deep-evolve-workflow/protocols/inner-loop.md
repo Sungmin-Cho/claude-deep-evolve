@@ -461,6 +461,28 @@ IF $VERSION starts with "3.":
       - `experiments.total++`
       - `experiments.kept++`
     - **Code Archive**: record the kept commit in `$SESSION_ROOT/code-archive/keep_<NNN>/` (as per v2 behavior).
+    - **v3.1 forum emission** (only when `$VERSION` starts with "3.1"):
+      emit the `seed_keep` event to the shared forum so other seeds can see
+      it at Step 1 consultation + the cross-seed borrow evaluation below
+      (spec § 7.2). Include `epoch` so Outer Loop Step 6.5.0 can filter by
+      generation.
+      ```bash
+      CURRENT_EPOCH=$(python3 -c "import yaml; \
+        d=yaml.safe_load(open('$SESSION_ROOT/session.yaml')); \
+        print(d.get('evaluation_epoch', {}).get('current', 0))")
+      bash "$DEEP_EVOLVE_HELPER_PATH" append_forum_event "$(jq -nc \
+        --argjson sid "$SEED_ID" --arg commit "$COMMIT" \
+        --arg desc "$IDEA_DESCRIPTION" --arg rat "$RATIONALE" \
+        --argjson sd "$SCORE_DELTA" --argjson flg "$FLAGGED_BOOL" \
+        --argjson lp "$LEGIBILITY_PASSED_BOOL" --argjson ep "$CURRENT_EPOCH" \
+        '{"event":"seed_keep","seed_id":$sid,"commit":$commit,"description":$desc,
+          "rationale":$rat,"score_delta":$sd,"flagged":$flg,
+          "legibility_passed":$lp,"epoch":$ep}')"
+      ```
+      where `$COMMIT`, `$IDEA_DESCRIPTION`, `$RATIONALE`, `$SCORE_DELTA`,
+      `$FLAGGED_BOOL`, `$LEGIBILITY_PASSED_BOOL` are the same values you just
+      wrote to journal and results.tsv — do not recompute them.
+      v2 and v3.0.x sessions: skip this bullet (no forum).
 
   **Discard branch** (from 5.b `reason="regression"`, OR 5.a `reason="crash"`, OR 5.a `reason="diagnosed_gave_up"`):
     - Append journal: `{"id": <id>, "status": "discarded", "reason": "<regression|crash|diagnosed_gave_up>", "timestamp": "<now>"}`
@@ -472,6 +494,24 @@ IF $VERSION starts with "3.":
     - Run **Branch & Clean-Tree Guard**.
     - Run: `git reset --hard HEAD~1`.
     - Append `{"id": <id>, "status": "rollback_completed", "timestamp": "<now>"}`.
+    - **v3.1 forum emission** (only when `$VERSION` starts with "3.1"):
+      emit the `seed_discard` event to the shared forum so other seeds can
+      factor this in during Step 1 consultation (spec § 7.2). Include
+      `epoch` for Outer Loop Step 6.5.0 epoch-filtered aggregation.
+      ```bash
+      CURRENT_EPOCH=$(python3 -c "import yaml; \
+        d=yaml.safe_load(open('$SESSION_ROOT/session.yaml')); \
+        print(d.get('evaluation_epoch', {}).get('current', 0))")
+      bash "$DEEP_EVOLVE_HELPER_PATH" append_forum_event "$(jq -nc \
+        --argjson sid "$SEED_ID" --arg commit "$COMMIT" \
+        --arg desc "$IDEA_DESCRIPTION" --arg reason "$DISCARD_REASON" \
+        --argjson sd "$SCORE_DELTA" --argjson ep "$CURRENT_EPOCH" \
+        '{"event":"seed_discard","seed_id":$sid,"commit":$commit,
+          "description":$desc,"reason":$reason,"score_delta":$sd,"epoch":$ep}')"
+      ```
+      where `$DISCARD_REASON` is the reason already written to journal
+      (one of: `"regression"`, `"crash"`, `"diagnosed_gave_up"`).
+      v2 and v3.0.x sessions: skip this bullet.
 
   **Note**: for 5.d hard-reject, persistence was already performed inside 5.d
   (results.tsv row + journal `discarded` event + reset + `rollback_completed` +
