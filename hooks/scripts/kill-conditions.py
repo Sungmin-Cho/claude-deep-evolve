@@ -158,6 +158,9 @@ def _validate_schema(payload):
             _die(f"seed.evaluated_events[{i}] must be an object")
         if "status" not in e:
             _die(f"seed.evaluated_events[{i}] missing 'status' field")
+        if not isinstance(e["status"], str):
+            _die(f"seed.evaluated_events[{i}].status must be string, got "
+                 f"{type(e['status']).__name__}: {e['status']!r}")
 
     _require_number(session, "median_q", "session")
     _require_number(session, "std_q", "session")
@@ -331,6 +334,12 @@ def main():
     ai = payload["ai_judgments"]
     ukr = payload.get("user_kill_request")
 
+    # W-4 float-ification fix: _validate_schema already called _require_int
+    # on seed.id (accepting integral floats like 2.0), but seed["id"] still
+    # holds the raw value. Capture the coerced int here so the output JSON
+    # always emits a canonical integer even when the input was an integral float.
+    seed_id_int = _require_int(seed, "id", "seed")
+
     details = {
         "crash_give_up": evaluate_crash_give_up(seed, ai),
         "sustained_regression": evaluate_sustained_regression(seed),
@@ -343,7 +352,7 @@ def main():
                       if details[name]["triggered"]]
 
     print(json.dumps({
-        "seed_id": seed["id"],
+        "seed_id": seed_id_int,
         "killable": len(conditions_met) >= 1,
         "conditions_met": conditions_met,
         "details": details,

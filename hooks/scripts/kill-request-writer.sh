@@ -95,7 +95,11 @@ if ! acquire_project_lock; then
 fi
 
 # printf '%s\n' — safe against xpg_echo escape re-interpretation (W-5).
-printf '%s\n' "$LINE" >> "$REQUESTS_FILE"
+if ! printf '%s\n' "$LINE" >> "$REQUESTS_FILE"; then
+  echo "error: failed to append kill request to $REQUESTS_FILE (disk full? permissions?)" >&2
+  release_project_lock
+  exit 2
+fi
 
 release_project_lock
 exit 0

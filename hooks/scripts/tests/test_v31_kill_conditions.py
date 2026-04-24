@@ -454,3 +454,20 @@ def test_user_kill_request_missing_confirmed_rc_2():
     r = _run_err(payload)
     assert r.returncode == 2
     assert "confirmed" in r.stderr
+
+
+def test_evaluated_event_status_must_be_string():
+    """W-5 fix: non-string status in evaluated_events (null, int, etc.)
+    must fail rc=2 explicitly rather than silently failing Clause 2."""
+    bad = _base_seed()
+    bad["evaluated_events"] = [
+        {"id": 1, "status": "kept"},
+        {"id": 2, "status": None},   # malformed
+        {"id": 3, "status": "kept"},
+        {"id": 4, "status": "kept"},
+        {"id": 5, "status": "kept"},
+    ]
+    r = _run_err(_base_payload(seed=bad))
+    assert r.returncode == 2
+    assert "status" in r.stderr.lower()
+    assert "string" in r.stderr.lower() or "type" in r.stderr.lower()

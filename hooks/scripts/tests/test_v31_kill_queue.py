@@ -443,6 +443,25 @@ def test_drain_kill_queue_leading_zero_completed_seed_rc_2(tmp_path):
     assert r.returncode == 2
 
 
+def test_drain_kill_queue_same_second_applied_at_strictly_after_queued_at(tmp_path):
+    """W-6 regression: even without explicit sleep between append
+    and drain, applied_at must be strictly > queued_at. The
+    implementation bumps applied_ts to queued_at+1s when they
+    would otherwise collide at second precision."""
+    repo, sr, env = _setup(tmp_path)
+    _run(["append_kill_queue_entry", "3", "crash_give_up", "0.42", "8"], repo, env)
+    # No sleep — exercise the same-second race directly
+    r = _run(["drain_kill_queue", "3"], repo, env)
+    assert r.returncode == 0, r.stderr
+    events = [json.loads(ln)
+              for ln in (sr / "journal.jsonl").read_text(encoding="utf-8").strip().splitlines()]
+    killed = [e for e in events if e.get("event") == "seed_killed"]
+    assert len(killed) == 1
+    # applied_at strictly > queued_at, even with no sleep
+    assert killed[0]["queued_at"] < killed[0]["applied_at"], \
+        f"applied_at must be strictly after queued_at: {killed[0]}"
+
+
 def test_drain_kill_queue_preserves_entry_on_field_extraction_failure(tmp_path):
     """Strict condition validation: an entry with valid JSON but missing
     (or non-whitelisted) .condition must be PRESERVED in the queue as a
