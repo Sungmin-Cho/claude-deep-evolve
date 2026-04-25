@@ -847,11 +847,46 @@ while IFS= read -r BETA_LINE; do
     exit 1
   fi
 
-  # 8.2.c — Update session.yaml.virtual_parallel.seeds[$SEED_K] with the
+  # 8.2.d — Emit seed_initialized journal event BEFORE yaml append (W5 fix,
+  # Opus final review 2026-04-25-174250): reordered from original 8.2.d→8.2.c
+  # so that cmd_append_seed_to_session_yaml (now 8.2.e below) can look up the
+  # event ts as canonical created_at. Wrapped in (unset SEED_ID; ...) so
+  # T16's auto-inject does NOT overwrite the explicit seed_id from the jq
+  # build (T16 is for inner-loop subagent emits; init coordinator is the
+  # source of truth for the explicit field).
+  # W1 fix (Opus final review 2026-04-25-174250): rc-guard this emit so a
+  # failed append causes a clean rollback instead of silently leaving the
+  # journal out of sync with session.yaml.
+  if ! (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+      append_journal_event "$(jq -cn \
+        --argjson sid "$SEED_K" \
+        --argjson beta "$BETA_LINE" \
+        --arg wt "$WT_PATH" \
+        --arg br "$WT_BRANCH" \
+        '{event: "seed_initialized",
+          seed_id: $sid,
+          direction: ($beta.direction // null),
+          hypothesis: ($beta.hypothesis // null),
+          initial_rationale: ($beta.rationale // null),
+          worktree_path: $wt,
+          branch: $br,
+          created_by: "init_batch"}')"); then
+    echo "error: A.3.6 Stage 8.2.d seed_initialized emit failed for seed $SEED_K — rolling back" >&2
+    for prev in "${CREATED_SEEDS[@]}"; do
+      bash "$DEEP_EVOLVE_HELPER_PATH" remove_seed_worktree "$prev" \
+        || echo "warn: rollback could not remove seed $prev" >&2
+    done
+    exit 1
+  fi
+
+  # 8.2.e — Update session.yaml.virtual_parallel.seeds[$SEED_K] with the
   # populated metadata (id, worktree_path, branch, status="active", direction,
   # hypothesis, allocated_budget, etc.). Uses session-helper.sh's append-only
   # update pattern (the helper takes care of YAML round-trip and avoids
   # accidental drift in unrelated fields).
+  # W5 fix (Opus final review 2026-04-25-174250): this step now runs AFTER
+  # 8.2.d so that cmd_append_seed_to_session_yaml can read the event ts from
+  # journal.jsonl as canonical created_at instead of datetime.now(UTC).
   if ! bash "$DEEP_EVOLVE_HELPER_PATH" \
       append_seed_to_session_yaml "$SEED_K" "$WT_PATH" "$WT_BRANCH" "$BETA_LINE"; then
     echo "error: A.3.6 append_seed_to_session_yaml failed for seed $SEED_K. Rolling back." >&2
@@ -861,25 +896,6 @@ while IFS= read -r BETA_LINE; do
     done
     exit 1
   fi
-
-  # 8.2.d — Emit seed_initialized journal event. Wrapped in (unset SEED_ID;
-  # ...) so T16's auto-inject does NOT overwrite the explicit seed_id from
-  # the jq build (T16 is for inner-loop subagent emits; init coordinator is
-  # the source of truth for the explicit field).
-  (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
-    append_journal_event "$(jq -cn \
-      --argjson sid "$SEED_K" \
-      --argjson beta "$BETA_LINE" \
-      --arg wt "$WT_PATH" \
-      --arg br "$WT_BRANCH" \
-      '{event: "seed_initialized",
-        seed_id: $sid,
-        direction: ($beta.direction // null),
-        hypothesis: ($beta.hypothesis // null),
-        initial_rationale: ($beta.rationale // null),
-        worktree_path: $wt,
-        branch: $br,
-        created_by: "init_batch"}')")
 
   SEED_K=$((SEED_K + 1))
 done < "$SEED_BETAS_FILE"
@@ -904,11 +920,50 @@ fi
 # of session.yaml.seeds[] entries matches $N_CHOSEN, count of seed_initialized
 # events in journal matches $N_CHOSEN. Mismatch is a coordinator-internal
 # bug, not user-facing — abort with rc=2.
+
+# Worktree count check (existing — keep)
 ACTUAL_WT=$(git worktree list --porcelain \
   | grep -c "^worktree .*/$SESSION_ID/worktrees/seed_" || true)
 EXPECTED_WT="$N_CHOSEN"
 if [ "$ACTUAL_WT" != "$EXPECTED_WT" ]; then
   echo "error: A.3.6 post-condition: expected $EXPECTED_WT worktrees, got $ACTUAL_WT" >&2
+  exit 2
+fi
+
+# W4 fix (Opus final review 2026-04-25-174250): seeds[] count + seed_initialized
+# event count must also match $N_CHOSEN. Either of these would have caught C2.
+if ! ACTUAL_SEEDS=$(python3 -c '
+import yaml, sys
+with open(sys.argv[1]) as f:
+    sy = yaml.safe_load(f) or {}
+print(len((sy.get("virtual_parallel", {}).get("seeds")) or []))
+' "$SESSION_ROOT/session.yaml"); then
+  echo "error: A.3.6 post-condition: failed to count seeds[] in session.yaml" >&2
+  exit 2
+fi
+if [ "$ACTUAL_SEEDS" != "$N_CHOSEN" ]; then
+  echo "error: A.3.6 post-condition: expected $N_CHOSEN seeds[] entries, got $ACTUAL_SEEDS" >&2
+  exit 2
+fi
+
+if ! ACTUAL_INIT_EVENTS=$(python3 -c '
+import json, sys
+n = 0
+with open(sys.argv[1]) as f:
+    for ln in f:
+        try:
+            ev = json.loads(ln)
+            if ev.get("event") == "seed_initialized":
+                n += 1
+        except json.JSONDecodeError:
+            continue
+print(n)
+' "$SESSION_ROOT/journal.jsonl"); then
+  echo "error: A.3.6 post-condition: failed to count seed_initialized events" >&2
+  exit 2
+fi
+if [ "$ACTUAL_INIT_EVENTS" != "$N_CHOSEN" ]; then
+  echo "error: A.3.6 post-condition: expected $N_CHOSEN seed_initialized events, got $ACTUAL_INIT_EVENTS" >&2
   exit 2
 fi
 ```
@@ -928,7 +983,13 @@ fi
    column-count auto-detect (see Task 19.5 Step 2) to read whichever layout is
    present.
 
-8. Initialize empty `journal.jsonl`.
+8. **Verify journal.jsonl exists** (created via append_journal_event calls in
+   Steps 4.5 and A.3.6 above; this step is a safety check, NOT a re-init):
+
+```bash
+[ -f "$SESSION_ROOT/journal.jsonl" ] || \
+  { echo "error: A.3 Step 8 — journal.jsonl missing after Step 4.5 + A.3.6" >&2; exit 1; }
+```
 
 9. Generate `$SESSION_ROOT/strategy.yaml` with default parameters:
    ```yaml

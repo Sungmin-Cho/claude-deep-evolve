@@ -958,6 +958,27 @@ vp = sy.setdefault("virtual_parallel", {})
 seeds = vp.setdefault("seeds", [])
 # Idempotent: replace existing entry with same id, else append
 existing = next((i for i, s in enumerate(seeds) if s.get("id") == sid), None)
+# W5 fix (Opus final review 2026-04-25-174250): use journal ts as canonical
+# created_at source. Read the most recent seed_initialized event for this
+# seed_id from journal.jsonl. If not found (race: helper called before
+# event emit), fall back to current time but emit a warn.
+created_at = None
+journal_path = sy_path.replace("session.yaml", "journal.jsonl")
+try:
+    with open(journal_path) as jf:
+        for ln in jf:
+            try:
+                ev = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("event") == "seed_initialized" and ev.get("seed_id") == sid:
+                created_at = ev.get("ts")  # may be None if event lacks ts
+except FileNotFoundError:
+    pass
+if not created_at:
+    # Fallback to current time — should be rare (helper called before emit)
+    created_at = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    sys.stderr.write(f"warn: cmd_append_seed_to_session_yaml: no journal seed_initialized for seed {sid}; using now()\n")
 entry = {
     "id": sid,
     "status": "active",
@@ -966,7 +987,7 @@ entry = {
     "initial_rationale": beta.get("rationale"),
     "worktree_path": wt_path,
     "branch": branch,
-    "created_at": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "created_at": created_at,
     "created_by": "init_batch",
     "experiments_used": 0, "keeps": 0,
     "borrows_given": 0, "borrows_received": 0,
@@ -1108,9 +1129,15 @@ with open(jl_path) as f:
             seeds_by_id[sid]["created_at"] = ev.get("ts")
         elif e == "seed_killed" and sid in seeds_by_id:
             # W-10 fix (Opus review 2026-04-25-161635): kill conditions are
-            # the spec § 5.5 whitelist {q_collapse, shortcut_quarantine,
-            # sustained_regression, borrow_loop, user_requested}; the seed
-            # entry's `status` field uses {active, killed_<condition>,
+            # the spec § 5.5 whitelist; the seed entry's `status` field uses
+            # {active, killed_<condition>, completed} per T1 schema. Prefix
+            # "killed_" so downstream consumers (T26 cross-seed-audit,
+            # scheduler) recognize it.
+            # W2 fix (Opus final review 2026-04-25-174250): kill conditions
+            # (spec § 5.5 whitelist):
+            # {crash_give_up, sustained_regression, shortcut_quarantine,
+            #  budget_exhausted_underperform, user_requested}
+            # The seed entry's `status` field uses {active, killed_<condition>,
             # completed} per T1 schema. Prefix "killed_" so downstream
             # consumers (T26 cross-seed-audit, scheduler) recognize it.
             cond = ev.get("condition", "killed")
