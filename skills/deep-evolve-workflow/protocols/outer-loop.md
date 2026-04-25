@@ -48,28 +48,53 @@ The 3-tier self-evolution hierarchy:
 
 All subsequent references to "current generation" in this protocol mean `current_gen`.
 
-## Protocol Entry — Version Gate
+## Protocol Entry — Version Gate (W-1 4-arm pattern, T37 unified)
 
 Every entry to this protocol (from inner-loop.md Step 6.5 OR from resume.md's
-paused-session path) MUST initialize `$VERSION` locally. Do NOT rely on shell
-state inherited from the caller — Claude Code's Read tool loads a fresh context.
+paused-session path) MUST initialize `$VERSION` + `$VERSION_TIER` locally —
+do NOT rely on shell state inherited from the caller (Claude Code's Read
+tool loads a fresh context).
 
 ```bash
-VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" \
+  | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
+
+case "$VERSION" in
+  2.*)
+    export VERSION_TIER="pre_v3"
+    echo "outer-loop.md: VERSION=$VERSION — routing as pre-v3 (legacy)" >&2
+    ;;
+  3.0*)
+    export VERSION_TIER="v3_0"
+    ;;
+  3.*|4.*)
+    export VERSION_TIER="v3_1_plus"
+    ;;
+  *)
+    export VERSION_TIER="pre_v3"
+    echo "outer-loop.md: VERSION=$VERSION unrecognized — treating as pre-v3" >&2
+    ;;
+esac
 ```
 
 All v3-gated sub-steps below (6.5.1 entropy snapshot, 6.5.3 entropy overlay,
 6.5.6 flagged-density stagnation, Tier 3 flagged evidence injection) check
-`$VERSION` locally.
+`$VERSION_TIER` locally.
 
-## Step 6.5.0 — Epoch Boundary Sync (v3.1 only; v2 and v3.0.x skip this step)
+## Step 6.5.0 — Epoch Boundary Sync (VERSION_TIER == v3_1_plus only; pre_v3 and v3_0 skip)
 
 Spec references: § 7.2 (coordinator epoch-boundary writes), § 7.5 (3-class
 convergence detection), § 6.3–§ 6.4 (adaptive N re-evaluation).
 
 This step runs at the **start** of every epoch boundary transition, BEFORE
-Step 6.5.1 Meta Analysis. It is gated on `$VERSION` starting with "3.1";
-v2 and v3.0.x sessions skip to 6.5.1 without executing any substeps below.
+Meta Analysis (Step 6.5.1). It is gated on `$VERSION_TIER` == "v3_1_plus";
+v2 (`pre_v3`) and v3.0.x (`v3_0`) sessions skip to Meta Analysis without
+executing any substeps below.
+
+```bash
+if [ "$VERSION_TIER" = "v3_1_plus" ]; then
+  # Forum summary + convergence detection only meaningful when virtual_parallel exists
+```
 
 ### 6.5.0.1 Forum summary generation (wires T5)
 
@@ -286,8 +311,12 @@ that 6.5.1–6.5.6 continue to operate on the SESSION's Q metric (not per-seed),
 so the existing Outer Loop logic still applies; G6/G7 additions only WIDEN
 the signal set, they do not replace it.
 
-**v2 and v3.0.x sessions: skip Step 6.5.0 entirely.** The version gate at
-the top of this protocol (see § "Protocol Entry — Version Gate") routes
+```bash
+fi  # close `if [ "$VERSION_TIER" = "v3_1_plus" ]` opened at Step 6.5.0 entry
+```
+
+**v2 (`pre_v3`) and v3.0.x (`v3_0`) sessions: skip Step 6.5.0 entirely.** The
+version gate at the top of this protocol (`$VERSION_TIER` classification) routes
 non-v3.1 sessions directly to Step 6.5.1 without executing any substep above.
 
 ## Step 6.5.1 — Meta Analysis

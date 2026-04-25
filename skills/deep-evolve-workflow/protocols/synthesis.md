@@ -29,6 +29,13 @@ case "$VERSION" in
     exit 0
     ;;
 esac
+
+# T37: Export VERSION_TIER for downstream sub-step consistency.
+# Synthesis.md already bails on pre-v3.1 above (2.*|3.0* → pre_v3/v3_0 → exit 0);
+# reaching this line means we are in v3_1_plus tier. Set the handle
+# explicitly so any sub-step that needs to differentiate v3.1.0 from v3.2+
+# later can do so without re-running the case.
+export VERSION_TIER="v3_1_plus"
 ```
 
 Then resolve the helper-scripts directory (C-1 fix: `$DEEP_EVOLVE_HELPER_PATH` is the path to `session-helper.sh` itself, NOT a directory — every Python helper invocation must use `$HELPER_SCRIPTS_DIR` (= `dirname` of the helper) and every session-helper subcommand call must use `bash "$DEEP_EVOLVE_HELPER_PATH" <subcommand>` directly without an extra `/session-helper.sh` segment):

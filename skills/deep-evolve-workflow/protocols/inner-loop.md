@@ -40,19 +40,41 @@ Options:
 > for any `session-helper.sh` subcommand that takes a session id argument
 > (e.g., `mark_session_status`, `append_sessions_jsonl`).
 
-### v3 Version Gate
+### Version Gate (W-1 4-arm pattern, T37 unified)
 
-Before entering the loop, read the session's deep_evolve_version:
+Read the session's `deep_evolve_version` and route via 4-arm case:
 
 ```bash
-VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" \
+  | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
+
+case "$VERSION" in
+  2.*)
+    export VERSION_TIER="pre_v3"
+    echo "inner-loop.md: VERSION=$VERSION — routing as pre-v3 (legacy single-seed, no virtual_parallel)" >&2
+    ;;
+  3.0*)
+    export VERSION_TIER="v3_0"
+    # v3.0 retains all v3 features (shortcut_detection, seal_prepare_read,
+    # 10-cat weights) but lacks virtual_parallel block — sub-steps that
+    # depend on it MUST gate on VERSION_TIER == "v3_1_plus".
+    ;;
+  3.*|4.*)
+    export VERSION_TIER="v3_1_plus"
+    # v3.1+ and forward proceed through the virtual_parallel-aware paths.
+    ;;
+  *)
+    export VERSION_TIER="pre_v3"
+    echo "inner-loop.md: VERSION=$VERSION unrecognized — treating as pre-v3 (legacy)" >&2
+    ;;
+esac
 ```
 
-All v3-gated sub-steps below check `$VERSION`. If `$VERSION` starts with `"3."` (i.e., `3.0.0` or later), execute the v3 sub-step; otherwise skip it (v2 behavior preserved).
+All v3-gated sub-steps below check `$VERSION_TIER`. The legacy `$VERSION starts with "3."` checks have been replaced with explicit tier checks.
 
-### v3 Environment Propagation (only when $VERSION starts with "3.")
+### v3 Environment Propagation (only when $VERSION_TIER != "pre_v3")
 
-IF $VERSION starts with "3.":
+IF $VERSION_TIER != "pre_v3":
 
 ```bash
 seal_flag=$(grep -A 10 "^shortcut_detection:" "$SESSION_ROOT/strategy.yaml" | grep '^\s*seal_prepare_read:' | head -1 | sed 's/.*:[[:space:]]*//; s/\s*$//')
@@ -234,7 +256,7 @@ already enforces this separation; Step 0.5 only runs when that gate matches
 - Generate `candidates_per_step` (from strategy.yaml, default 3) candidate ideas
 - For each candidate, analyze: expected improvement, risk (crash/regression likelihood), novelty vs recent attempts
 - Select the BEST candidate based on this analysis
-- **v3.1 forum consultation (only when `$VERSION` starts with "3.1")**:
+- **v3.1 forum consultation (only when `$VERSION_TIER` == "v3_1_plus")**:
   before the "Append to `journal.jsonl`" step below, run
   ```bash
   bash "$DEEP_EVOLVE_HELPER_PATH" tail_forum 20 > /tmp/recent_forum_$$.jsonl
@@ -254,7 +276,7 @@ already enforces this separation; Step 0.5 only runs when that gate matches
   (no flagged propagation): Step 1 filters by `flagged=false`; the borrow
   step is enforced via `borrow-preflight.py`.
 
-  v2 and v3.0.x sessions: forum.jsonl does not exist; skip this bullet.
+  v2 and v3.0.x sessions: `$VERSION_TIER` is not "v3_1_plus" so forum.jsonl does not exist; skip this bullet.
 - Append to `journal.jsonl`: `{"id": <next_id>, "status": "planned", "idea": "<description>", "candidates_considered": <N>, "timestamp": "<now>"}`
 
 **Step 1.5 — Category Tagging (v3 only):**
@@ -517,8 +539,7 @@ IF $VERSION starts with "3.":
   (results.tsv row + journal `discarded` event + reset + `rollback_completed` +
   counter increments) — do NOT duplicate in 5.e.
 
-  **Step 5.f — Cross-Seed Semantic Borrow** (v3.1 only — `$VERSION` starts with
-  "3.1"; keep branch only; runs after Step 5.e Keep finishes persisting):
+  **Step 5.f — Cross-Seed Semantic Borrow** (v3.1 only — `$VERSION_TIER` == "v3_1_plus"; keep branch only; runs after Step 5.e Keep finishes persisting):
 
   Rationale: your seed has just accepted an experiment. Other seeds' recent keeps
   may contain ideas you can productively adapt. Step 5.f decides (this turn)
@@ -549,7 +570,7 @@ IF $VERSION starts with "3.":
      Take the last 10 non-self seed_keep events from the last 40 forum lines.
      If `CANDIDATES_JSON` is `[]`, skip Step 5.f.
 
-  3. **Preflight filter** (enforces P2 flagged + P2 legibility + dedup). The
+  3. **Preflight filter** (enforces P2 flagged + P2 legibility + dedup; only runs when `$VERSION_TIER` == "v3_1_plus"). The
      preflight needs BOTH the journal (for self-keyed `borrow_planned` dedup —
      phase 1 of the § 7.4 P1 state machine) AND the forum (for self-`to_seed`
      `cross_seed_borrow` dedup — phase 2; per spec § 7.1 that event lives in
@@ -576,7 +597,8 @@ IF $VERSION starts with "3.":
        return 0 2>/dev/null || :
      fi
      ```
-     `$SELF_EXPERIMENTS_USED` must be derived before this block from session.yaml:
+     `$SELF_EXPERIMENTS_USED` must be derived before this block from session.yaml
+     (requires `$VERSION_TIER` == "v3_1_plus" — virtual_parallel block exists):
      ```bash
      SELF_EXPERIMENTS_USED=$(python3 -c "import yaml,sys; \
        d=yaml.safe_load(open('$SESSION_ROOT/session.yaml')); \
@@ -603,7 +625,7 @@ IF $VERSION starts with "3.":
      Counters `borrows_given` / `borrows_received` in session.yaml MUST NOT
      increment yet — this is intent only (P1 Phase 1).
 
-  6. **Phase 2 deferred to next experiment's Step 2 (Code Modification)**: when
+  6. **Phase 2 deferred to next experiment's Step 2 (Code Modification)** (requires `$VERSION_TIER` == "v3_1_plus"): when
      the next experiment runs, Step 2 re-implements the borrowed idea. The
      subsequent Step 3 Git Commit MUST include a trailer
      `inspired_by: <source_commit>`. Immediately after the successful commit

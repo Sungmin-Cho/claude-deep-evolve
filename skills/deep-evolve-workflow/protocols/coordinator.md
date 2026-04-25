@@ -7,6 +7,14 @@
 
 ## Version Gate
 
+> **T37 annotation**: This file is v3.1+ only. v3.0.x sessions never
+> enter coordinator.md — their inner-loop.md / outer-loop.md handle the
+> non-virtual-parallel single-seed flow inline. The strict
+> `case "$VERSION" in 3.1.*) ;; *) exit 1 ;; esac` below is intentional;
+> see synthesis.md for the W-1 4-arm pattern that does support pre-v3.1
+> graceful exit. Coordinator's caller (the dispatcher) routes pre-v3.1
+> sessions away from this file before invoking it.
+
 ```bash
 VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | sed 's/.*"\(.*\)".*/\1/')
 case "$VERSION" in
