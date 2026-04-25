@@ -1,0 +1,3 @@
+commit	score	status	category	score_delta	loc_delta	flagged	rationale	description
+baseline	1.000000	baseline		0	0	false		initial measurement
+abc1234	1.001000	kept	parameter_tune	+0.001	+5	false	tuned threshold	exp 2 keep

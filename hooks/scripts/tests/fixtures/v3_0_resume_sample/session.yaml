@@ -1,0 +1,49 @@
+session_id: "v3-0-resume-mock"
+deep_evolve_version: "3.0.0"
+status: active
+created_at: "2026-04-20T10:00:00Z"
+goal: "v3.0 backward-compat resume under v3.1 code path"
+parent_session:
+  id: null
+program:
+  version: 1
+  history:
+    - version: 1
+      experiments: "0-"
+      keep_rate: null
+      reason: "initial"
+outer_loop:
+  generation: 0
+  interval: 20
+  inner_count: 5
+  auto_trigger: true
+  q_history: []
+evaluation_epoch:
+  current: 1
+  history:
+    - epoch: 1
+      prepare_version: 1
+      generations: []
+      best_Q: null
+lineage:
+  current_branch: "deep-evolve/apr20"
+  forked_from: null
+  previous_branches: []
+shortcut:
+  cumulative_flagged: 0
+  flagged_since_last_tier3: 0
+  total_flagged: 0
+diagnose_retry:
+  session_retries_used: 0
+  gave_up_count: 0
+legibility:
+  missing_rationale_count: 0
+entropy:
+  last_collapse_generation: null
+metric:
+  baseline: 1.0
+  current: 1.0
+  best: 1.0
+eval_mode: "cli"
+# CRITICAL: NO virtual_parallel block — defines the v3.0 schema.
+# Step 3.5 version gate must detect this and route to Step 4 unchanged.

@@ -219,3 +219,37 @@ def test_v3_0_fixture_resume_uses_v3_0_path():
     # v3.0 must NOT have virtual_parallel block
     assert "virtual_parallel" not in obj, \
         "v3.0 fixture must not have virtual_parallel block (defeats version gate)"
+
+
+def test_v3_0_fixture_results_tsv_has_v3_header():
+    """v3.0 sessions DO use the 9-column header (init.md:333). Fixture must
+    match — defeats the column-count auto-detect at resume.md:124 if not."""
+    fx = FIXTURES / "v3_0_resume_sample"
+    if not fx.is_dir():
+        import pytest
+        pytest.xfail("T34 fixture not yet created")
+    tsv = fx / "results.tsv"
+    header = tsv.read_text().splitlines()[0]
+    cols = header.split("\t")
+    assert len(cols) == 9, f"v3.0 fixture results.tsv must have 9 columns, got {len(cols)}"
+
+
+def test_v3_0_fixture_journal_has_v3_0_events_only():
+    """The fixture journal must NOT contain v3.1-only events
+    (seed_initialized, init_vp_analysis, init_n_chosen, resume_drift_detected,
+    seed_killed, seed_block_completed). Otherwise it would defeat the
+    'no virtual_parallel artifacts' guarantee of the version gate."""
+    fx = FIXTURES / "v3_0_resume_sample"
+    if not fx.is_dir():
+        import pytest
+        pytest.xfail("T34 fixture not yet created")
+    jl = fx / "journal.jsonl"
+    v31_only = {"seed_initialized", "init_vp_analysis", "init_n_chosen",
+                "resume_drift_detected", "seed_killed", "seed_block_completed",
+                "seed_block_failed", "seed_scheduled", "borrow_planned",
+                "cross_seed_borrow", "synthesis_commit"}
+    for ln in jl.read_text().splitlines():
+        if not ln.strip(): continue
+        ev = json.loads(ln).get("event")
+        assert ev not in v31_only, \
+            f"v3.0 fixture journal contains v3.1-only event: {ev}"
