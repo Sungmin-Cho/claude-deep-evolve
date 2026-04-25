@@ -41,12 +41,15 @@ The N=1 short-circuit (spec § 8.5) is checked BEFORE Step 1 to skip
 the multi-seed sequence entirely:
 
 ```bash
-N_CURRENT=$(python3 -c '
+if ! N_CURRENT=$(python3 -c '
 import yaml, sys
 with open(sys.argv[1]) as f:
     s = yaml.safe_load(f)
 print(s.get("virtual_parallel", {}).get("n_current", 1))
-' "$SESSION_ROOT/session.yaml")
+' "$SESSION_ROOT/session.yaml"); then
+  echo "synthesis.md Step 0: failed to read N_CURRENT from session.yaml" >&2
+  exit 1
+fi
 
 if [ "$N_CURRENT" = "1" ]; then
   # Single-seed session: emit minimal report + synthesis_commit event,
@@ -169,7 +172,7 @@ to Step 5 as the integration set).
 Build the seed snapshot list from session.yaml + journal:
 
 ```bash
-SEEDS_JSON=$(python3 -c '
+if ! SEEDS_JSON=$(python3 -c '
 import yaml, sys, json
 with open(sys.argv[1]) as f:
     s = yaml.safe_load(f) or {}
@@ -185,7 +188,10 @@ for sd in seeds:
         "borrows_received": int(sd.get("borrows_received", 0)),
     })
 print(json.dumps({"seeds": out}))
-' "$SESSION_ROOT/session.yaml")
+' "$SESSION_ROOT/session.yaml"); then
+  echo "synthesis.md Step 5.1: failed to build SEEDS_JSON from session.yaml" >&2
+  exit 1
+fi
 
 if ! BASELINE=$(python3 "$HELPER_SCRIPTS_DIR/baseline-select.py" --args "$SEEDS_JSON"); then
   echo "synthesis.md Step 5.1: baseline-select.py failed" >&2
@@ -196,9 +202,18 @@ fi
 Parse the result:
 
 ```bash
-CHOSEN_SEED_ID=$(echo "$BASELINE" | jq -r '.chosen_seed_id')
-TIER=$(echo "$BASELINE" | jq -r '.tier')
-BASELINE_REASONING=$(echo "$BASELINE" | jq -c '.baseline_selection_reasoning')
+if ! CHOSEN_SEED_ID=$(echo "$BASELINE" | jq -r '.chosen_seed_id'); then
+  echo "synthesis.md Step 5.1: failed to parse CHOSEN_SEED_ID from BASELINE" >&2
+  exit 1
+fi
+if ! TIER=$(echo "$BASELINE" | jq -r '.tier'); then
+  echo "synthesis.md Step 5.1: failed to parse TIER from BASELINE" >&2
+  exit 1
+fi
+if ! BASELINE_REASONING=$(echo "$BASELINE" | jq -c '.baseline_selection_reasoning'); then
+  echo "synthesis.md Step 5.1: failed to parse BASELINE_REASONING from BASELINE" >&2
+  exit 1
+fi
 ```
 
 Critical fix (T28 review): derive BASELINE_Q from SEEDS_JSON via CHOSEN_SEED_ID.
@@ -412,12 +427,15 @@ fi
 SYNTHESIS_Q="$SYNTHESIS_Q_NUMERIC"
 
 # BASELINE_Q derived from session.yaml in Step 5.1 (above); reused here.
-REGRESSION_TOLERANCE=$(python3 -c '
+if ! REGRESSION_TOLERANCE=$(python3 -c '
 import yaml, sys
 with open(sys.argv[1]) as f:
     s = yaml.safe_load(f) or {}
 print(s.get("virtual_parallel", {}).get("synthesis", {}).get("regression_tolerance", 0.05))
-' "$SESSION_ROOT/session.yaml")
+' "$SESSION_ROOT/session.yaml"); then
+  echo "synthesis.md Step 6: failed to read REGRESSION_TOLERANCE from session.yaml" >&2
+  exit 1
+fi
 
 if [ "${FALLBACK_TRIGGERED:-false}" != "true" ]; then
   # Branch A — synthesis succeeded (>= baseline)
@@ -654,13 +672,16 @@ fi
 SYNTHESIS_OUTCOME="skipped_n1"
 FALLBACK_TRIGGERED=false
 FINAL_BRANCH="evolve/${SESSION_ID}/seed-1"
-SYNTHESIS_Q="$(python3 -c '
+if ! SYNTHESIS_Q=$(python3 -c '
 import yaml, sys
 with open(sys.argv[1]) as f:
     s = yaml.safe_load(f) or {}
 seeds = s.get("virtual_parallel", {}).get("seeds", [])
 print(seeds[0].get("final_q", 0.0) if seeds else 0.0)
-' "$SESSION_ROOT/session.yaml")"
+' "$SESSION_ROOT/session.yaml"); then
+  echo "synthesis.md § N=1 Short-Circuit: failed to read SYNTHESIS_Q from session.yaml" >&2
+  exit 1
+fi
 BASELINE_Q="$SYNTHESIS_Q"
 CHOSEN_SEED_ID=1
 

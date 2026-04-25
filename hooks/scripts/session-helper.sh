@@ -1564,15 +1564,41 @@ cmd_cleanup_failed_synthesis_worktree() {
   local wt_path="$SESSION_ROOT/worktrees/synthesis"
   local branch="evolve/${SESSION_ID}/synthesis"
 
-  # No worktree → no-op
+  # W-2 fix: orphan branch (worktree dir gone but branch alive) recovery.
+  # Without this, operator-induced `rm -rf $wt_path` would dead-lock
+  # cleanup → create cycle. Rename branch to audit suffix and return 0.
   if [ ! -d "$wt_path" ]; then
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+      local orphan_ts orphan_failed_branch orphan_mv_err
+      orphan_ts="$(iso_now | tr ':' '-' | tr 'T' '_')-$$"
+      orphan_failed_branch="evolve/${SESSION_ID}/synthesis-failed-${orphan_ts}"
+      if ! orphan_mv_err=$(git branch -m "$branch" "$orphan_failed_branch" 2>&1); then
+        echo "cleanup_failed_synthesis_worktree: failed to rename orphan branch $branch → $orphan_failed_branch: $orphan_mv_err" >&2
+        return 2
+      fi
+    fi
     return 0
+  fi
+
+  # W-1 fix: preserve uncommitted state as final commit BEFORE branch rename
+  # — `git worktree remove --force` discards uncommitted edits, but those
+  # edits are the most operator-useful artifact (what the agent was
+  # attempting before giving up). Spec § 8.2 audit-trail contract requires
+  # preservation. Failures here are non-fatal — proceed to rename + remove.
+  if ! git -C "$wt_path" diff --quiet 2>/dev/null \
+     || ! git -C "$wt_path" diff --cached --quiet 2>/dev/null \
+     || [ -n "$(git -C "$wt_path" ls-files --others --exclude-standard 2>/dev/null)" ]; then
+    if ! git -C "$wt_path" add -A 2>&1; then
+      echo "cleanup_failed_synthesis_worktree: failed to stage uncommitted state — proceeding without preservation" >&2
+    elif ! git -C "$wt_path" commit -m "synthesis-failed: preserved uncommitted state ($(iso_now))" --allow-empty 2>&1; then
+      echo "cleanup_failed_synthesis_worktree: failed to commit uncommitted state — proceeding without preservation" >&2
+    fi
   fi
 
   # Rename branch with timestamp suffix BEFORE removing worktree
   # (so the audit branch survives even if `git worktree remove` fails)
   local ts
-  ts="$(iso_now | tr ':' '-' | tr 'T' '_')"   # filesystem-safe timestamp
+  ts="$(iso_now | tr ':' '-' | tr 'T' '_')-$$"   # filesystem-safe timestamp + PID for uniqueness
   local failed_branch="evolve/${SESSION_ID}/synthesis-failed-${ts}"
 
   if git show-ref --verify --quiet "refs/heads/$branch"; then
@@ -1583,8 +1609,8 @@ cmd_cleanup_failed_synthesis_worktree() {
     fi
   fi
 
-  # Force-remove worktree (we don't care about uncommitted state — the
-  # branch already captured the failed integration history)
+  # Force-remove worktree (uncommitted state already preserved above as a
+  # final commit on the renamed audit branch)
   local rm_err
   if ! rm_err=$(git worktree remove --force "$wt_path" 2>&1); then
     echo "cleanup_failed_synthesis_worktree: git worktree remove failed: $rm_err" >&2
