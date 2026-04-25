@@ -1050,6 +1050,10 @@ with open(jl_path) as f:
                 "borrows_given": 0, "borrows_received": 0,
                 "current_q": 0.0, "killed_at": None, "killed_reason": None,
             }
+            # Opus review 2026-04-25-172243: propagate seed_initialized
+            # event ts → seed entry's created_at field. Without this, rebuild
+            # silently drops the timestamp (T1 schema requires created_at).
+            seeds_by_id[sid]["created_at"] = ev.get("ts")
         elif e == "seed_killed" and sid in seeds_by_id:
             # W-10 fix (Opus review 2026-04-25-161635): kill conditions are
             # the spec § 5.5 whitelist {q_collapse, shortcut_quarantine,

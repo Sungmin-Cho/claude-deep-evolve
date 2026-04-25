@@ -140,12 +140,16 @@ inner / outer loops as seeds were killed or grown. The journal is the
 **actual** state — events appended in order. Step 3.5 cross-checks them.
 
 ```bash
-# W-5 self-gate: defensive skip for v2/v3.0 (already handled at Step 3.5
-# entry, but lets this block run independently in tests).
-[ "${IS_V31:-0}" = "1" ] || { echo "3.5.a: skipping (IS_V31=0)" >&2; }
-
-# Capture seed IDs from yaml + n_current declaration
-DECLARED_SEEDS_JSON=$(python3 -c '
+# W-A fix (Opus review 2026-04-25-172243): wrap entire body in explicit
+# if/then/else/fi — prior `[ ... ] || { echo ... }` only echoed the skip
+# message but did NOT actually skip the body (fail-open hazard). Each
+# sub-stage now self-contained per W-5 discipline (no straddling fi).
+if [ "${IS_V31:-0}" != "1" ]; then
+  echo "3.5.a: skipping (IS_V31=0)" >&2
+else
+  # W-B fix (Opus review 2026-04-25-172243): rc-guard python3 -c calls per
+  # the aff23c9 contract. Capture seed IDs from yaml + n_current declaration.
+  if ! DECLARED_SEEDS_JSON=$(python3 -c '
 import yaml, json, sys
 with open(sys.argv[1]) as f:
     sy = yaml.safe_load(f) or {}
@@ -158,10 +162,13 @@ print(json.dumps({
                "worktree_path": s.get("worktree_path")}
               for s in vp.get("seeds", [])],
 }))
-' "$SESSION_ROOT/session.yaml")
+' "$SESSION_ROOT/session.yaml"); then
+    echo "error: resume Step 3.5.a DECLARED_SEEDS_JSON extraction failed" >&2
+    exit 1
+  fi
 
-# Capture seeds the journal actually saw initialized
-JOURNAL_SEEDS_JSON=$(python3 -c '
+  # Capture seeds the journal actually saw initialized
+  if ! JOURNAL_SEEDS_JSON=$(python3 -c '
 import json, sys
 seeds = []
 seen = set()
@@ -177,7 +184,11 @@ with open(sys.argv[1]) as f:
                               "branch": ev.get("branch"),
                               "worktree_path": ev.get("worktree_path")})
 print(json.dumps({"seeds": seeds}))
-' "$SESSION_ROOT/journal.jsonl")
+' "$SESSION_ROOT/journal.jsonl"); then
+    echo "error: resume Step 3.5.a JOURNAL_SEEDS_JSON extraction failed" >&2
+    exit 1
+  fi
+fi
 ```
 
 ### 3.5.b — Drift detection (W-3 of G10 — yaml vs journal)
@@ -189,14 +200,16 @@ seeds[] entries. Emit `resume_drift_detected` so the audit trail records what
 happened.
 
 ```bash
-# W-5 self-gate
-[ "${IS_V31:-0}" = "1" ] || { echo "3.5.b: skipping (IS_V31=0)" >&2; }
-
-# W-4 fix (Opus review 2026-04-25-161635): rc-guard both python3 -c calls
-# per the aff23c9 contract. Without guards, a json parse failure here would
-# either error-and-mask under set -Eeuo pipefail or compare empty string to
-# "True" and silently skip drift handling — losing Scenario 5.
-if ! DRIFT=$(python3 -c '
+# W-A fix (Opus review 2026-04-25-172243): wrap entire body in explicit
+# if/then/else/fi — see 3.5.a for rationale. No straddling fi (W-5).
+if [ "${IS_V31:-0}" != "1" ]; then
+  echo "3.5.b: skipping (IS_V31=0)" >&2
+else
+  # W-4 fix (Opus review 2026-04-25-161635): rc-guard both python3 -c calls
+  # per the aff23c9 contract. Without guards, a json parse failure here would
+  # either error-and-mask under set -Eeuo pipefail or compare empty string to
+  # "True" and silently skip drift handling — losing Scenario 5.
+  if ! DRIFT=$(python3 -c '
 import json, sys
 d = json.loads(sys.argv[1]); j = json.loads(sys.argv[2])
 declared = {s["id"] for s in d.get("seeds") or []}
@@ -210,31 +223,37 @@ if declared != actual:
 else:
     print(json.dumps({"drift": False}))
 ' "$DECLARED_SEEDS_JSON" "$JOURNAL_SEEDS_JSON"); then
-  echo "error: resume Step 3.5.b drift detection failed — DECLARED/JOURNAL handles malformed" >&2
-  exit 1
-fi
+    echo "error: resume Step 3.5.b drift detection failed — DECLARED/JOURNAL handles malformed" >&2
+    exit 1
+  fi
 
-# I-7 nit (same review): use .get() with default for defensive trust-boundary
-# read; converts python None / missing key to literal "False" for shell test.
-if ! DRIFT_FLAG=$(echo "$DRIFT" | python3 -c '
+  # I-7 nit (same review): use .get() with default for defensive trust-boundary
+  # read; converts python None / missing key to literal "False" for shell test.
+  if ! DRIFT_FLAG=$(echo "$DRIFT" | python3 -c '
 import json, sys
 print(str(json.load(sys.stdin).get("drift", False)))'); then
-  echo "error: resume Step 3.5.b drift flag extraction failed" >&2
-  exit 1
-fi
-if [ "$DRIFT_FLAG" = "True" ]; then
-  echo "warn: resume Step 3.5.b detected drift between session.yaml and journal: $DRIFT" >&2
-  # Prefer the journal snapshot — overwrite seeds[] to match. This is a
-  # one-shot reconciliation; the journal stays authoritative going forward.
-  (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
-    append_journal_event "$(jq -cn \
-      --argjson dr "$DRIFT" \
-      '{event: "resume_drift_detected", drift: $dr,
-        resolution: "prefer_journal_snapshot"}')")
-  # Reconciliation: rebuild yaml seeds[] from journal events that the journal
-  # produced (covers seeds added at epoch_growth and seeds killed mid-session).
-  bash "$DEEP_EVOLVE_HELPER_PATH" rebuild_seeds_from_journal \
-    || echo "warn: rebuild_seeds_from_journal failed; proceeding with yaml as-is" >&2
+    echo "error: resume Step 3.5.b drift flag extraction failed" >&2
+    exit 1
+  fi
+  if [ "$DRIFT_FLAG" = "True" ]; then
+    echo "warn: resume Step 3.5.b detected drift between session.yaml and journal: $DRIFT" >&2
+    # W-B fix (Opus review 2026-04-25-172243): wrap (unset SEED_ID; ...)
+    # subshell in rc-guard. Prefer the journal snapshot — overwrite seeds[]
+    # to match. This is a one-shot reconciliation; the journal stays
+    # authoritative going forward.
+    if ! (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+      append_journal_event "$(jq -cn \
+        --argjson dr "$DRIFT" \
+        '{event: "resume_drift_detected", drift: $dr,
+          resolution: "prefer_journal_snapshot"}')"); then
+      echo "error: resume Step 3.5.b failed to append resume_drift_detected event" >&2
+      exit 1
+    fi
+    # Reconciliation: rebuild yaml seeds[] from journal events that the journal
+    # produced (covers seeds added at epoch_growth and seeds killed mid-session).
+    bash "$DEEP_EVOLVE_HELPER_PATH" rebuild_seeds_from_journal \
+      || echo "warn: rebuild_seeds_from_journal failed; proceeding with yaml as-is" >&2
+  fi
 fi
 ```
 
@@ -245,64 +264,81 @@ RC contract: rc=0 (clean), rc=3 (worktree missing — § 11.1 W-11.1 row),
 rc=4 (branch mismatch), rc=5 (dirty), rc=6 (HEAD not descendant of pre-dispatch).
 
 ```bash
-# W-5 self-gate
-[ "${IS_V31:-0}" = "1" ] || { echo "3.5.c: skipping (IS_V31=0)" >&2; }
-
-# Build the iteration list from the (possibly-reconciled) yaml
-SEED_IDS=$(python3 -c '
+# W-A fix (Opus review 2026-04-25-172243): wrap entire body in explicit
+# if/then/else/fi — see 3.5.a for rationale. No straddling fi (W-5).
+if [ "${IS_V31:-0}" != "1" ]; then
+  echo "3.5.c: skipping (IS_V31=0)" >&2
+else
+  # W-B fix (Opus review 2026-04-25-172243): rc-guard the SEED_IDS python3 -c.
+  # Build the iteration list from the (possibly-reconciled) yaml.
+  if ! SEED_IDS=$(python3 -c '
 import yaml, sys
 with open(sys.argv[1]) as f:
     sy = yaml.safe_load(f) or {}
 for s in (sy.get("virtual_parallel", {}).get("seeds") or []):
     if s.get("status") == "active":   # killed / completed seeds skip validation
         print(s.get("id"))
-' "$SESSION_ROOT/session.yaml")
-
-if ! [ -z "${SEED_IDS:-}" ]; then
-for SID in $SEED_IDS; do
-  if ! bash "$DEEP_EVOLVE_HELPER_PATH" validate_seed_worktree "$SID"; then
-    rc=$?
-    case "$rc" in
-      3) # Scenario 4 — worktree missing → § 11.1 W-11.1 recovery
-         echo "warn: resume Step 3.5.c seed $SID worktree missing (rc=3)" >&2
-         (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
-           append_journal_event "$(jq -cn \
-             --argjson sid "$SID" \
-             '{event: "resume_worktree_missing", seed_id: $sid}')")
-         # Coordinator must AskUserQuestion: "Restore from branch tip / Skip seed / Abort?"
-         # The prose pattern matches synthesis.md Branch B — coordinator
-         # captures USER_CHOICE and re-enters at Step 3.5.d below.
-         echo "Step 3.5.c: AskUserQuestion required for seed $SID — see § 11.1 W-11.1" >&2
-         ;;
-      4|5|6)
-         # W-6 fix (Opus review 2026-04-25-161635): per-seed contamination
-         # is now operator-decides via AskUserQuestion (mirrors rc=3 path),
-         # not session-wide hard-abort. Rationale: in an N=5 init where
-         # seed-3 is dirty (rc=5) but seeds 1, 2, 4, 5 are clean, hard-abort
-         # prevents salvage of the 4 clean seeds — § 11.1 W-11.x tables
-         # explicitly mark these as "operator decides" recovery paths.
-         echo "warn: resume Step 3.5.c seed $SID worktree contaminated (rc=$rc — branch mismatch / dirty / HEAD divergence)" >&2
-         (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
-           append_journal_event "$(jq -cn \
-             --argjson sid "$SID" \
-             --argjson r "$rc" \
-             '{event: "resume_worktree_contaminated", seed_id: $sid, rc: $r}')")
-         # Coordinator AskUserQuestion: "Skip seed / Restore from branch tip /
-         # Abort all of resume?" — same prose pattern as rc=3 above.
-         echo "Step 3.5.c: AskUserQuestion required for seed $SID (contamination) — see § 11.1 W-11.x" >&2
-         ;;
-      *)
-         # Unknown rc class — this IS a coordinator-internal contract violation
-         # (validate_seed_worktree's rc taxonomy is fixed); hard-abort all of
-         # resume rather than guess the recovery path. Same discipline as G9
-         # W-3/W-4: do not silently coerce unknown error states.
-         echo "error: resume Step 3.5.c validate_seed_worktree unexpected rc=$rc — contract violation, aborting resume" >&2
-         exit 1
-         ;;
-    esac
+' "$SESSION_ROOT/session.yaml"); then
+    echo "error: resume Step 3.5.c SEED_IDS extraction failed" >&2
+    exit 1
   fi
-done
-fi  # end: if ! [ -z "${SEED_IDS:-}" ]
+
+  if ! [ -z "${SEED_IDS:-}" ]; then
+  for SID in $SEED_IDS; do
+    if ! bash "$DEEP_EVOLVE_HELPER_PATH" validate_seed_worktree "$SID"; then
+      rc=$?
+      case "$rc" in
+        3) # Scenario 4 — worktree missing → § 11.1 W-11.1 recovery
+           echo "warn: resume Step 3.5.c seed $SID worktree missing (rc=3)" >&2
+           # W-B fix (Opus review 2026-04-25-172243): wrap (unset SEED_ID; ...)
+           # subshell in rc-guard.
+           if ! (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+             append_journal_event "$(jq -cn \
+               --argjson sid "$SID" \
+               '{event: "resume_worktree_missing", seed_id: $sid}')"); then
+             echo "error: resume Step 3.5.c failed to append resume_worktree_missing for seed $SID" >&2
+             exit 1
+           fi
+           # Coordinator must AskUserQuestion: "Restore from branch tip / Skip seed / Abort?"
+           # The prose pattern matches synthesis.md Branch B — coordinator
+           # captures USER_CHOICE and re-enters at Step 3.5.d below.
+           echo "Step 3.5.c: AskUserQuestion required for seed $SID — see § 11.1 W-11.1" >&2
+           ;;
+        4|5|6)
+           # W-6 fix (Opus review 2026-04-25-161635): per-seed contamination
+           # is now operator-decides via AskUserQuestion (mirrors rc=3 path),
+           # not session-wide hard-abort. Rationale: in an N=5 init where
+           # seed-3 is dirty (rc=5) but seeds 1, 2, 4, 5 are clean, hard-abort
+           # prevents salvage of the 4 clean seeds — § 11.1 W-11.x tables
+           # explicitly mark these as "operator decides" recovery paths.
+           echo "warn: resume Step 3.5.c seed $SID worktree contaminated (rc=$rc — branch mismatch / dirty / HEAD divergence)" >&2
+           # W-B fix (Opus review 2026-04-25-172243): wrap (unset SEED_ID; ...)
+           # subshell in rc-guard.
+           if ! (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+             append_journal_event "$(jq -cn \
+               --argjson sid "$SID" \
+               --argjson r "$rc" \
+               '{event: "resume_worktree_contaminated", seed_id: $sid, rc: $r}')"); then
+             echo "error: resume Step 3.5.c failed to append resume_worktree_contaminated for seed $SID" >&2
+             exit 1
+           fi
+           # Coordinator AskUserQuestion: "Skip seed / Restore from branch tip /
+           # Abort all of resume?" — same prose pattern as rc=3 above.
+           echo "Step 3.5.c: AskUserQuestion required for seed $SID (contamination) — see § 11.1 W-11.x" >&2
+           ;;
+        *)
+           # Unknown rc class — this IS a coordinator-internal contract violation
+           # (validate_seed_worktree's rc taxonomy is fixed); hard-abort all of
+           # resume rather than guess the recovery path. Same discipline as G9
+           # W-3/W-4: do not silently coerce unknown error states.
+           echo "error: resume Step 3.5.c validate_seed_worktree unexpected rc=$rc — contract violation, aborting resume" >&2
+           exit 1
+           ;;
+      esac
+    fi
+  done
+  fi  # end: if ! [ -z "${SEED_IDS:-}" ]
+fi
 ```
 
 ### 3.5.d — Per-seed journal replay (git-log-is-truth, § 11.3)
@@ -321,21 +357,31 @@ For each active seed, tail its `seed_*` journal events to find the latest
   block boundary).
 
 ```bash
-# W-5 self-gate
-[ "${IS_V31:-0}" = "1" ] || { echo "3.5.d: skipping (IS_V31=0)" >&2; }
-
-for SID in $SEED_IDS; do
-  WT_PATH=$(python3 -c '
+# W-A fix (Opus review 2026-04-25-172243): wrap entire body in explicit
+# if/then/else/fi — see 3.5.a for rationale. No straddling fi (W-5).
+if [ "${IS_V31:-0}" != "1" ]; then
+  echo "3.5.d: skipping (IS_V31=0)" >&2
+else
+  # Loop guard symmetry (Opus review 2026-04-25-172243): mirror 3.5.c's
+  # `if ! [ -z "${SEED_IDS:-}" ]` guard around the for loop.
+  if ! [ -z "${SEED_IDS:-}" ]; then
+  for SID in $SEED_IDS; do
+    # W-B fix (Opus review 2026-04-25-172243): rc-guard WT_PATH python3 -c.
+    if ! WT_PATH=$(python3 -c '
 import yaml, sys
 with open(sys.argv[1]) as f:
     sy = yaml.safe_load(f) or {}
 for s in sy.get("virtual_parallel", {}).get("seeds", []):
     if s.get("id") == int(sys.argv[2]):
         print(s.get("worktree_path") or ""); break
-' "$SESSION_ROOT/session.yaml" "$SID")
-  [ -n "$WT_PATH" ] || continue   # skipped above
+' "$SESSION_ROOT/session.yaml" "$SID"); then
+      echo "error: resume Step 3.5.d WT_PATH extraction failed for seed $SID" >&2
+      exit 1
+    fi
+    [ -n "$WT_PATH" ] || continue   # skipped above
 
-  TAIL=$(python3 -c '
+    # W-B fix: rc-guard TAIL python3 -c.
+    if ! TAIL=$(python3 -c '
 import json, sys
 sid = int(sys.argv[2])
 events = []
@@ -349,81 +395,119 @@ if events:
     print(json.dumps(events[-1]))
 else:
     print("{}")
-' "$SESSION_ROOT/journal.jsonl" "$SID")
+' "$SESSION_ROOT/journal.jsonl" "$SID"); then
+      echo "error: resume Step 3.5.d TAIL extraction failed for seed $SID" >&2
+      exit 1
+    fi
 
-  TAIL_EVENT=$(echo "$TAIL" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("event",""))')
+    # W-B fix: rc-guard TAIL_EVENT python3 -c.
+    if ! TAIL_EVENT=$(echo "$TAIL" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("event",""))'); then
+      echo "error: resume Step 3.5.d TAIL_EVENT extraction failed for seed $SID" >&2
+      exit 1
+    fi
 
-  case "$TAIL_EVENT" in
-    seed_block_completed|seed_block_failed|kept|discarded|committed|seed_killed)
-      # Scenario 1: clean boundary — no reconciliation needed
-      :
-      ;;
-    planned)
-      # Scenario 2 or 3: check if the planned experiment was committed
-      EXPECTED_SHA=$(echo "$TAIL" | python3 -c '
+    case "$TAIL_EVENT" in
+      seed_block_completed|seed_block_failed|kept|discarded|committed|seed_killed)
+        # Scenario 1: clean boundary — no reconciliation needed
+        :
+        ;;
+      planned)
+        # Scenario 2 or 3: check if the planned experiment was committed
+        # W-B fix: rc-guard EXPECTED_SHA python3 -c.
+        if ! EXPECTED_SHA=$(echo "$TAIL" | python3 -c '
 import json,sys
-print(json.load(sys.stdin).get("planned_commit_sha","") or "")')
-      if [ -z "$EXPECTED_SHA" ]; then
-        # No planned SHA recorded → use HEAD-vs-pre-plan delta as the test
-        # C-1 fix (Opus review 2026-04-25-161635): WT_PATH is already absolute
-        # (T2 cmd_create_seed_worktree returns "$SESSION_ROOT/worktrees/seed_K");
-        # T32's append_seed_to_session_yaml stores it absolute. Prepending
-        # $SESSION_ROOT here doubled the path → git -C silently failed → resume
-        # always misclassified Scenario-2 as Scenario-3 (lost commits). Same
-        # pattern as cmd_validate_seed_worktree (session-helper.sh:886) which
-        # uses git -C "$wt_path" directly.
-        HEAD_SHA=$(git -C "$WT_PATH" rev-parse HEAD)
-        PRE_SHA=$(echo "$TAIL" | python3 -c '
+print(json.load(sys.stdin).get("planned_commit_sha","") or "")'); then
+          echo "error: resume Step 3.5.d EXPECTED_SHA extraction failed for seed $SID" >&2
+          exit 1
+        fi
+        if [ -z "$EXPECTED_SHA" ]; then
+          # No planned SHA recorded → use HEAD-vs-pre-plan delta as the test
+          # C-1 fix (Opus review 2026-04-25-161635): WT_PATH is already absolute
+          # (T2 cmd_create_seed_worktree returns "$SESSION_ROOT/worktrees/seed_K");
+          # T32's append_seed_to_session_yaml stores it absolute. Prepending
+          # $SESSION_ROOT here doubled the path → git -C silently failed → resume
+          # always misclassified Scenario-2 as Scenario-3 (lost commits). Same
+          # pattern as cmd_validate_seed_worktree (session-helper.sh:886) which
+          # uses git -C "$wt_path" directly.
+          # W-B fix: rc-guard git -C ... rev-parse HEAD.
+          if ! HEAD_SHA=$(git -C "$WT_PATH" rev-parse HEAD); then
+            echo "error: resume Step 3.5.d git rev-parse HEAD failed for seed $SID at $WT_PATH" >&2
+            exit 1
+          fi
+          # W-B fix: rc-guard PRE_SHA python3 -c.
+          if ! PRE_SHA=$(echo "$TAIL" | python3 -c '
 import json,sys
-print(json.load(sys.stdin).get("pre_plan_head_sha","") or "")')
-        if [ -n "$PRE_SHA" ] && [ "$HEAD_SHA" != "$PRE_SHA" ]; then
-          # New commit since planned → synthesize committed (Scenario 2)
-          (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
-            append_journal_event "$(jq -cn \
-              --argjson sid "$SID" \
-              --arg sha "$HEAD_SHA" \
-              '{event: "committed", seed_id: $sid, commit: $sha,
-                synthesized_by: "resume_step_3_5_d"}')")
+print(json.load(sys.stdin).get("pre_plan_head_sha","") or "")'); then
+            echo "error: resume Step 3.5.d PRE_SHA extraction failed for seed $SID" >&2
+            exit 1
+          fi
+          if [ -n "$PRE_SHA" ] && [ "$HEAD_SHA" != "$PRE_SHA" ]; then
+            # New commit since planned → synthesize committed (Scenario 2)
+            # W-B fix: wrap (unset SEED_ID; ...) subshell in rc-guard.
+            if ! (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+              append_journal_event "$(jq -cn \
+                --argjson sid "$SID" \
+                --arg sha "$HEAD_SHA" \
+                '{event: "committed", seed_id: $sid, commit: $sha,
+                  synthesized_by: "resume_step_3_5_d"}')"); then
+              echo "error: resume Step 3.5.d failed to append synthetic committed for seed $SID" >&2
+              exit 1
+            fi
+          else
+            # Plan abandoned (Scenario 3)
+            # W-B fix: wrap (unset SEED_ID; ...) subshell in rc-guard.
+            if ! (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+              append_journal_event "$(jq -cn \
+                --argjson sid "$SID" \
+                '{event: "discarded", seed_id: $sid,
+                  reason: "resume_no_matching_commit",
+                  synthesized_by: "resume_step_3_5_d"}')"); then
+              echo "error: resume Step 3.5.d failed to append synthetic discarded for seed $SID" >&2
+              exit 1
+            fi
+          fi
         else
-          # Plan abandoned (Scenario 3)
-          (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
-            append_journal_event "$(jq -cn \
-              --argjson sid "$SID" \
-              '{event: "discarded", seed_id: $sid,
-                reason: "resume_no_matching_commit",
-                synthesized_by: "resume_step_3_5_d"}')")
+          # planned_commit_sha was recorded — check it exists
+          # C-1 fix (Opus review 2026-04-25-161635): see HEAD_SHA above for the
+          # path-doubling bug. WT_PATH is absolute; do not prepend $SESSION_ROOT.
+          if git -C "$WT_PATH" cat-file -e "$EXPECTED_SHA" 2>/dev/null; then
+            # Scenario 2 — synthesize committed
+            # W-B fix: wrap (unset SEED_ID; ...) subshell in rc-guard.
+            if ! (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+              append_journal_event "$(jq -cn \
+                --argjson sid "$SID" \
+                --arg sha "$EXPECTED_SHA" \
+                '{event: "committed", seed_id: $sid, commit: $sha,
+                  synthesized_by: "resume_step_3_5_d"}')"); then
+              echo "error: resume Step 3.5.d failed to append synthetic committed (planned_commit_sha path) for seed $SID" >&2
+              exit 1
+            fi
+          else
+            # Scenario 3
+            # W-B fix: wrap (unset SEED_ID; ...) subshell in rc-guard.
+            if ! (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+              append_journal_event "$(jq -cn \
+                --argjson sid "$SID" \
+                '{event: "discarded", seed_id: $sid,
+                  reason: "resume_no_matching_commit",
+                  synthesized_by: "resume_step_3_5_d"}')"); then
+              echo "error: resume Step 3.5.d failed to append synthetic discarded (planned_commit_sha path) for seed $SID" >&2
+              exit 1
+            fi
+          fi
         fi
-      else
-        # planned_commit_sha was recorded — check it exists
-        # C-1 fix (Opus review 2026-04-25-161635): see HEAD_SHA above for the
-        # path-doubling bug. WT_PATH is absolute; do not prepend $SESSION_ROOT.
-        if git -C "$WT_PATH" cat-file -e "$EXPECTED_SHA" 2>/dev/null; then
-          # Scenario 2 — synthesize committed
-          (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
-            append_journal_event "$(jq -cn \
-              --argjson sid "$SID" \
-              --arg sha "$EXPECTED_SHA" \
-              '{event: "committed", seed_id: $sid, commit: $sha,
-                synthesized_by: "resume_step_3_5_d"}')")
-        else
-          # Scenario 3
-          (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
-            append_journal_event "$(jq -cn \
-              --argjson sid "$SID" \
-              '{event: "discarded", seed_id: $sid,
-                reason: "resume_no_matching_commit",
-                synthesized_by: "resume_step_3_5_d"}')")
-        fi
-      fi
-      ;;
-    *)
-      # Unknown / no events for this seed (newborn epoch_growth seed never
-      # dispatched) → skip+warn
-      echo "warn: resume Step 3.5.d seed $SID has no recognized tail event ($TAIL_EVENT); skipping" >&2
-      ;;
-  esac
-done
-# (W-5 fix: no straddling `fi` here — gate is per-sub-stage at top of each block.)
+        ;;
+      *)
+        # Unknown / no events for this seed (newborn epoch_growth seed never
+        # dispatched) → skip+warn
+        echo "warn: resume Step 3.5.d seed $SID has no recognized tail event ($TAIL_EVENT); skipping" >&2
+        ;;
+    esac
+  done
+  fi  # end: if ! [ -z "${SEED_IDS:-}" ]
+fi
+# (W-5 fix: no straddling `fi` across markdown code-fences — gate is
+# per-sub-stage and self-contained, with explicit if/else/fi inside this block.)
 ```
 
 → Proceed to Step 4 (Display resume summary).
