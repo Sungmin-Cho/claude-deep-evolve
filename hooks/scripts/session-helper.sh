@@ -1488,6 +1488,109 @@ print((dt + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))
   return 0
 }
 
+# --- v3.1.0 synthesis worktree helpers (spec § 4.1, § 8.2 Step 5/6) ---
+#
+# The synthesis worktree is the ephemeral integration target where the
+# AI synthesis subagent (dispatched from synthesis.md Step 5) builds
+# the final deliverable on top of a deterministically-selected baseline
+# seed's HEAD. On success, this branch becomes the session output. On
+# failure, cleanup_failed_synthesis_worktree renames the branch to
+# evolve/<sid>/synthesis-failed-<ts> for audit trail preservation
+# (spec § 8.2 Step 6 "synthesis worktree labeled 'failed_synthesis'").
+
+# Create the synthesis worktree at $SESSION_ROOT/worktrees/synthesis
+# from the given baseline commit on a new branch evolve/<sid>/synthesis.
+# Usage: create_synthesis_worktree <baseline_commit>
+cmd_create_synthesis_worktree() {
+  local baseline="${1:-}"
+
+  if [ -z "$baseline" ]; then
+    echo "usage: create_synthesis_worktree <baseline_commit>" >&2
+    return 2
+  fi
+  if [ -z "${SESSION_ROOT:-}" ]; then
+    echo "create_synthesis_worktree: SESSION_ROOT not set" >&2
+    return 2
+  fi
+  if [ -z "${SESSION_ID:-}" ]; then
+    echo "create_synthesis_worktree: SESSION_ID not set" >&2
+    return 2
+  fi
+
+  # Validate baseline commit exists
+  if ! git rev-parse --verify "${baseline}^{commit}" >/dev/null 2>&1; then
+    echo "create_synthesis_worktree: invalid baseline commit: $baseline" >&2
+    return 2
+  fi
+
+  local wt_path="$SESSION_ROOT/worktrees/synthesis"
+  local branch="evolve/${SESSION_ID}/synthesis"
+
+  if [ -d "$wt_path" ]; then
+    echo "create_synthesis_worktree: synthesis worktree already exists at $wt_path" >&2
+    return 2
+  fi
+
+  if git show-ref --verify --quiet "refs/heads/$branch"; then
+    echo "create_synthesis_worktree: branch $branch already exists (run cleanup_failed_synthesis_worktree first)" >&2
+    return 2
+  fi
+
+  mkdir -p "$(dirname "$wt_path")"
+
+  if ! git worktree add -q "$wt_path" -b "$branch" "$baseline" 2>&1; then
+    echo "create_synthesis_worktree: git worktree add failed" >&2
+    return 2
+  fi
+  return 0
+}
+
+# Cleanup a failed synthesis worktree:
+#   - rename branch evolve/<sid>/synthesis → evolve/<sid>/synthesis-failed-<ts>
+#   - remove the worktree directory (preserves the renamed branch for audit)
+# No-op when no synthesis worktree exists.
+# Usage: cleanup_failed_synthesis_worktree
+cmd_cleanup_failed_synthesis_worktree() {
+  if [ -z "${SESSION_ROOT:-}" ]; then
+    echo "cleanup_failed_synthesis_worktree: SESSION_ROOT not set" >&2
+    return 2
+  fi
+  if [ -z "${SESSION_ID:-}" ]; then
+    echo "cleanup_failed_synthesis_worktree: SESSION_ID not set" >&2
+    return 2
+  fi
+
+  local wt_path="$SESSION_ROOT/worktrees/synthesis"
+  local branch="evolve/${SESSION_ID}/synthesis"
+
+  # No worktree → no-op
+  if [ ! -d "$wt_path" ]; then
+    return 0
+  fi
+
+  # Rename branch with timestamp suffix BEFORE removing worktree
+  # (so the audit branch survives even if `git worktree remove` fails)
+  local ts
+  ts="$(iso_now | tr ':' '-' | tr 'T' '_')"   # filesystem-safe timestamp
+  local failed_branch="evolve/${SESSION_ID}/synthesis-failed-${ts}"
+
+  if git show-ref --verify --quiet "refs/heads/$branch"; then
+    if ! git branch -m "$branch" "$failed_branch" 2>&1; then
+      echo "cleanup_failed_synthesis_worktree: failed to rename $branch → $failed_branch" >&2
+      return 2
+    fi
+  fi
+
+  # Force-remove worktree (we don't care about uncommitted state — the
+  # branch already captured the failed integration history)
+  if ! git worktree remove --force "$wt_path" 2>&1; then
+    echo "cleanup_failed_synthesis_worktree: git worktree remove failed" >&2
+    return 2
+  fi
+
+  return 0
+}
+
 # === END of helper function definitions ===
 
 # If sourced (not executed), skip ALL execution-time side effects:
@@ -1546,5 +1649,7 @@ case "$SUBCMD" in
   append_journal_event)  cmd_append_journal_event "$@" ;;
   append_kill_queue_entry)  cmd_append_kill_queue_entry "$@" ;;
   drain_kill_queue)         cmd_drain_kill_queue "$@" ;;
+  create_synthesis_worktree)         cmd_create_synthesis_worktree "$@" ;;
+  cleanup_failed_synthesis_worktree) cmd_cleanup_failed_synthesis_worktree "$@" ;;
   *) echo "session-helper: unknown subcommand '$SUBCMD'" >&2; exit 1 ;;
 esac
