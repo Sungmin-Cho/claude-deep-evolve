@@ -1015,6 +1015,58 @@ with open(sy_path, "w", encoding="utf-8") as f:
 PY
 }
 
+cmd_init_virtual_parallel_block() {
+  # C2 fix (Opus final review 2026-04-25-174250): writes the full
+  # virtual_parallel block to session.yaml from validated $VP_ANALYSIS,
+  # $N_CHOSEN, and user-supplied total experiment budget. Called once
+  # at A.3 Step 4.5 (after session.yaml exists, before A.3.6 worktree loop).
+  local vp_analysis="${1:-}"
+  local n_chosen="${2:-}"
+  local total_budget="${3:-}"
+  if [ -z "$vp_analysis" ] || [ -z "$n_chosen" ] || [ -z "$total_budget" ]; then
+    echo "usage: init_virtual_parallel_block <vp_analysis_json> <n_chosen> <total_budget>" >&2
+    return 2
+  fi
+  [ -z "${SESSION_ROOT:-}" ] && { echo "SESSION_ROOT not set" >&2; return 2; }
+  local sy="$SESSION_ROOT/session.yaml"
+  [ -f "$sy" ] || { echo "session.yaml missing" >&2; return 2; }
+  # argv-safe interpolation: all 3 inputs via sys.argv (G8 C-R1 / G9 C-1 class)
+  python3 - "$sy" "$vp_analysis" "$n_chosen" "$total_budget" <<'PY'
+import json, sys, yaml
+sy_path, vp_raw, n_raw, budget_raw = sys.argv[1:5]
+try:
+    vp = json.loads(vp_raw)
+except json.JSONDecodeError:
+    print(f"error: vp_analysis is not valid JSON", file=sys.stderr); sys.exit(2)
+try:
+    n_chosen = int(n_raw); total_budget = int(budget_raw)
+except ValueError:
+    print(f"error: n_chosen / total_budget must be integers", file=sys.stderr); sys.exit(2)
+if not (1 <= n_chosen <= 9):
+    print(f"error: n_chosen={n_chosen} outside [1,9]", file=sys.stderr); sys.exit(2)
+if total_budget < n_chosen:
+    print(f"error: total_budget={total_budget} < n_chosen={n_chosen}", file=sys.stderr); sys.exit(2)
+with open(sy_path, "r", encoding="utf-8") as f:
+    sy = yaml.safe_load(f) or {}
+vp_block = sy.setdefault("virtual_parallel", {})
+vp_block["enabled"] = True
+vp_block["n_current"] = n_chosen
+vp_block["n_initial"] = n_chosen
+vp_block["n_range"] = {"min": 1, "max": 9}
+vp_block["project_type"] = vp["project_type"]
+vp_block["eval_parallelizability"] = vp["eval_parallelizability"]
+vp_block["selection_reason"] = vp.get("reasoning", "")
+vp_block["budget_total"] = total_budget
+vp_block["budget_unallocated"] = 0
+vp_block.setdefault("synthesis", {})
+vp_block["synthesis"]["budget_allocated"] = min(2 * n_chosen, 10)
+vp_block["synthesis"]["regression_tolerance"] = 0.05
+vp_block.setdefault("seeds", [])  # populated by A.3.6 loop
+with open(sy_path, "w", encoding="utf-8") as f:
+    yaml.safe_dump(sy, f, sort_keys=False, allow_unicode=True)
+PY
+}
+
 # --- v3.1.0 resume reconciliation helpers (T33) ---
 
 cmd_rebuild_seeds_from_journal() {
@@ -1816,6 +1868,7 @@ case "$SUBCMD" in
   remove_seed_worktree)   cmd_remove_seed_worktree "$@" ;;
   append_seed_to_session_yaml) cmd_append_seed_to_session_yaml "$@" ;;
   set_virtual_parallel_field)  cmd_set_virtual_parallel_field "$@" ;;
+  init_virtual_parallel_block) cmd_init_virtual_parallel_block "$@" ;;
   rebuild_seeds_from_journal)  cmd_rebuild_seeds_from_journal "$@" ;;
   compute_init_budget_split)  cmd_compute_init_budget_split "$@" ;;
   compute_grow_allocation)    cmd_compute_grow_allocation "$@" ;;

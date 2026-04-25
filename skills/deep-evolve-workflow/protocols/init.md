@@ -232,28 +232,28 @@ fi
 export VP_ANALYSIS="$VP_ANALYSIS_JSON"
 ```
 
-**Stage 6.3 — Record analysis to session.yaml + journal**
+**Stage 6.3 — Buffer analysis event for deferred flush**
 
-The validated analysis is recorded to two places so that resume.md can re-
-derive intent without re-asking the AI:
+The validated analysis must be recorded so that resume.md can re-derive intent
+without re-asking the AI. **C1 fix (Opus final review 2026-04-25-174250):**
+$SESSION_ROOT and journal.jsonl do not exist until A.3 Steps 2 and 4 respectively.
+All writes are therefore buffered here and flushed atomically in NEW A.3 Step 4.5
+(after session.yaml is created). The `virtual_parallel` block fields
+(project_type, eval_parallelizability, selection_reason, n_initial, etc.) are
+written by `cmd_init_virtual_parallel_block` in Step 4.5 (C2 fix) — do NOT
+write them here.
 
-1. **session.yaml** — populate `virtual_parallel.project_type`,
-   `virtual_parallel.eval_parallelizability`, `virtual_parallel.selection_reason`
-   (← `reasoning`), and provisional `virtual_parallel.n_initial` (← `n_suggested`;
-   may be re-confirmed in A.2). The full `virtual_parallel` block schema is in
-   the v3.1 extension at A.3 step 4 below; here we only seed the analysis fields.
-
-2. **journal** — append `init_vp_analysis` event:
-
-   ```bash
-   # Coordinator-owned event (no seed yet at init time) — wrap in
-   # (unset SEED_ID; ...) subshell so T16's auto-inject does not corrupt
-   # the event with a stale SEED_ID from any prior outer-loop run.
-   (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
-     append_journal_event "$(jq -cn \
-       --argjson vp "$VP_ANALYSIS" \
-       '{event: "init_vp_analysis", vp_analysis: $vp}')")
-   ```
+```bash
+# C1 fix (Opus final review 2026-04-25-174250): defer journal/yaml writes
+# until A.3 Step 2 (start_new_session) creates $SESSION_ROOT/$SESSION_ID
+# and Step 4 creates session.yaml. Buffer the events here; they get
+# flushed in A.3 Step 4.5 (NEW) below.
+INIT_EMIT_BUFFER=$(mktemp "${TMPDIR:-/tmp}/deep-evolve-init-buffer-XXXXXX.jsonl")
+chmod 600 "$INIT_EMIT_BUFFER"
+echo "$(jq -cn --argjson vp "$VP_ANALYSIS" \
+    '{event: "init_vp_analysis", vp_analysis: $vp}')" >> "$INIT_EMIT_BUFFER"
+export INIT_EMIT_BUFFER
+```
 
 **Stage 6.4 — Acknowledge N=1 short-circuit explicitly**
 
@@ -444,18 +444,17 @@ export N_CHOSEN
 export N_REASON
 ```
 
-**Stage 7.6 — Journal the decision**
+**Stage 7.6 — Buffer N-chosen event for deferred flush**
 
-Coordinator emits `init_n_chosen` so resume.md can re-derive intent without
-re-asking. (unset SEED_ID; ...) wrap because no seed exists yet at init time
-and we don't want T16's auto-inject to corrupt session-wide events.
+`init_n_chosen` is recorded so resume.md can re-derive intent without re-asking.
+**C1 fix (Opus final review 2026-04-25-174250):** journal.jsonl does not exist
+until A.3 Step 4. Append to the same $INIT_EMIT_BUFFER created in A.1.6 Stage 6.3;
+the buffer is flushed in A.3 Step 4.5.
 
 ```bash
-(unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
-  append_journal_event "$(jq -cn \
-    --argjson n "$N_CHOSEN" \
-    --arg reason "$N_REASON" \
-    '{event: "init_n_chosen", n_chosen: $n, reason: $reason}')")
+# C1 fix (same review): buffer init_n_chosen until A.3 flush.
+echo "$(jq -cn --argjson n "$N_CHOSEN" --arg reason "$N_REASON" \
+    '{event: "init_n_chosen", n_chosen: $n, reason: $reason}')" >> "$INIT_EMIT_BUFFER"
 ```
 
 → Proceed to A.2.5 (Meta Archive Lookup) unchanged.
@@ -613,6 +612,46 @@ virtual_parallel:
 
 When `$VERSION` is "2.x" or "3.0.x", use the pre-existing v2/v3.0 template
 unchanged (virtual_parallel block absent).
+
+4.5. **(v3.1+) Initialize virtual_parallel block + flush A.1.6/A.2.6 buffered events** (C1+C2 fix from final review 2026-04-25-174250):
+
+When `$VERSION == "3.1.0"`, the A.1.6 + A.2.6 stages buffered their journal
+events to `$INIT_EMIT_BUFFER` because `$SESSION_ROOT` / `$SESSION_ID` /
+session.yaml didn't exist yet. Now they do — flush the buffer and write
+the virtual_parallel block.
+
+```bash
+if echo "${VERSION:-}" | grep -q '^3\.1'; then
+  # C2 fix: write virtual_parallel block from $VP_ANALYSIS + $N_CHOSEN +
+  # user-supplied total budget. Without this, allocated_budget=0 for every
+  # seed (cmd_append_seed_to_session_yaml's int(vp.get("budget_total", 0))
+  # → 0 // N → 0).
+  # $REQUESTED_COUNT is the experiment count from A.2 Q4 (default 30).
+  if ! bash "$DEEP_EVOLVE_HELPER_PATH" \
+      init_virtual_parallel_block \
+      "$VP_ANALYSIS" \
+      "$N_CHOSEN" \
+      "${REQUESTED_COUNT:-30}"; then
+    echo "error: A.3 Step 4.5 init_virtual_parallel_block failed" >&2
+    exit 1
+  fi
+
+  # C1 fix: flush buffered journal events. Buffer was written before
+  # journal.jsonl existed; now append all buffered lines.
+  if [ -f "${INIT_EMIT_BUFFER:-/dev/null}" ]; then
+    while IFS= read -r ev; do
+      [ -z "$ev" ] && continue
+      if ! (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+          append_journal_event "$ev"); then
+        echo "error: A.3 Step 4.5 buffered event flush failed for: $ev" >&2
+        exit 1
+      fi
+    done < "$INIT_EMIT_BUFFER"
+    rm -f "$INIT_EMIT_BUFFER"
+    unset INIT_EMIT_BUFFER
+  fi
+fi
+```
 
 5. Generate evaluation harness based on eval_mode:
 

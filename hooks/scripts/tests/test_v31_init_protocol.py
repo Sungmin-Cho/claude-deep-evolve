@@ -463,3 +463,130 @@ def test_a36_w6_trace_n_chosen_to_loop():
     assert "$N_CHOSEN" in a36 or "N_CHOSEN" in a36
     # Must also propagate into session.yaml.virtual_parallel.n_current
     assert "n_current" in a36
+
+
+# ---------- C1+C2 fix verification (final review 2026-04-25-174250) ----------
+
+def test_a3_step_4_5_present_in_init_md():
+    """A.3 Step 4.5 must exist between Step 4 and Step 5."""
+    c = _content()
+    # Step header may be "4.5." or "### 4.5" depending on plan style
+    assert re.search(r"^4\.5\.|### 4\.5|Step 4\.5", c, re.MULTILINE)
+    s4_5_idx = next(
+        (m.start() for m in re.finditer(r"^4\.5\.|### 4\.5|Step 4\.5", c, re.MULTILINE)),
+        None,
+    )
+    assert s4_5_idx is not None
+    s5_idx = c.index("5. Generate evaluation harness")
+    assert s4_5_idx < s5_idx, "Step 4.5 must precede Step 5"
+
+
+def test_a3_step_4_5_calls_init_virtual_parallel_block():
+    """Step 4.5 must invoke the new cmd_init_virtual_parallel_block helper."""
+    c = _content()
+    # Find the Step 4.5 region — between Step 4 / step5
+    s5_idx = c.index("5. Generate evaluation harness")
+    s4_5_region = c[max(0, s5_idx - 3000):s5_idx]
+    assert "init_virtual_parallel_block" in s4_5_region
+
+
+def test_a3_step_4_5_flushes_init_emit_buffer():
+    """C1 buffer-and-flush: Step 4.5 must read $INIT_EMIT_BUFFER and call
+    append_journal_event for each line."""
+    c = _content()
+    s5_idx = c.index("5. Generate evaluation harness")
+    s4_5_region = c[max(0, s5_idx - 3000):s5_idx]
+    assert "INIT_EMIT_BUFFER" in s4_5_region
+    assert "append_journal_event" in s4_5_region
+
+
+def test_a16_stage_63_buffers_not_emits():
+    """C1 fix: Stage 6.3 must NOT call bash append_journal_event directly;
+    must write to $INIT_EMIT_BUFFER instead."""
+    c = _content()
+    a16 = c.split("## A.1.6", 1)[1].split("## A.2:", 1)[0]
+    # Old pattern was: (unset SEED_ID; bash $DEEP_EVOLVE_HELPER_PATH append_journal_event ...)
+    # New pattern: echo ... >> "$INIT_EMIT_BUFFER"
+    assert "INIT_EMIT_BUFFER" in a16
+    # The verbatim "(unset SEED_ID; bash" pattern in Stage 6.3 should be gone
+    assert "(unset SEED_ID; bash" not in a16, \
+        "A.1.6 Stage 6.3 should NOT directly emit; should buffer to $INIT_EMIT_BUFFER"
+
+
+def test_a26_stage_76_buffers_not_emits():
+    """C1 fix: Stage 7.6 must buffer init_n_chosen, not emit directly."""
+    c = _content()
+    a26 = c.split("### A.2.6", 1)[1].split("## A.2.5:", 1)[0]
+    assert "INIT_EMIT_BUFFER" in a26
+    assert "(unset SEED_ID; bash" not in a26
+
+
+def test_init_virtual_parallel_block_helper_writes_all_fields(tmp_path):
+    """C2 behavioral: cmd_init_virtual_parallel_block writes all 8 expected
+    fields to session.yaml. This is the test that would have caught C2 — it
+    invokes the helper end-to-end and asserts post-conditions on the yaml."""
+    import subprocess, yaml, json
+    # Setup: minimal session.yaml fixture
+    sr = tmp_path / "session"
+    sr.mkdir()
+    sy = sr / "session.yaml"
+    sy.write_text("session_id: test-c2\ndeep_evolve_version: \"3.1.0\"\n")
+    helper = (Path(__file__).parents[3]
+              / "hooks/scripts/session-helper.sh")
+    vp_analysis = json.dumps({
+        "project_type": "narrow_tuning",
+        "eval_parallelizability": "serialized",
+        "n_suggested": 1,
+        "reasoning": "test fixture",
+    })
+    env = {**__import__("os").environ, "SESSION_ROOT": str(sr)}
+    r = subprocess.run(
+        ["bash", str(helper), "init_virtual_parallel_block",
+         vp_analysis, "3", "30"],
+        capture_output=True, text=True, env=env,
+    )
+    assert r.returncode == 0, f"helper failed: stdout={r.stdout} stderr={r.stderr}"
+    obj = yaml.safe_load(sy.read_text())
+    vp = obj["virtual_parallel"]
+    assert vp["enabled"] is True
+    assert vp["n_current"] == 3
+    assert vp["n_initial"] == 3
+    assert vp["n_range"] == {"min": 1, "max": 9}
+    assert vp["project_type"] == "narrow_tuning"
+    assert vp["eval_parallelizability"] == "serialized"
+    assert vp["selection_reason"] == "test fixture"
+    assert vp["budget_total"] == 30
+    assert vp["budget_unallocated"] == 0
+    assert vp["synthesis"]["budget_allocated"] == 6   # min(2*3, 10)
+    assert vp["synthesis"]["regression_tolerance"] == 0.05
+
+
+def test_init_virtual_parallel_block_rejects_invalid_inputs(tmp_path):
+    """C2: rc=2 on missing args, non-int n_chosen, n_chosen out of [1,9],
+    total_budget < n_chosen."""
+    import subprocess, yaml
+    sr = tmp_path / "session"
+    sr.mkdir()
+    (sr / "session.yaml").write_text("session_id: test-c2\n")
+    helper = (Path(__file__).parents[3]
+              / "hooks/scripts/session-helper.sh")
+    env = {**__import__("os").environ, "SESSION_ROOT": str(sr)}
+    # missing args
+    r = subprocess.run(["bash", str(helper), "init_virtual_parallel_block"],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 2
+    # non-int n_chosen
+    r = subprocess.run(["bash", str(helper), "init_virtual_parallel_block",
+                        '{"project_type":"narrow_tuning","eval_parallelizability":"serialized","reasoning":""}',
+                        "abc", "30"], capture_output=True, text=True, env=env)
+    assert r.returncode == 2
+    # n_chosen out of range
+    r = subprocess.run(["bash", str(helper), "init_virtual_parallel_block",
+                        '{"project_type":"narrow_tuning","eval_parallelizability":"serialized","reasoning":""}',
+                        "10", "30"], capture_output=True, text=True, env=env)
+    assert r.returncode == 2
+    # total_budget < n_chosen
+    r = subprocess.run(["bash", str(helper), "init_virtual_parallel_block",
+                        '{"project_type":"narrow_tuning","eval_parallelizability":"serialized","reasoning":""}',
+                        "5", "3"], capture_output=True, text=True, env=env)
+    assert r.returncode == 2
