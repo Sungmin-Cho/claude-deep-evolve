@@ -80,6 +80,15 @@ def main():
     if not isinstance(reasoning, dict):
         _die("--baseline-reasoning must be a JSON object")
 
+    # I-1 + I-2 fix: ties_broken_on must be a list of strings (T25 contract).
+    # Without this guard:
+    #   - null  → ', '.join(None)        → TypeError, rc=1, no "error:" prefix
+    #   - "str" → ', '.join("final_q")   → "f, i, n, a, l, _, q" (silent corruption)
+    tbo = reasoning.get("ties_broken_on")
+    if tbo is not None and not isinstance(tbo, list):
+        _die(f"--baseline-reasoning 'ties_broken_on' must be a list, "
+             f"got {type(tbo).__name__}: {tbo!r}")
+
     session = _load_session_yaml(args.session_yaml)
     seeds = (session.get("virtual_parallel", {}) or {}).get("seeds", []) or []
 
@@ -113,7 +122,7 @@ def main():
         "## Baseline Selection Reasoning\n",
         f"- **chosen_seed_id**: {reasoning.get('chosen_seed_id')}",
         f"- **tier**: {reasoning.get('tier')}",
-        f"- **ties_broken_on**: {', '.join(reasoning.get('ties_broken_on', [])) or '(none)'}\n",
+        f"- **ties_broken_on**: {', '.join(reasoning.get('ties_broken_on') or []) or '(none)'}\n",
     ]
 
     if user_choice_text is not None:

@@ -201,7 +201,9 @@ def test_fallback_note_missing_required_arg_rc_2(tmp_path):
         "--user-choice", "none",
         "--output", str(tmp_path / "out.md"),
     ])
-    assert r.returncode != 0
+    # M-2: tightened from `!= 0` to `== 2` to match the rigor of every
+    # other error-path test in this file (argparse emits rc=2 here).
+    assert r.returncode == 2
 
 
 def test_fallback_note_invalid_baseline_reasoning_json_rc_2(tmp_path):
@@ -217,3 +219,51 @@ def test_fallback_note_invalid_baseline_reasoning_json_rc_2(tmp_path):
     ])
     assert r.returncode == 2
     assert "error:" in r.stderr
+
+
+def test_baseline_reasoning_ties_broken_on_null_does_not_crash(tmp_path):
+    """I-1 regression: ties_broken_on=null must not crash with TypeError —
+    must either accept (treat as no tiebreak) or reject with rc=2."""
+    sy = _make_session_yaml(tmp_path, [{"id": 1, "status": "active",
+                                        "final_q": 0.42}])
+    output = tmp_path / "out.md"
+    r = _run([
+        "--session-yaml", str(sy),
+        "--baseline-reasoning", '{"chosen_seed_id": 1, "tier": "preferred", "ties_broken_on": null}',
+        "--synthesis-q", "0.20",
+        "--baseline-q", "0.42",
+        "--user-choice", "none",
+        "--output", str(output),
+    ])
+    # Either accept (rc=0 with "(none)" rendered) OR reject (rc=2 with error:)
+    # — but NEVER crash with rc=1 + bare TypeError traceback.
+    assert r.returncode in (0, 2), \
+        f"ties_broken_on=null crashed: rc={r.returncode}, stderr={r.stderr}"
+    if r.returncode == 2:
+        assert "error:" in r.stderr
+        assert "ties_broken_on" in r.stderr
+    else:
+        # Accepted path: file should contain "(none)" or empty list rendering
+        content = output.read_text(encoding="utf-8")
+        assert "(none)" in content or "ties_broken_on" in content
+
+
+def test_baseline_reasoning_ties_broken_on_string_rejected_rc_2(tmp_path):
+    """I-2 regression: ties_broken_on as a bare string (not list) must
+    rc=2 — otherwise str.join iterates characters, producing "f, i, n, a, l"."""
+    sy = _make_session_yaml(tmp_path, [{"id": 1, "status": "active",
+                                        "final_q": 0.42}])
+    output = tmp_path / "out.md"
+    r = _run([
+        "--session-yaml", str(sy),
+        "--baseline-reasoning", '{"chosen_seed_id": 1, "tier": "preferred", "ties_broken_on": "final_q"}',
+        "--synthesis-q", "0.20",
+        "--baseline-q", "0.42",
+        "--user-choice", "none",
+        "--output", str(output),
+    ])
+    assert r.returncode == 2, \
+        f"ties_broken_on=string silently accepted (would output character iteration): " \
+        f"rc={r.returncode}, stderr={r.stderr}"
+    assert "ties_broken_on" in r.stderr
+    assert "list" in r.stderr.lower() or "type" in r.stderr.lower()
