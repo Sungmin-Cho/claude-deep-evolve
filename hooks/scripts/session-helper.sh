@@ -1015,6 +1015,61 @@ with open(sy_path, "w", encoding="utf-8") as f:
 PY
 }
 
+# --- v3.1.0 resume reconciliation helpers (T33) ---
+
+cmd_rebuild_seeds_from_journal() {
+  [ -z "${SESSION_ROOT:-}" ] && { echo "SESSION_ROOT not set" >&2; return 2; }
+  local sy="$SESSION_ROOT/session.yaml"
+  local jl="$SESSION_ROOT/journal.jsonl"
+  [ -f "$sy" ] || { echo "session.yaml missing" >&2; return 2; }
+  [ -f "$jl" ] || { echo "journal.jsonl missing" >&2; return 2; }
+  python3 - "$sy" "$jl" <<'PY'
+import json, sys, yaml
+sy_path, jl_path = sys.argv[1], sys.argv[2]
+with open(sy_path) as f:
+    sy = yaml.safe_load(f) or {}
+seeds_by_id = {}
+with open(jl_path) as f:
+    for ln in f:
+        try: ev = json.loads(ln)
+        except json.JSONDecodeError: continue
+        e = ev.get("event")
+        sid = ev.get("seed_id")
+        if not isinstance(sid, int): continue
+        if e == "seed_initialized":
+            seeds_by_id[sid] = {
+                "id": sid,
+                "status": "active",
+                "direction": ev.get("direction"),
+                "hypothesis": ev.get("hypothesis"),
+                "initial_rationale": ev.get("initial_rationale"),
+                "worktree_path": ev.get("worktree_path"),
+                "branch": ev.get("branch"),
+                "created_by": ev.get("created_by", "init_batch"),
+                "experiments_used": 0, "keeps": 0,
+                "borrows_given": 0, "borrows_received": 0,
+                "current_q": 0.0, "killed_at": None, "killed_reason": None,
+            }
+        elif e == "seed_killed" and sid in seeds_by_id:
+            # W-10 fix (Opus review 2026-04-25-161635): kill conditions are
+            # the spec § 5.5 whitelist {q_collapse, shortcut_quarantine,
+            # sustained_regression, borrow_loop, user_requested}; the seed
+            # entry's `status` field uses {active, killed_<condition>,
+            # completed} per T1 schema. Prefix "killed_" so downstream
+            # consumers (T26 cross-seed-audit, scheduler) recognize it.
+            cond = ev.get("condition", "killed")
+            seeds_by_id[sid]["status"] = f"killed_{cond}" if not cond.startswith("killed") else cond
+            seeds_by_id[sid]["killed_at"] = ev.get("ts")
+            seeds_by_id[sid]["killed_reason"] = ev.get("reasoning")
+sy.setdefault("virtual_parallel", {})["seeds"] = [seeds_by_id[k] for k in sorted(seeds_by_id)]
+sy["virtual_parallel"]["n_current"] = sum(
+    1 for s in sy["virtual_parallel"]["seeds"] if s["status"] == "active"
+)
+with open(sy_path, "w", encoding="utf-8") as f:
+    yaml.safe_dump(sy, f, sort_keys=False, allow_unicode=True)
+PY
+}
+
 # --- v3.1.0 budget allocation helpers (spec § 5.1, § 15.1 Q6) ---
 
 # Split total budget across N seeds as evenly as possible.
@@ -1757,6 +1812,7 @@ case "$SUBCMD" in
   remove_seed_worktree)   cmd_remove_seed_worktree "$@" ;;
   append_seed_to_session_yaml) cmd_append_seed_to_session_yaml "$@" ;;
   set_virtual_parallel_field)  cmd_set_virtual_parallel_field "$@" ;;
+  rebuild_seeds_from_journal)  cmd_rebuild_seeds_from_journal "$@" ;;
   compute_init_budget_split)  cmd_compute_init_budget_split "$@" ;;
   compute_grow_allocation)    cmd_compute_grow_allocation "$@" ;;
   append_forum_event)    cmd_append_forum_event "$@" ;;
