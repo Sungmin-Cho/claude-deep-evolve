@@ -110,6 +110,167 @@ Example (protocol mode):
 ```
 Wait for user confirmation before proceeding.
 
+## A.1.6 — Virtual Parallel Analysis (v3.1+)
+
+> **Version gate**: This stage runs ONLY when `$VERSION == "3.1.0"` (i.e., the
+> dispatcher set `deep_evolve_version: "3.1.0"`). For v2.x / v3.0.x sessions,
+> `VP_ANALYSIS=null` (no virtual_parallel block in session.yaml) and you proceed
+> directly to A.2 without performing the AI call below. Skipping is silent —
+> v3.0 sessions never had this stage and resume.md handles the absent block.
+
+When `$VERSION == "3.1.0"`, classify the project on two axes that drive the N-seed
+strategy: `project_type` (how well-defined the solution space is) and
+`eval_parallelizability` (whether evaluation can run concurrently across seeds).
+The AI returns a structured JSON object that A.2 (N confirmation) and A.3 (worktree
+creation loop) both consume.
+
+**Stage 6.1 — AI classification call**
+
+Coordinator dispatches a single subagent (Task tool) with the following prompt
+**verbatim** (W-7 lock — do not paraphrase, expand synonyms, or reorder cases;
+test `test_a16_w7_prompt_verbatim_matrix` enforces character-for-character match):
+
+> *"Given this project's goal (`{goal_string}`), target files (`{target_files}`),
+> and existing program.md contents (`{program_md_content}`), classify along two axes:*
+>
+> *(1) project_type — choose one: `narrow_tuning` (1–2 obvious hyperparameters to sweep;
+> well-defined objective; e.g. quant-tuning an existing Sharpe pipeline),
+> `standard_optimization` (multiple choices, partially-known solution space; e.g. model
+> architecture search within a known task), `open_research` (solution space poorly defined;
+> e.g. novel algorithm design).*
+>
+> *(2) eval_parallelizability — choose one: `serialized` (evaluation holds an exclusive
+> resource like a single GPU or shared backtest DB), `parallel_capable` (evaluation is
+> a pure function, independent processes, or parallelizable API calls).*
+>
+> *Return JSON: `{"project_type": "...", "eval_parallelizability": "...", "n_suggested": <int 1-9>, "reasoning": "<1-2 sentences>"}`. Use this matrix for n_suggested:*
+>
+> *narrow_tuning + serialized → 1; narrow_tuning + parallel_capable → 2;*
+> *standard_optimization + serialized → 2-3; standard_optimization + parallel_capable → 3-5;*
+> *open_research + serialized → 3-4; open_research + parallel_capable → 5-9.*
+
+The subagent's stdout MUST be a single JSON object. Coordinator captures it
+into `$AI_VP_ANALYSIS_RAW`.
+
+**Stage 6.2 — Validation (W-6 lesson: validate before consumption)**
+
+Coordinator validates the AI return BEFORE either A.2 or A.3 consumes it.
+Without validation, a malformed AI return (e.g. `n_suggested: "many"` as a
+string, or `project_type: "narrow tuning"` with a space) propagates into
+session.yaml and the worktree loop, where it either crashes or silently
+corrupts state. The validation block normalizes the output into a single
+`$VP_ANALYSIS` handle that downstream sites consume.
+
+```bash
+# Pure-python validator: rejects malformed shapes with rc=2 (operator error
+# class — the AI subagent contract was violated, not a business decision).
+# argv-safe pattern: $AI_VP_ANALYSIS_RAW passed via sys.argv (NOT shell-
+# interpolated into source) — same code-injection-safe class as G8 C-R1
+# queued_at and G9 C-1 SYNTHESIS_Q.
+if ! VP_ANALYSIS_JSON=$(python3 - "$AI_VP_ANALYSIS_RAW" <<'PY'
+import json, sys
+
+PROJECT_TYPES = {"narrow_tuning", "standard_optimization", "open_research"}
+EVAL_TYPES    = {"serialized", "parallel_capable"}
+
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    obj = json.loads(raw)
+except (json.JSONDecodeError, TypeError):
+    print("error: AI VP analysis is not valid JSON", file=sys.stderr)
+    sys.exit(2)
+
+if not isinstance(obj, dict):
+    print("error: AI VP analysis must be a JSON object", file=sys.stderr)
+    sys.exit(2)
+
+pt = obj.get("project_type")
+ep = obj.get("eval_parallelizability")
+ns = obj.get("n_suggested")
+rs = obj.get("reasoning", "")
+
+if pt not in PROJECT_TYPES:
+    print(f"error: project_type must be one of {sorted(PROJECT_TYPES)}, got {pt!r}",
+          file=sys.stderr); sys.exit(2)
+if ep not in EVAL_TYPES:
+    print(f"error: eval_parallelizability must be one of {sorted(EVAL_TYPES)}, got {ep!r}",
+          file=sys.stderr); sys.exit(2)
+# isinstance-not-bool guard: True/False would pass `isinstance(x, int)` in Python
+if not isinstance(ns, int) or isinstance(ns, bool) or not (1 <= ns <= 9):
+    print(f"error: n_suggested must be int in [1,9], got {ns!r}", file=sys.stderr)
+    sys.exit(2)
+if not isinstance(rs, str):
+    print(f"error: reasoning must be string, got {type(rs).__name__}",
+          file=sys.stderr); sys.exit(2)
+
+print(json.dumps({
+    "project_type": pt,
+    "eval_parallelizability": ep,
+    "n_suggested": ns,
+    "reasoning": rs,
+}, ensure_ascii=False))
+PY
+); then
+  rc=$?
+  # W-8 fix (Opus review 2026-04-25-161635): the prior plan prose described
+  # a 3-retry loop, but the code below just exits — this was a prose-vs-code
+  # contradiction. Decision: KEEP fail-fast (no retry loop). Rationale: a
+  # malformed AI VP analysis is a contract bug to fix in the prompt
+  # (W-7 lock), not a transient failure to retry. T6's β diversity gate is
+  # different — it retries because the AI may legitimately produce too-similar
+  # directions on first try (a quality, not contract, failure). Here, the
+  # validator rejects shape violations only. The coordinator should surface
+  # the validator stderr to the operator and require a code fix, not a
+  # silent re-roll.
+  echo "error: A.1.6 AI VP analysis validation failed (rc=$rc). The AI subagent produced a non-conforming JSON object — the prompt template (W-7 lock) or the subagent itself needs investigation. Aborting init." >&2
+  exit 2
+fi
+
+# At this point $VP_ANALYSIS_JSON is a normalized JSON object guaranteed to
+# satisfy the contract. Export it to the named handle. ALL downstream sites
+# (A.2, A.3) consume $VP_ANALYSIS — never $AI_VP_ANALYSIS_RAW.
+export VP_ANALYSIS="$VP_ANALYSIS_JSON"
+```
+
+**Stage 6.3 — Record analysis to session.yaml + journal**
+
+The validated analysis is recorded to two places so that resume.md can re-
+derive intent without re-asking the AI:
+
+1. **session.yaml** — populate `virtual_parallel.project_type`,
+   `virtual_parallel.eval_parallelizability`, `virtual_parallel.selection_reason`
+   (← `reasoning`), and provisional `virtual_parallel.n_initial` (← `n_suggested`;
+   may be re-confirmed in A.2). The full `virtual_parallel` block schema is in
+   the v3.1 extension at A.3 step 4 below; here we only seed the analysis fields.
+
+2. **journal** — append `init_vp_analysis` event:
+
+   ```bash
+   # Coordinator-owned event (no seed yet at init time) — wrap in
+   # (unset SEED_ID; ...) subshell so T16's auto-inject does not corrupt
+   # the event with a stale SEED_ID from any prior outer-loop run.
+   (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+     append_journal_event "$(jq -cn \
+       --argjson vp "$VP_ANALYSIS" \
+       '{event: "init_vp_analysis", vp_analysis: $vp}')")
+   ```
+
+**Stage 6.4 — Acknowledge N=1 short-circuit explicitly**
+
+If the validated `n_suggested == 1`, this is a legitimate outcome (e.g.
+narrow_tuning + serialized projects), NOT an error. § 5.1a documents three
+short-circuits triggered by N=1:
+
+1. β generation skipped (T6 honors `--n 1` per its own short-circuit; A.3 must
+   pass through unchanged).
+2. Synthesis steps 4–6 skipped (T28 honors `n_current == 1` at its own entry).
+3. γ fork inapplicable at init (no prior keeps; A.3 omits γ branch naturally).
+
+The A.2 prompt below treats `n_suggested == 1` as a normal, suggestable value;
+do NOT silently force `>= 2`.
+
+→ Proceed to A.2.
+
 ## A.2: Goal & Configuration
 
 If `NEW_GOAL` was set from arguments, use it. Otherwise, ask via AskUserQuestion:
