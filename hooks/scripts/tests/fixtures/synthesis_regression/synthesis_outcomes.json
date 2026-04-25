@@ -1,0 +1,36 @@
+{
+  "scenarios": {
+    "success": {
+      "synthesis_q": 0.45,
+      "baseline_q": 0.42,
+      "expected_outcome": "success",
+      "expected_fallback_triggered": false
+    },
+    "accepted_with_regression": {
+      "synthesis_q": 0.40,
+      "baseline_q": 0.42,
+      "expected_outcome": "accepted_with_regression",
+      "expected_user_prompt": true
+    },
+    "fallback": {
+      "synthesis_q": 0.20,
+      "baseline_q": 0.42,
+      "expected_outcome": "fallback",
+      "expected_fallback_triggered": true,
+      "expected_fallback_note": true
+    },
+    "skipped_n1": {
+      "n_current": 1,
+      "expected_outcome": "skipped_n1"
+    },
+    "no_baseline": {
+      "all_seeds_zero_keeps": true,
+      "expected_outcome": "no_baseline"
+    },
+    "best_effort": {
+      "all_seeds_final_q_zero": true,
+      "some_seeds_keeps_positive": true,
+      "expected_outcome": "best_effort"
+    }
+  }
+}
