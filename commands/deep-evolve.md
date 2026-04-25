@@ -91,11 +91,17 @@ sys.exit(0 if nmin <= nmax else 1)
 fi
 
 # === --kill-seed=<id>: TERMINAL — invoke T23 writer + exit ===
-KILL_SEED_RAW=$(printf '%s\n' "$ARGS_LINE" \
-  | grep -oE -- '--kill-seed=[1-9][0-9]*' | head -1 | sed 's/^--kill-seed=//')
+# W2 regression class fix (deep-review code-quality 2026-04-25): prior
+# `grep -oE '--kill-seed=[1-9][0-9]*'` silently truncated `--kill-seed=12abc`
+# to `12` because grep -o matched the longest leading-digit prefix and
+# discarded the trailing garbage. Same class as the --n-min/--n-max fix:
+# permissive sed extraction + strict ^[1-9][0-9]*$ validation (multi-digit
+# positive integer allowed for seeds; no leading zeros).
 if printf '%s\n' "$ARGS_LINE" | grep -q -- '--kill-seed='; then
-  if [ -z "${KILL_SEED_RAW:-}" ]; then
-    echo "error: --kill-seed=<id> requires positive integer (no leading zeros)" >&2
+  KILL_SEED_RAW=$(printf '%s\n' "$ARGS_LINE" \
+    | sed -nE 's/.*--kill-seed=([^[:space:]]*).*/\1/p' | head -1)
+  if ! [[ "$KILL_SEED_RAW" =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: --kill-seed=<id> requires positive integer, no leading zeros (got '$KILL_SEED_RAW')" >&2
     exit 2
   fi
   # Resolve active session for SESSION_ROOT — T23 contract requires it
@@ -123,7 +129,7 @@ fi
 # used elsewhere. Document the asymmetry so future maintenance doesn't
 # accidentally normalize them.
 case " $ARGS_LINE " in
-  *' --status '*|*' --status='*|*' status '*)
+  *' --status '*|*' --status='*)
     if ! SESSION_LINE=$(bash hooks/scripts/session-helper.sh resolve_current 2>/dev/null); then
       echo "활성 세션이 없습니다. --status는 진행 중인 세션이 있을 때만 사용 가능합니다." >&2
       exit 0

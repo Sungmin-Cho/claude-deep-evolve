@@ -304,3 +304,15 @@ def test_w6_trace_n_min_n_max_export_to_a26_consumer():
     for var in ("DEEP_EVOLVE_N_MIN", "DEEP_EVOLVE_N_MAX"):
         assert var in c_cmd, f"{var} must be exported by Step 0.5"
         assert var in a26, f"{var} must be consumed by A.2.6"
+
+
+def test_status_does_not_hijack_bareword_status_in_goal():
+    """🔴 regression test (deep-review code-quality 2026-04-25):
+    --status subcommand must not falsely match user goal text containing
+    the word 'status' anywhere. Step 0's 'first token only' convention
+    must be preserved."""
+    c = _content()
+    s0_5 = c.split("## Step 0.5", 1)[1].split("## Step 1:", 1)[0]
+    # The buggy `*' status '*` pattern must NOT be present
+    assert "*' status '*" not in s0_5, \
+        "--status case must not include bareword `status` alternative — hijacks user goals"

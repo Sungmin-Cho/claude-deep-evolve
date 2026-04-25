@@ -164,3 +164,22 @@ def test_kill_seed_w6_trace_to_t22_polling():
         "code block, co-located with tail/while read/jq/flock/>>/cat within 5 lines. "
         "If this fails, T22's polling implementation has not landed — surface the gap."
     )
+
+
+def test_kill_seed_does_not_silently_truncate_garbage_tail():
+    """🟡 regression test (deep-review code-quality 2026-04-25): W2 regression
+    class for sibling flag. `--kill-seed=12abc` must NOT silently extract `12`
+    and proceed (silently kill seed_12 due to typo). Permissive extract +
+    strict validate idiom required, mirroring the W2 fix for --n-min/--n-max."""
+    s = _step_0_5()
+    # Implementation must use permissive sed extraction (not grep -o on [1-9][0-9]*)
+    assert re.search(
+        r"sed\s+-nE\s+'s/\.\*--kill-seed=\(\[\^",
+        s,
+    ) or "[^[:space:]]" in s, \
+        "Step 0.5 must extract --kill-seed value permissively then validate strictly"
+    # Sanity: must NOT use the buggy grep regex form
+    assert not re.search(
+        r"grep\s+-oE?\s+--?\s+'--kill-seed=\[1-9\]\[0-9\]\*'\s*\|",
+        s,
+    ), "Buggy grep regex --kill-seed=[1-9][0-9]* silently truncates --kill-seed=12abc"
