@@ -931,6 +931,90 @@ cmd_remove_seed_worktree() {
   }
 }
 
+# --- v3.1.0 virtual_parallel session.yaml helpers (T32) ---
+
+cmd_append_seed_to_session_yaml() {
+  local seed_id="${1:-}"
+  local wt_path="${2:-}"
+  local branch="${3:-}"
+  local beta_line="${4:-}"   # JSON: {direction, hypothesis, rationale} or null
+  if [ -z "$seed_id" ] || [ -z "$wt_path" ] || [ -z "$branch" ]; then
+    echo "usage: append_seed_to_session_yaml <seed_id> <wt_path> <branch> <beta_json>" >&2
+    return 2
+  fi
+  [ -z "${SESSION_ROOT:-}" ] && { echo "SESSION_ROOT not set" >&2; return 2; }
+  local sy="$SESSION_ROOT/session.yaml"
+  [ -f "$sy" ] || { echo "session.yaml missing" >&2; return 2; }
+  # argv-safe interpolation: all 4 inputs via sys.argv, never shell-interpolated
+  python3 - "$sy" "$seed_id" "$wt_path" "$branch" "$beta_line" <<'PY'
+import json, sys, datetime
+import yaml
+sy_path, sid_s, wt_path, branch, beta_raw = sys.argv[1:6]
+sid = int(sid_s)
+beta = json.loads(beta_raw) if beta_raw else {}
+with open(sy_path, "r", encoding="utf-8") as f:
+    sy = yaml.safe_load(f) or {}
+vp = sy.setdefault("virtual_parallel", {})
+seeds = vp.setdefault("seeds", [])
+# Idempotent: replace existing entry with same id, else append
+existing = next((i for i, s in enumerate(seeds) if s.get("id") == sid), None)
+entry = {
+    "id": sid,
+    "status": "active",
+    "direction": beta.get("direction"),
+    "hypothesis": beta.get("hypothesis"),
+    "initial_rationale": beta.get("rationale"),
+    "worktree_path": wt_path,
+    "branch": branch,
+    "created_at": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "created_by": "init_batch",
+    "experiments_used": 0, "keeps": 0,
+    "borrows_given": 0, "borrows_received": 0,
+    "current_q": 0.0,
+    # W-9 fix (Opus review 2026-04-25-161635): defensive int() on budget_total
+    # — T1's session.yaml writer may emit either int or string depending on
+    # YAML round-trip path; integer division on a string raises TypeError.
+    "allocated_budget": int(vp.get("budget_total", 0) or 0) // max(int(vp.get("n_initial", 1) or 1), 1),
+    "killed_at": None, "killed_reason": None,
+}
+if existing is not None:
+    seeds[existing] = entry
+else:
+    seeds.append(entry)
+with open(sy_path, "w", encoding="utf-8") as f:
+    yaml.safe_dump(sy, f, sort_keys=False, allow_unicode=True)
+PY
+}
+
+cmd_set_virtual_parallel_field() {
+  local key="${1:-}"
+  local value="${2:-}"
+  if [ -z "$key" ]; then
+    echo "usage: set_virtual_parallel_field <key> <value>" >&2
+    return 2
+  fi
+  [ -z "${SESSION_ROOT:-}" ] && { echo "SESSION_ROOT not set" >&2; return 2; }
+  local sy="$SESSION_ROOT/session.yaml"
+  [ -f "$sy" ] || { echo "session.yaml missing" >&2; return 2; }
+  python3 - "$sy" "$key" "$value" <<'PY'
+import sys, yaml
+sy_path, key, raw = sys.argv[1:4]
+# Best-effort cast: int → int, float → float, "true"/"false" → bool, else str
+def cast(s):
+    sl = s.lower()
+    if sl in ("true", "false"): return sl == "true"
+    try: return int(s)
+    except ValueError: pass
+    try: return float(s)
+    except ValueError: return s
+with open(sy_path, "r", encoding="utf-8") as f:
+    sy = yaml.safe_load(f) or {}
+sy.setdefault("virtual_parallel", {})[key] = cast(raw)
+with open(sy_path, "w", encoding="utf-8") as f:
+    yaml.safe_dump(sy, f, sort_keys=False, allow_unicode=True)
+PY
+}
+
 # --- v3.1.0 budget allocation helpers (spec § 5.1, § 15.1 Q6) ---
 
 # Split total budget across N seeds as evenly as possible.
@@ -1671,6 +1755,8 @@ case "$SUBCMD" in
   create_seed_worktree)   cmd_create_seed_worktree "$@" ;;
   validate_seed_worktree) cmd_validate_seed_worktree "$@" ;;
   remove_seed_worktree)   cmd_remove_seed_worktree "$@" ;;
+  append_seed_to_session_yaml) cmd_append_seed_to_session_yaml "$@" ;;
+  set_virtual_parallel_field)  cmd_set_virtual_parallel_field "$@" ;;
   compute_init_budget_split)  cmd_compute_init_budget_split "$@" ;;
   compute_grow_allocation)    cmd_compute_grow_allocation "$@" ;;
   append_forum_event)    cmd_append_forum_event "$@" ;;

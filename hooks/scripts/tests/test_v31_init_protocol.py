@@ -198,7 +198,6 @@ def test_a16_w6_trace_to_a2_prompt():
     ), "A.2 must consume n_suggested / VP_ANALYSIS from A.1.6 (W-6 trace)"
 
 
-@pytest.mark.xfail(strict=False, reason="T31/T32 will satisfy")
 def test_a16_w6_trace_to_a3_loop():
     """W-6 trace: project_type + eval_parallelizability + N flow into A.3's
     worktree creation loop. Verified at the A.3 section level."""
@@ -314,3 +313,146 @@ def test_a26_w6_trace_n_chosen_to_a3():
         r"\$N_CHOSEN|\bN_CHOSEN\b|\$N_CURRENT|\bN_CURRENT\b|n_current",
         a3,
     ), "A.3 must consume $N_CHOSEN from A.2.6 (W-6 trace)"
+
+
+# ---------- T32: A.3.6 worktree + β + program.md + journal ----------
+
+def test_a36_section_header_present():
+    """A.3.6 must be inserted between Step 4 (session.yaml) and Step 5
+    (evaluation harness)."""
+    c = _content()
+    assert "### A.3.6" in c
+    a36_idx = c.index("### A.3.6")
+    # Step 5 in current init.md is "5. Generate evaluation harness"
+    step5_idx = c.index("5. Generate evaluation harness")
+    # Step 4 is the session.yaml generation block
+    assert a36_idx < step5_idx, "A.3.6 must precede Step 5 (evaluation harness)"
+
+
+def test_a36_version_gate_present():
+    """A.3.6 gated by $VERSION == '3.1.0'."""
+    c = _content()
+    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    assert "deep_evolve_version" in a36 or "VERSION" in a36
+    assert '3.1.0' in a36
+
+
+def test_a36_invokes_t6_beta_generator():
+    """A.3.6 must invoke T6's generate-beta-directions.py with --n $N_CHOSEN.
+    The script's own short-circuit handles N=1 — A.3.6 does NOT branch on
+    N=1 here (DRY: the short-circuit lives in one place, not two)."""
+    c = _content()
+    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    assert "generate-beta-directions.py" in a36
+    assert "--n" in a36
+    assert "N_CHOSEN" in a36 or "$N_CHOSEN" in a36
+
+
+def test_a36_t6_invocation_rc_guarded():
+    """All external-tool invocations must be rc-guarded per the aff23c9
+    contract (every external invocation is wrapped in `if ! ...; then echo
+    error: ... >&2; exit 1; fi`)."""
+    c = _content()
+    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    # Find the line with generate-beta-directions.py and walk back to its
+    # enclosing `if !` guard
+    beta_line = next(ln for ln in a36.splitlines() if "generate-beta-directions.py" in ln)
+    beta_idx = a36.index(beta_line)
+    # Look for `if !` within 200 chars before the call (must be the enclosing guard)
+    preamble = a36[max(0, beta_idx - 400):beta_idx]
+    assert re.search(r"if\s+!\s", preamble), \
+        "T6 invocation must be inside `if ! ...; then ... fi` rc guard"
+
+
+def test_a36_loop_invokes_create_seed_worktree():
+    """A.3.6 must call session-helper.sh create_seed_worktree per seed.
+    The loop bound is $N_CHOSEN."""
+    c = _content()
+    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    assert "create_seed_worktree" in a36
+    # Loop construct (for, while) over [1..N_CHOSEN]
+    assert re.search(r"for\b.*\bin\b|seq\s+1|range\s*\(", a36), \
+        "A.3.6 must contain a 1..N loop"
+
+
+def test_a36_create_seed_worktree_rc_guarded():
+    """create_seed_worktree calls must be rc-guarded individually."""
+    c = _content()
+    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    cs_line = next(ln for ln in a36.splitlines() if "create_seed_worktree" in ln and "session-helper.sh" in ln)
+    cs_idx = a36.index(cs_line)
+    preamble = a36[max(0, cs_idx - 400):cs_idx]
+    assert re.search(r"if\s+!\s", preamble), \
+        "create_seed_worktree must be inside `if ! ...; then ... fi`"
+
+
+def test_a36_invokes_t8_per_seed_program_writer():
+    """A.3.6 must call write-seed-program.py per seed."""
+    c = _content()
+    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    assert "write-seed-program.py" in a36
+
+
+def test_a36_n1_passes_null_beta_to_t8():
+    """§ 5.1a Item 1: when N=1, T6 short-circuits and emits an empty
+    directions list. T8 must receive a null-β payload so it copies base
+    program.md verbatim. A.3.6 must wire this case explicitly — it cannot
+    skip T8 entirely (would leave seed_1's worktree without program.md)."""
+    c = _content()
+    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    # Either the prose explicitly handles N=1 here OR the loop body always
+    # invokes T8 and lets T8 handle null-β (preferred — DRY).
+    # We accept either, but reject "skip T8 entirely for N=1".
+    assert "write-seed-program.py" in a36
+    assert re.search(r"N\s*=\s*1|n_chosen\s*==?\s*1|null|skipped|seed_1", a36, re.IGNORECASE)
+
+
+def test_a36_populates_session_yaml_seeds():
+    """A.3.6 must update session.yaml's virtual_parallel.seeds[] with each
+    created seed's metadata. The schema template is at the existing v3.1
+    extension at line 242 area — A.3.6 fills it in."""
+    c = _content()
+    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    assert "seeds" in a36
+    assert "session.yaml" in a36 or "session_helper" in a36 or "session-helper" in a36
+    # The fields populated must include id + worktree_path + branch + status
+    for k in ("id", "worktree_path", "branch", "status"):
+        assert k in a36, f"session.yaml seed entry must include '{k}'"
+
+
+def test_a36_emits_seed_initialized_per_seed():
+    """A.3.6 must emit seed_initialized × N journal events. Each event
+    carries seed_id + direction (or null) + worktree_path + branch +
+    created_by: 'init_batch'."""
+    c = _content()
+    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    assert "seed_initialized" in a36
+    assert "init_batch" in a36
+    assert "append_journal_event" in a36
+
+
+def test_a36_seed_initialized_in_subshell():
+    """seed_initialized is emitted PER SEED — but the SEED_ID auto-inject
+    machinery (T16) is intended for inner-loop subagents, not for init-time
+    coordinator emission. Wrap each emit in (unset SEED_ID; ...) so the
+    explicit seed_id field in the JSON is the canonical one."""
+    c = _content()
+    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    si_line = next(ln for ln in a36.splitlines() if "seed_initialized" in ln)
+    si_idx = a36.index(si_line)
+    # Walk forward to find the append_journal_event call associated; then
+    # walk backward to find its enclosing subshell
+    surrounding = a36[max(0, si_idx - 200):si_idx + 300]
+    assert "unset SEED_ID" in surrounding, \
+        "seed_initialized emit must be inside (unset SEED_ID; ...)"
+
+
+def test_a36_w6_trace_n_chosen_to_loop():
+    """W-6 trace satisfaction: $N_CHOSEN (defined in A.2.6) is consumed
+    here as the loop bound. Plus session.yaml.virtual_parallel.n_current
+    is set to $N_CHOSEN — not silently re-derived."""
+    c = _content()
+    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    assert "$N_CHOSEN" in a36 or "N_CHOSEN" in a36
+    # Must also propagate into session.yaml.virtual_parallel.n_current
+    assert "n_current" in a36

@@ -614,6 +614,187 @@ virtual_parallel:
 When `$VERSION` is "2.x" or "3.0.x", use the pre-existing v2/v3.0 template
 unchanged (virtual_parallel block absent).
 
+### A.3.6 — Per-seed worktree creation loop (v3.1+)
+
+> **Version gate**: Runs ONLY when `$VERSION == "3.1.0"`. v2.x / v3.0.x sessions
+> have no `virtual_parallel` block in session.yaml; A.3.6 is a no-op for them
+> and the protocol proceeds to Step 5 with the existing single-worktree flow.
+
+A.3.6 turns the analysis from A.1.6 + A.2.6 into N concrete worktrees with
+per-seed program.md, populated `session.yaml.virtual_parallel.seeds[]`, and
+N per-seed journal events (event type defined in Stage 8.2.d below). The
+existing v3.1 schema template at the end of Step 4 above defines the YAML
+shape; A.3.6 fills it in.
+
+**Stage 8.1 — Generate β directions (delegates short-circuit to T6)**
+
+```bash
+# C-2 fix (Opus review 2026-04-25-161635): resolve $HELPER_SCRIPTS_DIR
+# explicitly. $DEEP_EVOLVE_HELPER_PATH is the path to session-helper.sh
+# itself (a file), NOT a directory — the same G9 C-1 fix that synthesis.md
+# (line 34-37), outer-loop.md (line 80), and inner-loop.md (line 542)
+# already carry. Without this, the bare $HELPER_SCRIPTS_DIR aborts with
+# "unbound variable" under set -Eeuo pipefail before T6 runs, and the
+# EXIT trap masks rc to 0 (T14 silent-masking class).
+HELPER_SCRIPTS_DIR="$(dirname "$DEEP_EVOLVE_HELPER_PATH")"
+
+# W-3 fix (same review): redirect T6 stderr to a log file so warnings /
+# retry messages do NOT corrupt the JSON on stdout consumed by Stage 8.2's
+# json.loads. Same shape as synthesis.md:131 (cross-seed-audit.py).
+mkdir -p "$SESSION_ROOT/.deep-evolve"
+INIT_LOG="$SESSION_ROOT/.deep-evolve/init.log"
+
+# T6's β-generator owns the N=1 short-circuit (returns
+# {"skipped": true, "directions": []}). A.3.6 always calls it with --n
+# $N_CHOSEN and consumes the structured output — DRY: the short-circuit
+# logic lives in one place, not two.
+if ! BETA_OUTPUT=$( \
+    python3 "$HELPER_SCRIPTS_DIR/generate-beta-directions.py" \
+    --n "$N_CHOSEN" \
+    --project-analysis "$VP_ANALYSIS" \
+    --goal "$GOAL_STRING" 2>>"$INIT_LOG"); then
+  echo "error: A.3.6 β generation failed (rc=$?). See $INIT_LOG. Aborting init." >&2
+  exit 1
+fi
+# BETA_OUTPUT is JSON: {"skipped": bool, "directions": [...], "retries_used": int}
+```
+
+**Stage 8.2 — Loop over seeds 1..N**
+
+```bash
+# Pre-loop: capture current branch so each create_seed_worktree forks from a
+# known base. Every iteration is rc-guarded individually so a failure in
+# seed-3 of an N=5 init doesn't silently leave seeds 1, 2 valid + seeds 3-5
+# half-created.
+INIT_BASE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+INIT_BASE_HEAD=$(git rev-parse HEAD)
+
+# Track created seeds for rollback on failure
+CREATED_SEEDS=()
+
+# Pre-loop: extract per-seed direction objects from BETA_OUTPUT into bash
+# array. For N=1 (skipped), array is empty.
+SEED_BETAS_FILE=$(mktemp)
+python3 -c '
+import json, sys, os
+out = json.loads(sys.argv[1])
+fname = sys.argv[2]
+with open(fname, "w", encoding="utf-8") as f:
+    if out.get("skipped"):
+        # N=1 short-circuit: emit a single null-β placeholder so the loop
+        # iterates exactly once with null β.
+        f.write(json.dumps({"seed_id": 1, "direction": None,
+                            "hypothesis": None,
+                            "rationale": "single-seed session; no β generated"}) + "\n")
+    else:
+        for d in out["directions"]:
+            f.write(json.dumps(d, ensure_ascii=False) + "\n")
+' "$BETA_OUTPUT" "$SEED_BETAS_FILE"
+
+# Iterate
+SEED_K=1
+while IFS= read -r BETA_LINE; do
+  if [ -z "$BETA_LINE" ]; then continue; fi
+
+  # 8.2.a — Create seed worktree (T2 helper — dispatched via session-helper.sh)
+  if ! WT_INFO=$(bash "$DEEP_EVOLVE_HELPER_PATH" \
+      create_seed_worktree "$SEED_K"); then  # session-helper.sh create_seed_worktree
+    echo "error: A.3.6 create_seed_worktree failed for seed $SEED_K. Rolling back created seeds." >&2
+    # Rollback: remove all previously-created seeds in reverse order
+    for prev in "${CREATED_SEEDS[@]}"; do
+      bash "$DEEP_EVOLVE_HELPER_PATH" remove_seed_worktree "$prev" \
+        || echo "warn: A.3.6 rollback could not remove seed $prev" >&2
+    done
+    exit 1
+  fi
+  # WT_INFO is "seed_id\tworktree_path\tbranch"
+  WT_PATH=$(printf '%s' "$WT_INFO" | awk -F'\t' '{print $2}')
+  WT_BRANCH=$(printf '%s' "$WT_INFO" | awk -F'\t' '{print $3}')
+  CREATED_SEEDS+=("$SEED_K")
+
+  # 8.2.b — Write per-seed program.md (T8 helper). Honors null-β by copying
+  # base program.md verbatim — A.3.6 does NOT branch on N=1 here; the
+  # short-circuit lives in T8 already.
+  if ! python3 "$HELPER_SCRIPTS_DIR/write-seed-program.py" \
+      --base-program "$SESSION_ROOT/program.md" \
+      --worktree "$WT_PATH" \
+      --beta "$BETA_LINE"; then
+    echo "error: A.3.6 write-seed-program.py failed for seed $SEED_K. Rolling back." >&2
+    for prev in "${CREATED_SEEDS[@]}"; do
+      bash "$DEEP_EVOLVE_HELPER_PATH" remove_seed_worktree "$prev" \
+        || echo "warn: A.3.6 rollback could not remove seed $prev" >&2
+    done
+    exit 1
+  fi
+
+  # 8.2.c — Update session.yaml.virtual_parallel.seeds[$SEED_K] with the
+  # populated metadata (id, worktree_path, branch, status="active", direction,
+  # hypothesis, allocated_budget, etc.). Uses session-helper.sh's append-only
+  # update pattern (the helper takes care of YAML round-trip and avoids
+  # accidental drift in unrelated fields).
+  if ! bash "$DEEP_EVOLVE_HELPER_PATH" \
+      append_seed_to_session_yaml "$SEED_K" "$WT_PATH" "$WT_BRANCH" "$BETA_LINE"; then
+    echo "error: A.3.6 append_seed_to_session_yaml failed for seed $SEED_K. Rolling back." >&2
+    for prev in "${CREATED_SEEDS[@]}"; do
+      bash "$DEEP_EVOLVE_HELPER_PATH" remove_seed_worktree "$prev" \
+        || echo "warn: A.3.6 rollback could not remove seed $prev" >&2
+    done
+    exit 1
+  fi
+
+  # 8.2.d — Emit seed_initialized journal event. Wrapped in (unset SEED_ID;
+  # ...) so T16's auto-inject does NOT overwrite the explicit seed_id from
+  # the jq build (T16 is for inner-loop subagent emits; init coordinator is
+  # the source of truth for the explicit field).
+  (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+    append_journal_event "$(jq -cn \
+      --argjson sid "$SEED_K" \
+      --argjson beta "$BETA_LINE" \
+      --arg wt "$WT_PATH" \
+      --arg br "$WT_BRANCH" \
+      '{event: "seed_initialized",
+        seed_id: $sid,
+        direction: ($beta.direction // null),
+        hypothesis: ($beta.hypothesis // null),
+        initial_rationale: ($beta.rationale // null),
+        worktree_path: $wt,
+        branch: $br,
+        created_by: "init_batch"}')")
+
+  SEED_K=$((SEED_K + 1))
+done < "$SEED_BETAS_FILE"
+
+rm -f "$SEED_BETAS_FILE"
+
+# Post-loop: update session.yaml.virtual_parallel.n_current explicitly so
+# downstream sites (resume.md scenario 5) can detect drift between the
+# yaml-recorded value and the journal snapshot. n_initial was already set
+# by A.1.6 / A.2.6.
+if ! bash "$DEEP_EVOLVE_HELPER_PATH" \
+    set_virtual_parallel_field "n_current" "$N_CHOSEN"; then
+  echo "error: A.3.6 set_virtual_parallel_field n_current failed" >&2
+  exit 1
+fi
+```
+
+**Stage 8.3 — Sanity assertions**
+
+```bash
+# Post-condition checks: count of created worktrees matches $N_CHOSEN, count
+# of session.yaml.seeds[] entries matches $N_CHOSEN, count of seed_initialized
+# events in journal matches $N_CHOSEN. Mismatch is a coordinator-internal
+# bug, not user-facing — abort with rc=2.
+ACTUAL_WT=$(git worktree list --porcelain \
+  | grep -c "^worktree .*/$SESSION_ID/worktrees/seed_" || true)
+EXPECTED_WT="$N_CHOSEN"
+if [ "$ACTUAL_WT" != "$EXPECTED_WT" ]; then
+  echo "error: A.3.6 post-condition: expected $EXPECTED_WT worktrees, got $ACTUAL_WT" >&2
+  exit 2
+fi
+```
+
+→ Proceed to Step 5 (Generate evaluation harness).
+
 5. Generate evaluation harness based on eval_mode:
 
    **If eval_mode is `cli`:**
