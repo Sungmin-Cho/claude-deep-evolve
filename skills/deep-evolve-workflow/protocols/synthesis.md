@@ -233,7 +233,12 @@ goto_step_7=false
 goto_no_baseline=false
 BEST_EFFORT_BASELINE=false
 FALLBACK_TRIGGERED=false
-USER_CHOICE=""
+# ITEM-2 Part A fix: preserve USER_CHOICE on re-entry — only initialize to
+# empty when the variable has never been set. If the coordinator agent
+# exported USER_CHOICE after AskUserQuestion and re-entered the protocol,
+# the unconditional `USER_CHOICE=""` would silently discard the user's
+# selection before the §6.1 case can read it.
+if [ -z "${USER_CHOICE+x}" ]; then USER_CHOICE=""; fi
 
 if [ "$TIER" = "no_baseline" ]; then
   # Spec § 8.2 Step 5.d: skip synthesis entirely; jump to no_baseline short-circuit.
@@ -399,6 +404,12 @@ else
     SYNTHESIS_Q_NUMERIC="$SYNTHESIS_Q"
   fi
 fi
+# C-1 fix: normalize SYNTHESIS_Q to SYNTHESIS_Q_NUMERIC for ALL downstream
+# consumers (§6.1 generate-fallback-note.py --synthesis-q, §6.2 jq --argjson sq).
+# All three branches above (synthesis_failed, non-numeric, valid) set
+# SYNTHESIS_Q_NUMERIC; reassign SYNTHESIS_Q here so that any future sink
+# referencing $SYNTHESIS_Q is also safe automatically.
+SYNTHESIS_Q="$SYNTHESIS_Q_NUMERIC"
 
 # BASELINE_Q derived from session.yaml in Step 5.1 (above); reused here.
 REGRESSION_TOLERANCE=$(python3 -c '
@@ -477,8 +488,14 @@ fi
 # re-entered this protocol, USER_CHOICE is exported in the environment and
 # this case statement consumes it. Tests provide USER_CHOICE via env var.
 
-if [ -n "$USER_CHOICE" ] && [ -z "$SYNTHESIS_OUTCOME" ]; then
-  case "$USER_CHOICE" in
+# ITEM-2 Part B fix: remove the `[ -n "$USER_CHOICE" ]` outer guard — it
+# blocked entry when USER_CHOICE is empty (dismissed/timed-out AskUserQuestion),
+# leaving SYNTHESIS_OUTCOME="" and causing §6.2 to emit schema-invalid
+# synthesis_outcome: "" + `git rev-parse ""` failure.
+# `case "${USER_CHOICE:-}"` safely routes empty/dismissed values to the
+# existing *) arm which already defaults to (3) discard (W-3 fix).
+if [ -z "$SYNTHESIS_OUTCOME" ]; then
+  case "${USER_CHOICE:-}" in
     1) SYNTHESIS_OUTCOME="accepted_with_regression"
        FINAL_BRANCH="evolve/${SESSION_ID}/synthesis"
        FALLBACK_TRIGGERED=false ;;

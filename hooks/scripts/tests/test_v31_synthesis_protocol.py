@@ -315,3 +315,102 @@ def test_baseline_q_derived_not_placeholder():
     assert "BASELINE_Q=$(echo \"$SEEDS_JSON\" | python3" in c \
         or "BASELINE_Q=" in c.split("Step 5.1")[1].split("Step 5.2")[0], \
         "Critical: BASELINE_Q must be derived from SEEDS_JSON in Step 5.1 area"
+
+
+def test_synthesis_failed_path_normalizes_q_for_downstream():
+    """C-1 regression (ITEM-1): when SYNTHESIS_Q='synthesis_failed', the
+    validation block sets SYNTHESIS_Q_NUMERIC='0.0' but §6.1
+    generate-fallback-note.py and §6.2 jq --argjson sq both reference
+    $SYNTHESIS_Q directly. Without the normalization assignment
+    `SYNTHESIS_Q=\"$SYNTHESIS_Q_NUMERIC\"` after the validation block,
+    generate-fallback-note.py receives 'synthesis_failed' as its
+    --synthesis-q float argument → argparse rc=2 → protocol abort.
+
+    Fix: `SYNTHESIS_Q=\"$SYNTHESIS_Q_NUMERIC\"` must appear in the protocol
+    immediately after the `fi` that closes the three-way validation block
+    (synthesis_failed | non-numeric | valid). This guarantees ALL downstream
+    sinks (current and future) receive a numeric value."""
+    c = _content()
+    # Normalization assignment must be present
+    assert 'SYNTHESIS_Q="$SYNTHESIS_Q_NUMERIC"' in c or \
+        'SYNTHESIS_Q=$SYNTHESIS_Q_NUMERIC' in c, \
+        "C-1: SYNTHESIS_Q must be reassigned to SYNTHESIS_Q_NUMERIC after " \
+        "the validation block so all downstream sinks receive a numeric value"
+
+    # The assignment must appear AFTER the validation block closes (i.e.,
+    # after the three-way if/elif/fi that sets SYNTHESIS_Q_NUMERIC).
+    # Verify ordering: validation block anchor precedes the normalization line.
+    validation_anchor = '"$SYNTHESIS_Q" = "synthesis_failed"'
+    normalization_anchor = 'SYNTHESIS_Q="$SYNTHESIS_Q_NUMERIC"'
+    alt_normalization = 'SYNTHESIS_Q=$SYNTHESIS_Q_NUMERIC'
+    assert validation_anchor in c, \
+        "Pre-condition: validation block anchor must be present"
+    pos_validation = c.index(validation_anchor)
+    if normalization_anchor in c:
+        pos_norm = c.index(normalization_anchor)
+    else:
+        pos_norm = c.index(alt_normalization)
+    assert pos_norm > pos_validation, \
+        "C-1: normalization assignment must appear AFTER the validation block"
+
+    # The fix comment must accompany the assignment (documents intent)
+    assert "normalize SYNTHESIS_Q" in c or "C-1 fix" in c, \
+        "C-1: normalization line must have an accompanying comment"
+
+
+def test_branch_b_reentry_preserves_user_choice():
+    """ITEM-2 Part A regression: Step 5.2 must NOT unconditionally clear
+    USER_CHOICE. When the coordinator re-enters the protocol after
+    AskUserQuestion, USER_CHOICE is exported in the environment. An
+    unconditional `USER_CHOICE=\"\"` would erase the user's selection
+    before §6.1 case can read it, causing the *) default arm to silently
+    discard the answer.
+
+    Fix: the initialization must use `${USER_CHOICE+x}` — only set to
+    empty if the variable was never set (unset), not if it was set to a
+    value by the coordinator export."""
+    c = _content()
+    # Positive: the ${VAR+x} guard pattern must be present
+    assert "${USER_CHOICE+x}" in c, \
+        "ITEM-2 Part A: USER_CHOICE initialization must use ${USER_CHOICE+x} " \
+        "guard to preserve exported value on re-entry"
+    # Negative: unconditional bare assignment must NOT appear in the
+    # Step 5.2 initialization block (the bash fence for 5.2).
+    # We locate the Step 5.2 fence and confirm `USER_CHOICE=""` is absent
+    # as a standalone assignment (i.e., not inside `then ... fi`).
+    step52_section = c.split("### 5.2 Handle no_baseline")[1].split("### 5.3")[0]
+    # Allow the guarded form but reject the bare unconditional form
+    import re as _re
+    bare_pattern = _re.compile(r'^\s*USER_CHOICE=""\s*$', _re.MULTILINE)
+    bare_matches = bare_pattern.findall(step52_section)
+    assert not bare_matches, \
+        f"ITEM-2 Part A: bare unconditional USER_CHOICE=\"\" found in Step 5.2 " \
+        f"— must use ${'{USER_CHOICE+x}'} guard instead"
+
+
+def test_branch_b_empty_user_choice_handled():
+    """ITEM-2 Part B regression: the §6.1 outer guard `[ -n \"$USER_CHOICE\" ]`
+    blocked entry when USER_CHOICE was empty (dismissed/timed-out
+    AskUserQuestion). This left SYNTHESIS_OUTCOME unset, causing §6.2 to
+    emit synthesis_outcome: \"\" (schema-invalid) and `git rev-parse \"\"`
+    to fail.
+
+    Fix: outer guard must check only SYNTHESIS_OUTCOME emptiness; the case
+    must use `case \"${USER_CHOICE:-}\"` so empty values reach the *)
+    default arm that safely routes to (3) discard."""
+    c = _content()
+    # The fixed pattern: case on USER_CHOICE with default expansion
+    assert 'case "${USER_CHOICE:-}"' in c, \
+        "ITEM-2 Part B: case must use `case \"${USER_CHOICE:-}\"` " \
+        "so dismissed/empty values route to *) discard arm"
+    # The old combined guard must be absent
+    import re as _re
+    old_guard = _re.compile(
+        r'\[\s*-n\s+["\']?\$USER_CHOICE["\']?\s*\]\s*&&\s*\[\s*-z\s+["\']?\$SYNTHESIS_OUTCOME'
+    )
+    assert not old_guard.search(c), \
+        "ITEM-2 Part B: combined `[ -n $USER_CHOICE ] && [ -z $SYNTHESIS_OUTCOME ]` " \
+        "guard must be removed — USER_CHOICE check prevented entry on empty value"
+    # The SYNTHESIS_OUTCOME-only guard must be present (the replacement)
+    assert '[ -z "$SYNTHESIS_OUTCOME" ]' in c, \
+        "ITEM-2 Part B: replacement guard `[ -z \"$SYNTHESIS_OUTCOME\" ]` must be present"
