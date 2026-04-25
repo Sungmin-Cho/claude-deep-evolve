@@ -318,33 +318,40 @@ def test_a26_w6_trace_n_chosen_to_a3():
 # ---------- T32: A.3.6 worktree + β + program.md + journal ----------
 
 def test_a36_section_header_present():
-    """A.3.6 must be inserted between Step 4 (session.yaml) and Step 5
-    (evaluation harness)."""
+    """A.3.6 must be inserted between Step 6 (program.md generation) and
+    Step 7 (results.tsv init). T8's --base-program reads $SESSION_ROOT/program.md
+    which Step 6 generates, so A.3.6 must run AFTER Step 6 (review C-2 fix
+    2026-04-25)."""
     c = _content()
     assert "### A.3.6" in c
     a36_idx = c.index("### A.3.6")
-    # Step 5 in current init.md is "5. Generate evaluation harness"
-    step5_idx = c.index("5. Generate evaluation harness")
-    # Step 4 is the session.yaml generation block
-    assert a36_idx < step5_idx, "A.3.6 must precede Step 5 (evaluation harness)"
+    step6_idx = c.index("6. Generate `program.md`")
+    step7_idx = c.index("7. Initialize `results.tsv`")
+    assert step6_idx < a36_idx < step7_idx, \
+        "A.3.6 must be between Step 6 (program.md) and Step 7 (results.tsv)"
 
 
 def test_a36_version_gate_present():
     """A.3.6 gated by $VERSION == '3.1.0'."""
     c = _content()
-    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    a36 = c.split("### A.3.6", 1)[1].split("7. Initialize `results.tsv`", 1)[0]
     assert "deep_evolve_version" in a36 or "VERSION" in a36
     assert '3.1.0' in a36
 
 
 def test_a36_invokes_t6_beta_generator():
-    """A.3.6 must invoke T6's generate-beta-directions.py with --n $N_CHOSEN.
-    The script's own short-circuit handles N=1 — A.3.6 does NOT branch on
-    N=1 here (DRY: the short-circuit lives in one place, not two)."""
+    """A.3.6 must invoke T6's generate-beta-directions.py with --n $N_CHOSEN
+    AND --input (the AI-dispatched candidate JSON from Stage 8.0.5; T6 is
+    the validator/iterative-gate, not the dispatcher). The script's own
+    short-circuit handles N=1 — A.3.6 does NOT branch on N=1 here (DRY:
+    the short-circuit lives in one place, not two). Must NOT pass --goal
+    (T6's argparse rejects unknown flags — review C-1 fix 2026-04-25)."""
     c = _content()
-    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    a36 = c.split("### A.3.6", 1)[1].split("7. Initialize `results.tsv`", 1)[0]
     assert "generate-beta-directions.py" in a36
     assert "--n" in a36
+    assert "--input" in a36, "T6 requires --input (candidate JSON from Stage 8.0.5)"
+    assert "--goal" not in a36, "T6 does not accept --goal — must use --input"
     assert "N_CHOSEN" in a36 or "$N_CHOSEN" in a36
 
 
@@ -353,7 +360,7 @@ def test_a36_t6_invocation_rc_guarded():
     contract (every external invocation is wrapped in `if ! ...; then echo
     error: ... >&2; exit 1; fi`)."""
     c = _content()
-    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    a36 = c.split("### A.3.6", 1)[1].split("7. Initialize `results.tsv`", 1)[0]
     # Find the line with generate-beta-directions.py and walk back to its
     # enclosing `if !` guard
     beta_line = next(ln for ln in a36.splitlines() if "generate-beta-directions.py" in ln)
@@ -368,7 +375,7 @@ def test_a36_loop_invokes_create_seed_worktree():
     """A.3.6 must call session-helper.sh create_seed_worktree per seed.
     The loop bound is $N_CHOSEN."""
     c = _content()
-    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    a36 = c.split("### A.3.6", 1)[1].split("7. Initialize `results.tsv`", 1)[0]
     assert "create_seed_worktree" in a36
     # Loop construct (for, while) over [1..N_CHOSEN]
     assert re.search(r"for\b.*\bin\b|seq\s+1|range\s*\(", a36), \
@@ -378,7 +385,7 @@ def test_a36_loop_invokes_create_seed_worktree():
 def test_a36_create_seed_worktree_rc_guarded():
     """create_seed_worktree calls must be rc-guarded individually."""
     c = _content()
-    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    a36 = c.split("### A.3.6", 1)[1].split("7. Initialize `results.tsv`", 1)[0]
     cs_line = next(ln for ln in a36.splitlines() if "create_seed_worktree" in ln and "session-helper.sh" in ln)
     cs_idx = a36.index(cs_line)
     preamble = a36[max(0, cs_idx - 400):cs_idx]
@@ -389,7 +396,7 @@ def test_a36_create_seed_worktree_rc_guarded():
 def test_a36_invokes_t8_per_seed_program_writer():
     """A.3.6 must call write-seed-program.py per seed."""
     c = _content()
-    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    a36 = c.split("### A.3.6", 1)[1].split("7. Initialize `results.tsv`", 1)[0]
     assert "write-seed-program.py" in a36
 
 
@@ -399,7 +406,7 @@ def test_a36_n1_passes_null_beta_to_t8():
     program.md verbatim. A.3.6 must wire this case explicitly — it cannot
     skip T8 entirely (would leave seed_1's worktree without program.md)."""
     c = _content()
-    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    a36 = c.split("### A.3.6", 1)[1].split("7. Initialize `results.tsv`", 1)[0]
     # Either the prose explicitly handles N=1 here OR the loop body always
     # invokes T8 and lets T8 handle null-β (preferred — DRY).
     # We accept either, but reject "skip T8 entirely for N=1".
@@ -412,7 +419,7 @@ def test_a36_populates_session_yaml_seeds():
     created seed's metadata. The schema template is at the existing v3.1
     extension at line 242 area — A.3.6 fills it in."""
     c = _content()
-    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    a36 = c.split("### A.3.6", 1)[1].split("7. Initialize `results.tsv`", 1)[0]
     assert "seeds" in a36
     assert "session.yaml" in a36 or "session_helper" in a36 or "session-helper" in a36
     # The fields populated must include id + worktree_path + branch + status
@@ -425,7 +432,7 @@ def test_a36_emits_seed_initialized_per_seed():
     carries seed_id + direction (or null) + worktree_path + branch +
     created_by: 'init_batch'."""
     c = _content()
-    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    a36 = c.split("### A.3.6", 1)[1].split("7. Initialize `results.tsv`", 1)[0]
     assert "seed_initialized" in a36
     assert "init_batch" in a36
     assert "append_journal_event" in a36
@@ -437,7 +444,7 @@ def test_a36_seed_initialized_in_subshell():
     coordinator emission. Wrap each emit in (unset SEED_ID; ...) so the
     explicit seed_id field in the JSON is the canonical one."""
     c = _content()
-    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    a36 = c.split("### A.3.6", 1)[1].split("7. Initialize `results.tsv`", 1)[0]
     si_line = next(ln for ln in a36.splitlines() if "seed_initialized" in ln)
     si_idx = a36.index(si_line)
     # Walk forward to find the append_journal_event call associated; then
@@ -452,7 +459,7 @@ def test_a36_w6_trace_n_chosen_to_loop():
     here as the loop bound. Plus session.yaml.virtual_parallel.n_current
     is set to $N_CHOSEN — not silently re-derived."""
     c = _content()
-    a36 = c.split("### A.3.6", 1)[1].split("5. Generate evaluation harness", 1)[0]
+    a36 = c.split("### A.3.6", 1)[1].split("7. Initialize `results.tsv`", 1)[0]
     assert "$N_CHOSEN" in a36 or "N_CHOSEN" in a36
     # Must also propagate into session.yaml.virtual_parallel.n_current
     assert "n_current" in a36

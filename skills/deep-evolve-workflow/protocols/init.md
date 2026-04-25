@@ -614,17 +614,96 @@ virtual_parallel:
 When `$VERSION` is "2.x" or "3.0.x", use the pre-existing v2/v3.0 template
 unchanged (virtual_parallel block absent).
 
+5. Generate evaluation harness based on eval_mode:
+
+   **If eval_mode is `cli`:**
+   Generate `prepare.py` from appropriate template:
+   - If project has stdout-parseable metrics → use `templates/prepare-stdout-parse.py` template
+   - If project has test framework → use `templates/prepare-test-runner.py` template
+   - If code quality / pattern goal → use `templates/prepare-scenario.py` template
+   Customize the template with project-specific metric names, weights, parse patterns.
+
+   **If eval_mode is `protocol`:**
+   Generate `prepare-protocol.md` from the `prepare-protocol.md` template.
+   This defines a fixed evaluation protocol that Claude executes using available tools
+   (MCP servers, browser automation, external APIs, etc.) instead of a shell command.
+   Customize with:
+   - Required tool names and exact call sequences
+   - Parameters for each tool call
+   - How to extract metrics from tool results
+   - Score computation formula with weights
+   - Expected output format (same `score: X.XXXXXX` standard)
+   The protocol file is protected by the same readonly hook as prepare.py.
+
+6. Generate `program.md` with experiment instructions tailored to the project.
+
+   **program.md must start with the following sentinel-wrapped section (always present):**
+
+   ```markdown
+   <!-- automation-policy-v1 -->
+   ## Automation Policy
+
+   - Outer Loop는 diminishing-returns 감지 시 session.yaml.outer_loop.auto_trigger가
+     true면 자동 실행. AskUserQuestion은 outer 완료 후 Q(v) 악화 또는 세션 종료 기준
+     충족 시에만.
+   - 사용자 초기 브리프에 "ask before outer loop" 류 지시가 있으면 auto_trigger=false로
+     명시 설정하고 program.md에 override 기록.
+
+   <!-- /automation-policy-v1 -->
+   ```
+
+   **If continue was selected in Step 3.5**, also insert Inherited Context:
+   Run: `session-helper.sh render_inherited_context <parent_id>`
+   Insert the output between the automation policy and the project-specific body.
+
+   Then generate the project-specific experiment instructions below the sentinel block.
+
 ### A.3.6 — Per-seed worktree creation loop (v3.1+)
 
 > **Version gate**: Runs ONLY when `$VERSION == "3.1.0"`. v2.x / v3.0.x sessions
 > have no `virtual_parallel` block in session.yaml; A.3.6 is a no-op for them
-> and the protocol proceeds to Step 5 with the existing single-worktree flow.
+> and the protocol proceeds to Step 7 (results.tsv init) since per-seed
+> worktrees are not created.
 
 A.3.6 turns the analysis from A.1.6 + A.2.6 into N concrete worktrees with
-per-seed program.md, populated `session.yaml.virtual_parallel.seeds[]`, and
-N per-seed journal events (event type defined in Stage 8.2.d below). The
-existing v3.1 schema template at the end of Step 4 above defines the YAML
-shape; A.3.6 fills it in.
+per-seed program.md (forked from the base program.md generated in Step 6),
+populated `session.yaml.virtual_parallel.seeds[]`, and N per-seed journal
+events (event type defined in Stage 8.2.d below). The existing v3.1 schema
+template at the end of Step 4 above defines the YAML shape; A.3.6 fills it in.
+
+**Stage 8.0.5 — Coordinator dispatches AI for β-direction proposals**
+
+Before T6 can validate / iterate, the coordinator (Claude Code) must dispatch
+a subagent (Task tool) to produce N candidate directions. The exact prompt
+text mirrors spec § 5.1 Step 3 and uses the W-7-locked $VP_ANALYSIS context:
+
+> *"You are proposing $N_CHOSEN diverse research directions for a deep-evolve
+> session. Project context: $VP_ANALYSIS (project_type, eval_parallelizability,
+> reasoning). Goal: <session goal from session.yaml>. For N=1, return
+> {\"directions\": []} (single-seed sessions skip β diversification — § 5.1a).
+> For N>=2, return JSON: {\"directions\": [{\"seed_id\": <int>, \"direction\":
+> \"<short>\", \"hypothesis\": \"<1-2 sentences>\", \"rationale\": \"<short>\"}, ...]}.
+> All directions must be semantically distinct (pairwise similarity < 0.70 by
+> human judgment); T6's iterative gate will validate this and may re-prompt
+> for N>=5."*
+
+The coordinator captures the subagent's stdout into $BETA_DISPATCH_OUTPUT.
+For test fixtures (no live AI), $BETA_DISPATCH_OUTPUT is supplied via env var
+`DEEP_EVOLVE_BETA_FIXTURE` (the same pattern T6's tests use).
+
+```bash
+# Test-fixture path: env var supplies the AI's would-be output
+if [ -n "${DEEP_EVOLVE_BETA_FIXTURE:-}" ]; then
+  BETA_DISPATCH_OUTPUT="$DEEP_EVOLVE_BETA_FIXTURE"
+else
+  # Production: coordinator-LLM has captured the subagent dispatch result
+  # into $BETA_DISPATCH_OUTPUT before re-entering this protocol
+  if [ -z "${BETA_DISPATCH_OUTPUT:-}" ]; then
+    echo "error: A.3.6 Stage 8.0.5: \$BETA_DISPATCH_OUTPUT not set — coordinator must dispatch the AI subagent first" >&2
+    exit 2
+  fi
+fi
+```
 
 **Stage 8.1 — Generate β directions (delegates short-circuit to T6)**
 
@@ -647,13 +726,15 @@ INIT_LOG="$SESSION_ROOT/.deep-evolve/init.log"
 # T6's β-generator owns the N=1 short-circuit (returns
 # {"skipped": true, "directions": []}). A.3.6 always calls it with --n
 # $N_CHOSEN and consumes the structured output — DRY: the short-circuit
-# logic lives in one place, not two.
+# logic lives in one place, not two. The --input flag carries the
+# coordinator-dispatched candidate directions from Stage 8.0.5; T6 acts as
+# the validator/iterative-gate, not the dispatcher.
 if ! BETA_OUTPUT=$( \
     python3 "$HELPER_SCRIPTS_DIR/generate-beta-directions.py" \
     --n "$N_CHOSEN" \
     --project-analysis "$VP_ANALYSIS" \
-    --goal "$GOAL_STRING" 2>>"$INIT_LOG"); then
-  echo "error: A.3.6 β generation failed (rc=$?). See $INIT_LOG. Aborting init." >&2
+    --input "$BETA_DISPATCH_OUTPUT" 2>>"$INIT_LOG"); then
+  echo "error: A.3.6 β generation/validation failed (rc=$?). See $INIT_LOG. Aborting init." >&2
   exit 1
 fi
 # BETA_OUTPUT is JSON: {"skipped": bool, "directions": [...], "retries_used": int}
@@ -793,51 +874,7 @@ if [ "$ACTUAL_WT" != "$EXPECTED_WT" ]; then
 fi
 ```
 
-→ Proceed to Step 5 (Generate evaluation harness).
-
-5. Generate evaluation harness based on eval_mode:
-
-   **If eval_mode is `cli`:**
-   Generate `prepare.py` from appropriate template:
-   - If project has stdout-parseable metrics → use `templates/prepare-stdout-parse.py` template
-   - If project has test framework → use `templates/prepare-test-runner.py` template
-   - If code quality / pattern goal → use `templates/prepare-scenario.py` template
-   Customize the template with project-specific metric names, weights, parse patterns.
-
-   **If eval_mode is `protocol`:**
-   Generate `prepare-protocol.md` from the `prepare-protocol.md` template.
-   This defines a fixed evaluation protocol that Claude executes using available tools
-   (MCP servers, browser automation, external APIs, etc.) instead of a shell command.
-   Customize with:
-   - Required tool names and exact call sequences
-   - Parameters for each tool call
-   - How to extract metrics from tool results
-   - Score computation formula with weights
-   - Expected output format (same `score: X.XXXXXX` standard)
-   The protocol file is protected by the same readonly hook as prepare.py.
-
-6. Generate `program.md` with experiment instructions tailored to the project.
-
-   **program.md must start with the following sentinel-wrapped section (always present):**
-
-   ```markdown
-   <!-- automation-policy-v1 -->
-   ## Automation Policy
-
-   - Outer Loop는 diminishing-returns 감지 시 session.yaml.outer_loop.auto_trigger가
-     true면 자동 실행. AskUserQuestion은 outer 완료 후 Q(v) 악화 또는 세션 종료 기준
-     충족 시에만.
-   - 사용자 초기 브리프에 "ask before outer loop" 류 지시가 있으면 auto_trigger=false로
-     명시 설정하고 program.md에 override 기록.
-
-   <!-- /automation-policy-v1 -->
-   ```
-
-   **If continue was selected in Step 3.5**, also insert Inherited Context:
-   Run: `session-helper.sh render_inherited_context <parent_id>`
-   Insert the output between the automation policy and the project-specific body.
-
-   Then generate the project-specific experiment instructions below the sentinel block.
+→ Proceed to Step 7 (Initialize results.tsv).
 
 7. Initialize `results.tsv`:
 
