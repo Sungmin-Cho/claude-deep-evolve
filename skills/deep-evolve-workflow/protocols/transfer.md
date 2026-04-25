@@ -21,7 +21,10 @@ If it exists:
    have this field at all. Treat missing/null as `2`:
 
    ```bash
-   entry_schema=$(echo "$entry" | jq -r '.schema_version // 2')
+   if ! entry_schema=$(echo "$entry" | jq -r '.schema_version // 2'); then
+     echo "warning: A.2.5 entry $entry_id schema_version unreadable (jq failed) — skipping" >&2
+     continue
+   fi
    ```
 
    Route via numeric comparison + explicit-arm case (W-1 forward-compat lesson —
@@ -60,7 +63,10 @@ If it exists:
        2)
          # Legacy v2 entry: translate weights via session-scoped mktemp
          # (concurrent v3 inits would race on a hard-coded /tmp path).
-         tmpfile=$(mktemp "${TMPDIR:-/tmp}/de-v2weights.XXXXXX")
+         if ! tmpfile=$(mktemp "${TMPDIR:-/tmp}/de-v2weights.XXXXXX"); then
+           echo "error: A.2.5 v2 arm mktemp failed (disk full / no /tmp permission)" >&2
+           continue
+         fi
          trap 'rm -f "$tmpfile"' EXIT
          printf '%s' "$entry_weights_json" > "$tmpfile"
          if ! translated=$(bash "$CLAUDE_PLUGIN_ROOT/hooks/scripts/session-helper.sh" \
@@ -78,7 +84,10 @@ If it exists:
          # v3.0.x entry: 10-category weights already, no virtual_parallel block.
          # Read as single-seed (N_prior=1) so transfer-effectiveness comparisons
          # against v3.1 multi-seed sessions remain meaningful (W-8).
-         USE_WEIGHTS=$(echo "$entry" | jq -c '.final_strategy.weights')
+         if ! USE_WEIGHTS=$(echo "$entry" | jq -c '.final_strategy.weights'); then
+           echo "error: A.2.5 v3 entry $entry_id final_strategy.weights unreadable" >&2
+           continue
+         fi
          N_PRIOR=1
          SOURCE_SCHEMA=3
          ;;
@@ -88,13 +97,25 @@ If it exists:
          # project_type / eval_parallelizability to A.1.6's classifier as a
          # prior signal — but A.1.6 still consults the AI freshly.
          # (Transfer is suggestion-level, not authoritative.)
-         USE_WEIGHTS=$(echo "$entry" | jq -c '.final_strategy.weights')
-         VP_PRIOR=$(echo "$entry" | jq -c '.virtual_parallel // {}')
+         if ! USE_WEIGHTS=$(echo "$entry" | jq -c '.final_strategy.weights'); then
+           echo "error: A.2.5 v4 entry $entry_id final_strategy.weights unreadable" >&2
+           continue
+         fi
+         if ! VP_PRIOR=$(echo "$entry" | jq -c '.virtual_parallel // {}'); then
+           echo "error: A.2.5 v4 entry $entry_id virtual_parallel block unreadable" >&2
+           continue
+         fi
          if ! N_PRIOR=$(echo "$VP_PRIOR" | jq -r '.n_initial // 1'); then
            echo "error: A.2.5 v4 entry virtual_parallel.n_initial unreadable" >&2
            exit 1
          fi
          SOURCE_SCHEMA=4
+         ;;
+       *)
+         # Defense-in-depth: outer if-chain should have routed already.
+         # If we reach here, the boundary regex + numeric routing has a bug.
+         echo "error: A.2.5 internal invariant violated — entry_schema=$entry_schema reached inner case despite outer filter" >&2
+         exit 1
          ;;
      esac
    fi

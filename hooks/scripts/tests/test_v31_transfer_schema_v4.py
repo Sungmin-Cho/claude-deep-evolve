@@ -106,12 +106,23 @@ def test_a25_v4_carries_virtual_parallel_block():
 
 def test_a25_default_arm_present():
     """W-1 forward-compat lesson: case statement must have explicit `*)`
-    or equivalent default arm — never silent fallthrough."""
+    or equivalent default arm — never silent fallthrough.
+
+    Code-quality review fix (deep-review 2026-04-25): tightened to require
+    literal `*)` arm inside the inner case block, not just `else` prose
+    elsewhere. Catches future regressions where the outer if-chain filter
+    is dropped without compensating defense in the inner case."""
     c = _content()
     a25 = c.split("## Meta Archive Lookup", 1)[1].split(
         "## Meta Archive Update", 1)[0]
-    # Bash case `*)` arm OR explicit if/elif/else with else handling unknown
-    assert re.search(r"\*\)|else\b.*unknown|default", a25, re.IGNORECASE)
+    # Find the case statement
+    case_match = re.search(r'case\s+"\$entry_schema"\s+in\s+(.*?)\n\s*esac',
+                           a25, re.DOTALL)
+    assert case_match, "inner case statement on $entry_schema not found"
+    case_body = case_match.group(1)
+    # Must have explicit *) arm
+    assert re.search(r'^\s*\*\)\s*\n', case_body, re.MULTILINE), \
+        "inner case must have explicit *) default arm (defense-in-depth)"
 
 
 # ---------- T36: E.0 write side ----------
