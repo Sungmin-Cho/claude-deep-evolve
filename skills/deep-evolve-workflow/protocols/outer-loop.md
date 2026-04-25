@@ -564,7 +564,7 @@ ELSE (v2):
   stagnation fires only on the 3-consecutive-no-improve criterion.
 
 **v3.1 addendum — convergence-class stagnation credit** (only when
-`$VERSION` starts with "3.1"; v3.0.x and v2 sessions skip this clause):
+`$VERSION_TIER == "v3_1_plus"`; v3.0.x and v2 sessions skip this clause):
 
 After computing the base `consecutive_no_improve` from `q_history` (per the
 existing v2/v3 path above) but BEFORE comparing against the `>= 3`

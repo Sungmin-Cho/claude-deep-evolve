@@ -98,7 +98,7 @@ Set `experiment_count` to 0. Set `max_count` to `session.yaml.experiments.reques
 Set `inner_count` to `session.yaml.outer_loop.inner_count` (0 for new sessions, restored value for resume).
 Set `outer_interval` to `session.yaml.outer_loop.interval` (default 20).
 
-**v3.1 additional contract**: when `$VERSION` starts with "3.1", every journal
+**v3.1 additional contract**: when `$VERSION_TIER == "v3_1_plus"`, every journal
 event appended from within the inner loop MUST carry `"seed_id": <int>`. See
 the Block-Parameters Intake step (Section C, first sub-step below) for the
 `SEED_ID` derivation and the `append_journal_event` invocation pattern.
@@ -173,8 +173,7 @@ Before starting, check last entry in `journal.jsonl`:
 
 Repeat until `experiment_count >= max_count` or diminishing returns detected:
 
-**Step 0.5 — v3.1 Block-Parameters Intake** (only when `$VERSION` starts with
-"3.1"; v2 and v3.0 sessions skip this step entirely):
+**Step 0.5 — v3.1 Block-Parameters Intake** (only when `$VERSION_TIER == "v3_1_plus"`; v2 and v3.0 sessions skip this step entirely):
 
 At the very top of every inner-loop iteration inside a v3.1 session, the
 subagent MUST confirm its block-level parameters before touching code or state.
@@ -483,7 +482,7 @@ IF $VERSION starts with "3.":
       - `experiments.total++`
       - `experiments.kept++`
     - **Code Archive**: record the kept commit in `$SESSION_ROOT/code-archive/keep_<NNN>/` (as per v2 behavior).
-    - **v3.1 forum emission** (only when `$VERSION` starts with "3.1"):
+    - **v3.1 forum emission** (only when `$VERSION_TIER == "v3_1_plus"`):
       emit the `seed_keep` event to the shared forum so other seeds can see
       it at Step 1 consultation + the cross-seed borrow evaluation below
       (spec § 7.2). Include `epoch` so Outer Loop Step 6.5.0 can filter by
@@ -516,7 +515,7 @@ IF $VERSION starts with "3.":
     - Run **Branch & Clean-Tree Guard**.
     - Run: `git reset --hard HEAD~1`.
     - Append `{"id": <id>, "status": "rollback_completed", "timestamp": "<now>"}`.
-    - **v3.1 forum emission** (only when `$VERSION` starts with "3.1"):
+    - **v3.1 forum emission** (only when `$VERSION_TIER == "v3_1_plus"`):
       emit the `seed_discard` event to the shared forum so other seeds can
       factor this in during Step 1 consultation (spec § 7.2). Include
       `epoch` for Outer Loop Step 6.5.0 epoch-filtered aggregation.
