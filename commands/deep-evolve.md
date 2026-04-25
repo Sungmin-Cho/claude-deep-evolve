@@ -33,6 +33,120 @@ Arguments: `$ARGUMENTS`
 - If arguments contain a quoted string (e.g., `"new goal"`): set `NEW_GOAL` to that string
 - Otherwise: `REQUESTED_COUNT = null`, `NEW_GOAL = null`
 
+## Step 0.5: v3.1 CLI Flag Parsing
+
+> Step 0.5 runs unconditionally for ALL session versions. Env-var exports
+> are no-op for v2/v3.0 sessions (A.2.6 doesn't run there); the terminal
+> subcommands `--kill-seed` / `--status` exit before Step 1's state
+> routing, so they remain available regardless of whether an active
+> session exists in the v3.1 layout.
+
+```bash
+# Defensive defaults under set -u (foundation pattern from G6 onward)
+ARGS_LINE="${ARGUMENTS:-}"
+
+# === --no-parallel: word-boundary token match ===
+case " $ARGS_LINE " in
+  *' --no-parallel '*|*' --no-parallel='*)
+    export DEEP_EVOLVE_NO_PARALLEL=1
+    ;;
+esac
+
+# === --n-min=<k>: extract permissive value, then strict validate ===
+# C2 fix (deep-review 2026-04-25 plan-stage W2 escalated to 🔴): the prior
+# regex `--n-min=[1-9]` silently truncated `--n-min=10` to `1` because grep -o
+# matched only the first character class. Now extract everything up to whitespace,
+# then validate strictly as ^[1-9]$ (single digit, no leading zeros, no garbage).
+if printf '%s\n' "$ARGS_LINE" | grep -q -- '--n-min='; then
+  N_MIN_RAW=$(printf '%s\n' "$ARGS_LINE" \
+    | sed -nE 's/.*--n-min=([^[:space:]]*).*/\1/p' | head -1)
+  if ! [[ "$N_MIN_RAW" =~ ^[1-9]$ ]]; then
+    echo "error: --n-min must be a single digit in [1, 9], no leading zeros (got '$N_MIN_RAW')" >&2
+    exit 2
+  fi
+  export DEEP_EVOLVE_N_MIN="$N_MIN_RAW"
+fi
+
+# === --n-max=<k>: same shape, same defense ===
+if printf '%s\n' "$ARGS_LINE" | grep -q -- '--n-max='; then
+  N_MAX_RAW=$(printf '%s\n' "$ARGS_LINE" \
+    | sed -nE 's/.*--n-max=([^[:space:]]*).*/\1/p' | head -1)
+  if ! [[ "$N_MAX_RAW" =~ ^[1-9]$ ]]; then
+    echo "error: --n-max must be a single digit in [1, 9], no leading zeros (got '$N_MAX_RAW')" >&2
+    exit 2
+  fi
+  export DEEP_EVOLVE_N_MAX="$N_MAX_RAW"
+fi
+
+# Cross-flag invariant: N_MIN <= N_MAX
+if [ -n "${DEEP_EVOLVE_N_MIN:-}" ] && [ -n "${DEEP_EVOLVE_N_MAX:-}" ]; then
+  if ! python3 -c '
+import sys
+nmin, nmax = int(sys.argv[1]), int(sys.argv[2])
+sys.exit(0 if nmin <= nmax else 1)
+' "$DEEP_EVOLVE_N_MIN" "$DEEP_EVOLVE_N_MAX" 2>/dev/null; then
+    echo "error: --n-min ($DEEP_EVOLVE_N_MIN) must be <= --n-max ($DEEP_EVOLVE_N_MAX)" >&2
+    exit 2
+  fi
+fi
+
+# === --kill-seed=<id>: TERMINAL — invoke T23 writer + exit ===
+KILL_SEED_RAW=$(printf '%s\n' "$ARGS_LINE" \
+  | grep -oE -- '--kill-seed=[1-9][0-9]*' | head -1 | sed 's/^--kill-seed=//')
+if printf '%s\n' "$ARGS_LINE" | grep -q -- '--kill-seed='; then
+  if [ -z "${KILL_SEED_RAW:-}" ]; then
+    echo "error: --kill-seed=<id> requires positive integer (no leading zeros)" >&2
+    exit 2
+  fi
+  # Resolve active session for SESSION_ROOT — T23 contract requires it
+  if ! SESSION_LINE=$(bash hooks/scripts/session-helper.sh resolve_current 2>/dev/null); then
+    echo "활성 세션이 없습니다. --kill-seed는 진행 중인 세션이 있을 때만 사용 가능합니다." >&2
+    exit 1
+  fi
+  read -r KILL_SESSION_ID KILL_SESSION_ROOT <<<"$SESSION_LINE"
+  export SESSION_ROOT="$KILL_SESSION_ROOT"
+  if ! bash hooks/scripts/kill-request-writer.sh --seed="$KILL_SEED_RAW"; then
+    echo "error: --kill-seed delegation to T23 failed" >&2
+    exit 1
+  fi
+  echo "kill request queued for seed_${KILL_SEED_RAW}. Coordinator confirms via AskUserQuestion at next scheduler turn."
+  exit 0
+fi
+
+# === --status: TERMINAL — invoke status-dashboard.py + exit ===
+# I4 design note (deep-review 2026-04-25 plan-stage): rc convention asymmetry
+# between --status (rc=0) and --kill-seed (rc=1) for no-active-session is
+# INTENTIONAL — both paths print friendly Korean prose to stderr but:
+#   --status:    "operator wants info, info unavailable" → benign, rc=0
+#   --kill-seed: "operator wants action, action impossible" → user error, rc=1
+# This mirrors the rc=2 (operator)/rc=1 (business)/rc=0 (success) convention
+# used elsewhere. Document the asymmetry so future maintenance doesn't
+# accidentally normalize them.
+case " $ARGS_LINE " in
+  *' --status '*|*' --status='*|*' status '*)
+    if ! SESSION_LINE=$(bash hooks/scripts/session-helper.sh resolve_current 2>/dev/null); then
+      echo "활성 세션이 없습니다. --status는 진행 중인 세션이 있을 때만 사용 가능합니다." >&2
+      exit 0
+    fi
+    read -r STATUS_SESSION_ID STATUS_SESSION_ROOT <<<"$SESSION_LINE"
+    if ! python3 hooks/scripts/status-dashboard.py \
+        --session-yaml "$STATUS_SESSION_ROOT/session.yaml" \
+        --journal      "$STATUS_SESSION_ROOT/journal.jsonl" \
+        --forum        "$STATUS_SESSION_ROOT/forum.jsonl"; then
+      echo "error: status-dashboard.py failed" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+esac
+```
+
+> Per § 13 spec table, `--no-parallel` / `--n-min` / `--n-max` propagate
+> via env vars to A.2.6 in `init.md` (T31). `--kill-seed=<id>` writes
+> `$SESSION_ROOT/kill_requests.jsonl` via T23 and exits; the coordinator
+> polls per scheduler turn (T22) and confirms via AskUserQuestion (T24)
+> before applying. `--status` renders a read-only dashboard.
+
 ## Step 1: State Detection & Routing
 
 **If HISTORY** is set:

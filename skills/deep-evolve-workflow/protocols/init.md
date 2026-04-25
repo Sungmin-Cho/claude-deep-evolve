@@ -311,7 +311,7 @@ self-contained.
 ```bash
 # Defaults: any of these may be unset (use ${VAR:-default}). Foundation
 # defensive pattern — never bare $X under set -u.
-NO_PARALLEL="${DEEP_EVOLVE_NO_PARALLEL:-0}"   # "1" forces N=1
+NO_PARALLEL="${DEEP_EVOLVE_NO_PARALLEL:-0}"   # DEEP_EVOLVE_NO_PARALLEL=1 forces N=1
 N_MIN_USER="${DEEP_EVOLVE_N_MIN:-1}"          # user clamp lower bound
 N_MAX_USER="${DEEP_EVOLVE_N_MAX:-9}"          # user clamp upper bound
 
