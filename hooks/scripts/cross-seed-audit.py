@@ -93,9 +93,12 @@ def _build_per_seed_activity(forum_events, journal_events):
             activity[sid]["discards"] += 1
         elif et == "cross_seed_borrow":
             from_s, to_s = e.get("from_seed"), e.get("to_seed")
-            if from_s is not None and from_s != to_s:
+            # Both fields required — skip partially-corrupt events to avoid
+            # self-contradiction with _build_borrow_matrix's same-event skip.
+            if from_s is None or to_s is None:
+                continue
+            if from_s != to_s:   # also skip self-borrows
                 activity[from_s]["borrows_given"] += 1
-            if to_s is not None and to_s != from_s:
                 activity[to_s]["borrows_received"] += 1
         elif et == "convergence_event":
             for s in e.get("seed_ids", []) or []:
@@ -123,7 +126,7 @@ def _format_borrow_matrix(matrix):
     if not matrix:
         return "_No cross-seed exchanges (0 borrows recorded)._\n"
     lines = ["| from → to | count |", "|---|---|"]
-    for (from_s, to_s) in sorted(matrix.keys()):
+    for (from_s, to_s) in sorted(matrix.keys(), key=lambda x: (str(x[0]), str(x[1]))):
         lines.append(f"| {from_s} → {to_s} | {matrix[(from_s, to_s)]} |")
     return "\n".join(lines) + "\n"
 
@@ -132,7 +135,7 @@ def _format_convergence(tally):
     if not tally:
         return "_No convergence events recorded._\n"
     lines = ["| judged_as | count |", "|---|---|"]
-    for judged in sorted(tally.keys()):
+    for judged in sorted(tally.keys(), key=str):
         lines.append(f"| {judged} | {tally[judged]} |")
     return "\n".join(lines) + "\n"
 
@@ -142,7 +145,7 @@ def _format_per_seed(activity):
         return "_No seed activity recorded._\n"
     lines = ["| seed | keeps | discards | borrows_given | borrows_received | convergence |",
              "|---|---|---|---|---|---|"]
-    for sid in sorted(activity.keys()):
+    for sid in sorted(activity.keys(), key=str):
         a = activity[sid]
         lines.append(
             f"| Seed {sid} | {a['keeps']} | {a['discards']} | "

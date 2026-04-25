@@ -154,6 +154,7 @@ def test_missing_journal_file_rc_2(tmp_path):
     output = tmp_path / "audit.md"
     r = _run(forum, tmp_path / "no-such-journal.jsonl", output)
     assert r.returncode == 2
+    assert "error:" in r.stderr
 
 
 def test_missing_required_arg_rc_2(tmp_path):
@@ -199,3 +200,56 @@ def test_cross_seed_borrow_without_required_fields_skipped(tmp_path):
     # Only the well-formed line counts
     content = output.read_text(encoding="utf-8")
     assert "1" in content and "2" in content
+
+
+def test_borrow_with_missing_to_seed_does_not_inflate_borrows_given(tmp_path):
+    """I-1 regression: a cross_seed_borrow event with from_seed but
+    missing to_seed must NOT credit borrows_given to from_seed
+    (otherwise Per-Seed table contradicts Borrow Matrix which skips
+    the same event)."""
+    forum = tmp_path / "forum.jsonl"
+    journal = tmp_path / "journal.jsonl"
+    forum.write_text(
+        '{"event":"cross_seed_borrow","from_seed":1,"source_commit":"a","target_commit":"b","ts":"t","epoch":1}\n'
+        '{"event":"cross_seed_borrow","from_seed":1,"to_seed":2,"source_commit":"c","target_commit":"d","ts":"t2","epoch":1}\n',
+        encoding="utf-8")
+    journal.write_text(
+        '{"event":"seed_initialized","seed_id":1,"direction":"a","ts":"t0"}\n'
+        '{"event":"seed_initialized","seed_id":2,"direction":"b","ts":"t1"}\n',
+        encoding="utf-8")
+    output = tmp_path / "audit.md"
+    r = _run(forum, journal, output)
+    assert r.returncode == 0
+    content = output.read_text(encoding="utf-8")
+    # Per-seed table for seed 1 should show borrows_given=1 (from the well-formed event), NOT 2
+    activity_section = content.split("## Per-Seed Forum Activity", 1)[1]
+    # The well-formed event (1 → 2) gives seed 1 exactly 1 borrow_given
+    # The malformed event (1 → None) must be skipped — total stays at 1
+    seed_1_row = [ln for ln in activity_section.splitlines() if "Seed 1" in ln]
+    assert len(seed_1_row) == 1
+    # The borrows_given column in the row should be 1 (not 2 from inflation)
+    # Format: | Seed 1 | keeps | discards | borrows_given | borrows_received | convergence |
+    cells = [c.strip() for c in seed_1_row[0].split("|")]
+    # Cells: ["", "Seed 1", "0", "0", "1", "0", "0", ""]
+    # borrows_given is at index 4
+    assert cells[4] == "1", f"borrows_given inflated by partial-borrow event: row={seed_1_row[0]!r}"
+
+
+def test_mixed_type_seed_ids_do_not_crash_sort(tmp_path):
+    """I-2 regression: corruption-path with mixed-type seed_ids
+    (str + int) must not raise TypeError during table formatting."""
+    forum = tmp_path / "forum.jsonl"
+    journal = tmp_path / "journal.jsonl"
+    forum.write_text(
+        '{"event":"cross_seed_borrow","from_seed":"bad","to_seed":2,"source_commit":"a","target_commit":"b","ts":"t","epoch":1}\n'
+        '{"event":"cross_seed_borrow","from_seed":1,"to_seed":3,"source_commit":"c","target_commit":"d","ts":"t2","epoch":1}\n',
+        encoding="utf-8")
+    journal.write_text(
+        '{"event":"seed_initialized","seed_id":1,"direction":"a","ts":"t0"}\n'
+        '{"event":"seed_initialized","seed_id":2,"direction":"b","ts":"t1"}\n'
+        '{"event":"seed_initialized","seed_id":3,"direction":"c","ts":"t2"}\n',
+        encoding="utf-8")
+    output = tmp_path / "audit.md"
+    r = _run(forum, journal, output)
+    # Must not crash regardless of mixed types in keys
+    assert r.returncode == 0, f"sort crashed on mixed types: {r.stderr}"
