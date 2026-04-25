@@ -273,3 +273,26 @@ def test_invalid_json_rc_2():
         capture_output=True, text=True,
     )
     assert r.returncode == 2
+
+
+def test_integral_float_id_returns_canonical_int():
+    """I-1 regression: a seed with id=2.0 (float-as-int from a JSON layer
+    that float-ifies whole numbers) must produce chosen_seed_id=2 (int) in
+    the output, not 2.0. Otherwise downstream consumers (T28 jq parse +
+    git rev-parse) get string "2.0" and fail."""
+    out = _run_ok({"seeds": [_seed(id=2.0, final_q=0.42)]})
+    assert out["chosen_seed_id"] == 2
+    assert isinstance(out["chosen_seed_id"], int)
+    # Also verify the reasoning's chosen_seed_id is canonical int
+    assert out["baseline_selection_reasoning"]["chosen_seed_id"] == 2
+    assert isinstance(out["baseline_selection_reasoning"]["chosen_seed_id"], int)
+
+
+def test_seed_id_zero_rejected_rc_2():
+    """M-2: seed_id must be >= 1 per session.yaml.virtual_parallel contract.
+    id=0 is excluded everywhere else in the codebase (T23/T24 ^[1-9][0-9]*$);
+    enforce here too for consistency."""
+    bad = _seed(id=0)
+    r = _run_err({"seeds": [bad]})
+    assert r.returncode == 2
+    assert "positive" in r.stderr.lower() or "id" in r.stderr.lower()

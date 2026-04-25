@@ -39,10 +39,6 @@ import json
 import sys
 
 
-VALID_KILLED_REASONS = {
-    "crash_give_up", "sustained_regression", "shortcut_quarantine",
-    "budget_exhausted_underperform", "user_requested",
-}
 REQUIRED_SEED_FIELDS = {
     "id", "status", "killed_reason",
     "final_q", "keeps", "borrows_received",
@@ -93,7 +89,10 @@ def _validate_schema(payload):
         missing = REQUIRED_SEED_FIELDS - set(seed.keys())
         if missing:
             _die(f"seeds[{i}] missing required fields: {sorted(missing)}")
-        _require_int(seed, "id", f"seeds[{i}]", allow_negative=False)
+        seed_id = _require_int(seed, "id", f"seeds[{i}]",
+                               allow_negative=False)
+        if seed_id <= 0:
+            _die(f"seeds[{i}].id must be positive (>= 1), got: {seed_id}")
         if not isinstance(seed["status"], str):
             _die(f"seeds[{i}].status must be string")
         kr = seed["killed_reason"]
@@ -202,7 +201,12 @@ def main():
                 tier = "no_baseline"
                 candidates_count = 0
 
-    chosen_id = chosen["id"] if chosen else None
+    # I-1: coerce id to canonical int (chosen["id"] may be a float like
+    # 5.0 from a JSON layer that float-ifies whole numbers; downstream
+    # consumers like T28's `jq -r .chosen_seed_id` would otherwise
+    # produce "5.0" and break `git rev-parse evolve/<sid>/seed-${chosen_id}`).
+    # Safe because _require_int already validated integral-value-only.
+    chosen_id = int(chosen["id"]) if chosen else None
     reasoning = {
         "chosen_seed_id": chosen_id,
         "tier": tier,
