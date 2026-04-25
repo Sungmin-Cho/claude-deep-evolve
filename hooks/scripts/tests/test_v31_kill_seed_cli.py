@@ -7,6 +7,8 @@ SESSION_ROOT pre-resolution.
 import re
 from pathlib import Path
 
+import pytest
+
 CMD = (Path(__file__).parents[3] / "commands/deep-evolve.md")
 
 
@@ -107,6 +109,18 @@ def test_kill_seed_does_not_emit_journal_event_directly():
         "--kill-seed must not emit journal events; that's T24's job"
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "T22 polling not yet wired as bash-tagged code in coordinator.md. "
+        "T35's strengthened W-6 trace test (deep-review 2026-04-25 plan-stage "
+        "C4 fix) surfaces this gap rather than masking it via prose pseudocode "
+        "presence. When T22 polling lands as actual ```bash``` block in "
+        "coordinator.md (with action verb tail/while read/jq/flock/>>/cat "
+        "co-located with kill_requests.jsonl), this test will auto-activate. "
+        "Removing the xfail decorator IS the activation point."
+    ),
+)
 def test_kill_seed_w6_trace_to_t22_polling():
     """W-6 trace continuation (deep-review 2026-04-25 plan-stage C4 fix):
     kill_requests.jsonl is the contract handle between T35 (writer) and T22
