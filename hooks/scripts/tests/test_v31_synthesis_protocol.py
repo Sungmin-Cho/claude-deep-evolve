@@ -292,3 +292,26 @@ def test_n1_synthesis_commit_includes_commit_field():
         "W-5: N=1 must compute SYNTHESIS_HEAD via git rev-parse"
     assert "commit: $commit" in n1_section, \
         "W-5: N=1 synthesis_commit jq build must include `commit: $commit`"
+
+
+def test_baseline_q_derived_not_placeholder():
+    """Critical regression (T28 review): BASELINE_Q must be derived from
+    SEEDS_JSON via CHOSEN_SEED_ID, NOT a literal placeholder string. Test
+    verifies the BASELINE_Q derivation block exists and the placeholder
+    string is absent from the bash blocks. baseline-select.py only returns
+    {chosen_seed_id, tier, ties_broken_on, candidates_count,
+    baseline_selection_reasoning} — NO baseline_q field — so Step 5 must
+    derive BASELINE_Q itself before Step 6 can do `float($BASELINE_Q)` /
+    `--argjson bq $BASELINE_Q`."""
+    c = _content()
+    # The placeholder must be ABSENT from any bash assignment context
+    import re
+    placeholder_pattern = re.compile(r'BASELINE_Q\s*=\s*["\']<chosen')
+    matches = placeholder_pattern.findall(c)
+    assert not matches, \
+        f"Critical: BASELINE_Q literal placeholder still present in protocol — " \
+        f"would cause ValueError at runtime. Found {len(matches)} occurrences."
+    # The actual derivation must be present
+    assert "BASELINE_Q=$(echo \"$SEEDS_JSON\" | python3" in c \
+        or "BASELINE_Q=" in c.split("Step 5.1")[1].split("Step 5.2")[0], \
+        "Critical: BASELINE_Q must be derived from SEEDS_JSON in Step 5.1 area"

@@ -201,6 +201,29 @@ TIER=$(echo "$BASELINE" | jq -r '.tier')
 BASELINE_REASONING=$(echo "$BASELINE" | jq -c '.baseline_selection_reasoning')
 ```
 
+Critical fix (T28 review): derive BASELINE_Q from SEEDS_JSON via CHOSEN_SEED_ID.
+baseline-select.py only returns the chosen id (+ tier + reasoning), NOT the
+final_q value — the actual final_q lives in session.yaml. Without this
+derivation, BASELINE_Q would remain a literal placeholder string in Step 6
+and any `float($BASELINE_Q)` / `--argjson bq $BASELINE_Q` call would fail
+with ValueError / Invalid literal at EOF.
+
+```bash
+if ! BASELINE_Q=$(echo "$SEEDS_JSON" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+chosen = sys.argv[1]
+if chosen in ("null", ""):
+    print("0.0")
+else:
+    seed = next((s for s in d["seeds"] if str(s["id"]) == str(chosen)), None)
+    print(seed["final_q"] if seed else 0.0)
+' "$CHOSEN_SEED_ID" 2>&1); then
+  echo "synthesis.md Step 5.1: failed to derive BASELINE_Q for chosen_seed_id=$CHOSEN_SEED_ID" >&2
+  exit 1
+fi
+```
+
 ### 5.2 Handle no_baseline / best_effort tiers
 
 ```bash
@@ -236,7 +259,15 @@ Skip this step entirely on the no_baseline short-circuit (`goto_no_baseline=true
 ```bash
 if [ "$goto_no_baseline" != "true" ]; then
   BASELINE_BRANCH="evolve/${SESSION_ID}/seed-${CHOSEN_SEED_ID}"
-  BASELINE_HEAD=$(git rev-parse "$BASELINE_BRANCH")
+
+  # T28 review fix I-3: rc-guard git rev-parse so a missing/deleted baseline
+  # branch produces a protocol-contextualized error instead of a raw git
+  # message, and short-circuits before create_synthesis_worktree gets a
+  # bogus argument.
+  if ! BASELINE_HEAD=$(git rev-parse "$BASELINE_BRANCH" 2>&1); then
+    echo "synthesis.md Step 5.3: branch $BASELINE_BRANCH not found: $BASELINE_HEAD" >&2
+    exit 1
+  fi
 
   if ! bash "$DEEP_EVOLVE_HELPER_PATH" \
       create_synthesis_worktree "$BASELINE_HEAD"; then
@@ -369,7 +400,7 @@ else
   fi
 fi
 
-BASELINE_Q="<chosen seed's final_q>"   # set by Step 5.1 reasoning
+# BASELINE_Q derived from session.yaml in Step 5.1 (above); reused here.
 REGRESSION_TOLERANCE=$(python3 -c '
 import yaml, sys
 with open(sys.argv[1]) as f:
@@ -430,15 +461,22 @@ EOM
     FINAL_BRANCH="$BASELINE_BRANCH"
   fi
 fi
-```
 
-### Step 6.1 (post-AskUserQuestion) — applies USER_CHOICE from Branch B
+# ----------------------------------------------------------------------------
+# § Step 6.1 (post-AskUserQuestion) — applies USER_CHOICE from Branch B
+# ----------------------------------------------------------------------------
+# T28 review fix I-1 (Option A): this section was previously its own
+# separate fenced bash block, but the outer guard
+# (if "$goto_no_baseline" = "true" ; then ... else ... fi) opened in the
+# prior block and closed here — split across fences. If a runner
+# concatenates each fence as a standalone script, the trailing fi would
+# be a syntax error. Merged into the SAME fence as the Step 6 entry guard
+# so the if/else/fi balances within one script.
+#
+# When the coordinator agent has captured USER_CHOICE via AskUserQuestion and
+# re-entered this protocol, USER_CHOICE is exported in the environment and
+# this case statement consumes it. Tests provide USER_CHOICE via env var.
 
-When the coordinator agent has captured USER_CHOICE via AskUserQuestion and
-re-entered this section, this bash block consumes the choice. Tests provide
-USER_CHOICE via env var.
-
-```bash
 if [ -n "$USER_CHOICE" ] && [ -z "$SYNTHESIS_OUTCOME" ]; then
   case "$USER_CHOICE" in
     1) SYNTHESIS_OUTCOME="accepted_with_regression"
@@ -464,6 +502,16 @@ fi
 
 fi   # close `if [ "$goto_no_baseline" = "true" ]; then : else ...` from Step 6 entry
 ```
+
+### Step 6.1 (post-AskUserQuestion) — applies USER_CHOICE from Branch B
+
+This is the same `case "$USER_CHOICE"` block embedded inside the Step 6
+fence above. It is documented here as a separate logical section so that
+Branch B re-entry has a named anchor (`§ Step 6.1 (post-AskUserQuestion)`)
+referenced in the `cat <<EOM` instruction. The bash itself lives in the
+single Step 6 fence — re-entry restarts the protocol from Step 5.1 with
+USER_CHOICE pre-exported, so this case re-runs as part of the merged
+Step 6 script (no mid-fence jump-in).
 
 ### 6.1 Fallback cleanup (Branch B option 2/3 + Branch C)
 
@@ -576,10 +624,14 @@ top-level version gate and bypasses Steps 2-6:
 
 # Step 3 — emit minimal cross_seed_audit.md (cross-seed-audit.py
 # auto-detects N=1 and writes 'N/A — single seed session')
-python3 "$HELPER_SCRIPTS_DIR/cross-seed-audit.py" \
-  --forum "$SESSION_ROOT/forum.jsonl" \
-  --journal "$SESSION_ROOT/journal.jsonl" \
-  --output "$SESSION_ROOT/completion/cross_seed_audit.md"
+# T28 review fix I-2: rc-guard matching the multi-seed Step 3 pattern.
+if ! python3 "$HELPER_SCRIPTS_DIR/cross-seed-audit.py" \
+    --forum "$SESSION_ROOT/forum.jsonl" \
+    --journal "$SESSION_ROOT/journal.jsonl" \
+    --output "$SESSION_ROOT/completion/cross_seed_audit.md"; then
+  echo "synthesis.md § N=1 Short-Circuit: cross-seed-audit.py failed" >&2
+  exit 1
+fi
 
 # Steps 4-6 — skipped entirely
 SYNTHESIS_OUTCOME="skipped_n1"
