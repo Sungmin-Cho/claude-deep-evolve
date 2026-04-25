@@ -275,6 +275,9 @@ do NOT silently force `>= 2`.
 
 If `NEW_GOAL` was set from arguments, use it. Otherwise, ask via AskUserQuestion:
 
+> **v3.1 note**: When `$VERSION == "3.1.0"`, an additional sub-stage A.2.6
+> below confirms the seed count N. Q1–Q4 below run unchanged for all versions.
+
 **Q1**: "개선 목표는 무엇인가요?" (자유 텍스트)
 
 **Q2**: "평가 방법은?" — Options based on analysis:
@@ -290,6 +293,172 @@ If `NEW_GOAL` was set from arguments, use it. Otherwise, ask via AskUserQuestion
 
 If `REQUESTED_COUNT` was set, use it. Otherwise:
 **Q4**: "실험 횟수는?" — Options: "30회", "50회", "100회", "감소 수익까지 자동"
+
+
+### A.2.6 — N confirmation (v3.1+)
+
+> **Version gate**: This sub-stage runs ONLY when `$VERSION == "3.1.0"`. For
+> v2.x / v3.0.x, `N_CHOSEN` is implicitly 1 and the rest of the protocol degrades
+> to the v3.0 single-seed flow — A.3 below skips its v3.1 extension entirely.
+
+A.2.6 confirms the seed count N produced by A.1.6, honoring user-supplied
+overrides. The CLI flags `--n-min` / `--n-max` / `--no-parallel` land in T35
+(G11); A.2.6 reads them as exported environment variables today, so G10 ships
+self-contained.
+
+**Stage 7.1 — Read overrides + initial N suggestion**
+
+```bash
+# Defaults: any of these may be unset (use ${VAR:-default}). Foundation
+# defensive pattern — never bare $X under set -u.
+NO_PARALLEL="${DEEP_EVOLVE_NO_PARALLEL:-0}"   # "1" forces N=1
+N_MIN_USER="${DEEP_EVOLVE_N_MIN:-1}"          # user clamp lower bound
+N_MAX_USER="${DEEP_EVOLVE_N_MAX:-9}"          # user clamp upper bound
+
+# Validate env-var values: N_MIN / N_MAX must be integers in [1, 9].
+# Reject non-integer / out-of-range with rc=2 (operator error).
+if ! python3 -c '
+import sys
+try:
+    nmin = int(sys.argv[1]); nmax = int(sys.argv[2])
+except ValueError:
+    print("error: DEEP_EVOLVE_N_MIN / DEEP_EVOLVE_N_MAX must be integers",
+          file=sys.stderr); sys.exit(2)
+if not (1 <= nmin <= 9) or not (1 <= nmax <= 9) or nmin > nmax:
+    print(f"error: N_MIN ({nmin}) / N_MAX ({nmax}) must satisfy "
+          f"1 <= N_MIN <= N_MAX <= 9", file=sys.stderr); sys.exit(2)
+' "$N_MIN_USER" "$N_MAX_USER" 2>/dev/null; then
+  echo "error: A.2.6 N-range override validation failed" >&2
+  exit 2
+fi
+
+# Pull n_suggested + reasoning from the validated $VP_ANALYSIS handle.
+# argv-safe pattern: $VP_ANALYSIS is interpolated as sys.argv (already
+# validated to be JSON in A.1.6 Stage 6.2, but argv pattern is the same
+# class-of-fix we apply uniformly per G8 C-R1 / G9 C-1).
+# W-1 fix (Opus review 2026-04-25-161635): rc-guard the python3 -c calls per
+# the aff23c9 contract — defense-in-depth across protocol boundaries (A.1.6
+# already validated, but a corrupted VP_ANALYSIS reaching A.2.6 should fail
+# loud, not silently propagate empty strings into the prompt).
+if ! N_SUGGESTED=$(python3 -c '
+import json, sys
+print(json.loads(sys.argv[1])["n_suggested"])
+' "$VP_ANALYSIS"); then
+  echo "error: A.2.6 could not extract n_suggested from \$VP_ANALYSIS — A.1.6 contract violated" >&2
+  exit 2
+fi
+if ! VP_REASONING=$(python3 -c '
+import json, sys
+print(json.loads(sys.argv[1])["reasoning"])
+' "$VP_ANALYSIS"); then
+  echo "error: A.2.6 could not extract reasoning from \$VP_ANALYSIS — A.1.6 contract violated" >&2
+  exit 2
+fi
+```
+
+**Stage 7.2 — Apply --no-parallel short-circuit BEFORE asking**
+
+If the user passed `--no-parallel`, the answer to "what N?" is determined
+already. Asking AskUserQuestion in this case is dishonest — surface the
+override and proceed.
+
+```bash
+if [ "$NO_PARALLEL" = "1" ]; then
+  echo "A.2.6: --no-parallel set; forcing N=1 regardless of AI suggestion ($N_SUGGESTED)" >&2
+  N_CHOSEN=1
+  N_REASON="user override (--no-parallel)"
+else
+  # Stage 7.3 — clamp AI suggestion to user range + global range
+  N_CHOSEN_PROVISIONAL=$(python3 -c '
+import sys
+ns = int(sys.argv[1]); nmin = int(sys.argv[2]); nmax = int(sys.argv[3])
+# Clamp to user range first, then global [1, 9]
+clamped_user = min(max(ns, nmin), nmax)
+clamped_global = min(max(clamped_user, 1), 9)
+print(clamped_global)
+' "$N_SUGGESTED" "$N_MIN_USER" "$N_MAX_USER")
+
+  # Stage 7.4 — coordinator emits AskUserQuestion via the prose-instruction
+  # pattern (mirrors synthesis.md Step 6 Branch B).
+  cat <<EOM >&2
+A.2.6: coordinator agent must invoke AskUserQuestion with the following:
+
+  Prompt:
+    동시 진행할 seed 개수 N은? (AI 제안: ${N_CHOSEN_PROVISIONAL}, 근거: ${VP_REASONING})
+    예상 실험 비용: N × (사용자 입력 실험 횟수 ÷ N) 동일 — 병렬 효과는 wall-clock 단축뿐.
+    사용자 범위: [${N_MIN_USER}, ${N_MAX_USER}]; 전역 범위: [1, 9].
+  Options:
+    - "AI 제안 ${N_CHOSEN_PROVISIONAL} 사용"
+    - "직접 입력 (정수 1~9 ${N_MIN_USER}≤N≤${N_MAX_USER})"
+    - "단일 seed (N=1)로 v3.0 호환 모드"
+
+  After the user responds, export N_USER_CHOICE = <chosen integer> then re-
+  enter this protocol at "Stage 7.5 (post-AskUserQuestion)".
+EOM
+  N_CHOSEN=""   # set by Stage 7.5 below
+fi
+```
+
+**Stage 7.5 — (post-AskUserQuestion) Apply user choice with final clamp**
+
+When the coordinator agent has captured `N_USER_CHOICE` and re-entered this
+section, this block normalizes it. Tests provide `N_USER_CHOICE` via env
+var.
+
+```bash
+if [ -z "${N_CHOSEN:-}" ] && [ -n "${N_USER_CHOICE:-}" ]; then
+  # User may have typed something other than an integer; reject and re-ask.
+  # W-2 fix (Opus review 2026-04-25-161635): do NOT swallow stderr — the
+  # validator's diagnostic ("not an integer" / "outside [1, 9]") is more
+  # useful than the bash echo's vague "invalid". The "error:" prefix
+  # convention from the foundation pattern is honored by the python script.
+  if ! python3 -c '
+import sys
+try:
+    n = int(sys.argv[1])
+except ValueError:
+    print(f"error: N_USER_CHOICE {sys.argv[1]!r} not an integer", file=sys.stderr)
+    sys.exit(2)
+if not (1 <= n <= 9):
+    print(f"error: N_USER_CHOICE {n} outside [1, 9]", file=sys.stderr); sys.exit(2)
+' "$N_USER_CHOICE"; then
+    echo "error: A.2.6 N_USER_CHOICE invalid (see python validator stderr above); re-ask via AskUserQuestion" >&2
+    exit 2
+  fi
+  # Clamp to user range (a user-typed 7 with N_MAX=4 gets demoted to 4 with warn)
+  N_CHOSEN=$(python3 -c '
+import sys
+n = int(sys.argv[1]); nmin = int(sys.argv[2]); nmax = int(sys.argv[3])
+clamped = min(max(n, nmin), nmax)
+if clamped != n:
+    print(f"warn: user N={n} clamped to user range [{nmin},{nmax}] → {clamped}",
+          file=sys.stderr)
+print(clamped)
+' "$N_USER_CHOICE" "$N_MIN_USER" "$N_MAX_USER")
+  N_REASON="user choice (clamped to [${N_MIN_USER},${N_MAX_USER}])"
+fi
+
+# Final invariant: N_CHOSEN is now an integer in [1, 9] regardless of path
+# (no_parallel / AI-accepted / user-typed). Export for A.3 + journal.
+export N_CHOSEN
+export N_REASON
+```
+
+**Stage 7.6 — Journal the decision**
+
+Coordinator emits `init_n_chosen` so resume.md can re-derive intent without
+re-asking. (unset SEED_ID; ...) wrap because no seed exists yet at init time
+and we don't want T16's auto-inject to corrupt session-wide events.
+
+```bash
+(unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+  append_journal_event "$(jq -cn \
+    --argjson n "$N_CHOSEN" \
+    --arg reason "$N_REASON" \
+    '{event: "init_n_chosen", n_chosen: $n, reason: $reason}')")
+```
+
+→ Proceed to A.2.5 (Meta Archive Lookup) unchanged.
 
 ## A.2.5: Meta Archive Lookup
 

@@ -181,7 +181,6 @@ def test_a16_emits_journal_event_or_records_to_session_yaml():
     )
 
 
-@pytest.mark.xfail(strict=False, reason="T31/T32 will satisfy")
 def test_a16_w6_trace_to_a2_prompt():
     """W-6 trace: the n_suggested value produced in A.1.6 must flow into A.2's
     AskUserQuestion prompt — not just appear in A.1.6 text. We verify by
@@ -211,3 +210,107 @@ def test_a16_w6_trace_to_a3_loop():
         a3,
         re.IGNORECASE,
     ), "A.3 must consume A.1.6's analysis (W-6 trace)"
+
+
+# ---------- T31: A.2.6 N confirmation ----------
+
+def test_a26_section_header_present():
+    """A.2.6 must be inserted at the end of A.2, before A.2.5."""
+    c = _content()
+    assert "### A.2.6" in c, "A.2.6 sub-section header missing"
+    a26_idx = c.index("### A.2.6")
+    a25_idx = c.index("## A.2.5:")
+    a2_idx = c.index("## A.2:")
+    assert a2_idx < a26_idx < a25_idx, \
+        "A.2.6 must sit inside A.2 (after A.2 prose, before A.2.5)"
+
+
+def test_a26_version_gate_present():
+    """A.2.6 must be gated by $VERSION == '3.1.0'."""
+    c = _content()
+    a26 = c.split("### A.2.6", 1)[1].split("## A.2.5:", 1)[0]
+    assert "deep_evolve_version" in a26 or "VERSION" in a26
+    assert '"3.1.0"' in a26 or '3.1.0' in a26
+
+
+def test_a26_consumes_vp_analysis_handle():
+    """W-6 trace: A.2.6 must consume the $VP_ANALYSIS handle from A.1.6 —
+    not re-call the AI or read $AI_VP_ANALYSIS_RAW."""
+    c = _content()
+    a26 = c.split("### A.2.6", 1)[1].split("## A.2.5:", 1)[0]
+    assert "$VP_ANALYSIS" in a26 or "VP_ANALYSIS" in a26
+    # Must NOT re-call AI for n_suggested
+    assert "AI_VP_ANALYSIS_RAW" not in a26, \
+        "A.2.6 must consume the validated $VP_ANALYSIS, not re-call the AI"
+
+
+def test_a26_askuserquestion_cost_estimate_in_prompt():
+    """The AskUserQuestion prompt must include the cost estimate so users
+    understand what they are confirming. Without this, users default-accept
+    without budget awareness."""
+    c = _content()
+    a26 = c.split("### A.2.6", 1)[1].split("## A.2.5:", 1)[0]
+    # Cost-estimate prose: must mention budget / cost / experiments / 비용
+    assert re.search(
+        r"cost|budget|experiments?|비용|예상\s*실험|estimate",
+        a26,
+        re.IGNORECASE,
+    ), "A.2.6 prompt must surface cost estimate"
+
+
+def test_a26_honors_no_parallel_env_var():
+    """--no-parallel CLI flag → DEEP_EVOLVE_NO_PARALLEL env var → forces N=1.
+    A.2.6 must check this BEFORE the AskUserQuestion call (don't ask user
+    a question whose answer is already determined)."""
+    c = _content()
+    a26 = c.split("### A.2.6", 1)[1].split("## A.2.5:", 1)[0]
+    assert "DEEP_EVOLVE_NO_PARALLEL" in a26
+    # Env-var check must precede AskUserQuestion call
+    no_par_idx = a26.index("DEEP_EVOLVE_NO_PARALLEL")
+    ask_idx = a26.index("AskUserQuestion") if "AskUserQuestion" in a26 else len(a26)
+    assert no_par_idx < ask_idx, \
+        "DEEP_EVOLVE_NO_PARALLEL check must precede AskUserQuestion"
+
+
+def test_a26_honors_n_min_n_max_env_vars():
+    """--n-min / --n-max → DEEP_EVOLVE_N_MIN / DEEP_EVOLVE_N_MAX → clamp the
+    AI suggestion + clamp the user's response if they typed a number outside
+    the range."""
+    c = _content()
+    a26 = c.split("### A.2.6", 1)[1].split("## A.2.5:", 1)[0]
+    assert "DEEP_EVOLVE_N_MIN" in a26
+    assert "DEEP_EVOLVE_N_MAX" in a26
+
+
+def test_a26_clamps_to_global_range_then_user_range():
+    """N must be clamped to [1, 9] (global) AND [N_MIN, N_MAX] (user-override).
+    Order: clamp suggestion to user range first, then global range — so user-
+    requested 0 doesn't sneak through the global clamp."""
+    c = _content()
+    a26 = c.split("### A.2.6", 1)[1].split("## A.2.5:", 1)[0]
+    # Clamp prose / code must mention both ranges
+    assert "1" in a26 and "9" in a26  # global bounds in prose / code
+    assert "max(" in a26 or "min(" in a26 or "clamp" in a26.lower()
+
+
+def test_a26_exports_n_chosen_handle():
+    """W-6 trace: A.2.6 must export a $N_CHOSEN (or N_CURRENT) handle that
+    A.3 reads as the worktree-loop bound. Without an explicit handle, A.3
+    has to re-derive N from session.yaml or re-call the AI."""
+    c = _content()
+    a26 = c.split("### A.2.6", 1)[1].split("## A.2.5:", 1)[0]
+    assert re.search(
+        r"\$N_CHOSEN|\bN_CHOSEN\b|\$N_CURRENT|\bN_CURRENT\b",
+        a26,
+    ), "A.2.6 must export an N handle for A.3 to consume"
+
+
+def test_a26_w6_trace_n_chosen_to_a3():
+    """W-6 trace: $N_CHOSEN flows into A.3's worktree loop. Verified at
+    A.3 v3.1 extension level."""
+    c = _content()
+    a3 = c.split("## A.3:", 1)[1].split("→ Proceed to Inner Loop", 1)[0]
+    assert re.search(
+        r"\$N_CHOSEN|\bN_CHOSEN\b|\$N_CURRENT|\bN_CURRENT\b|n_current",
+        a3,
+    ), "A.3 must consume $N_CHOSEN from A.2.6 (W-6 trace)"
