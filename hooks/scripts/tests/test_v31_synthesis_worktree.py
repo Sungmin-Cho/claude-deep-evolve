@@ -14,7 +14,6 @@ cleanup_failed_synthesis_worktree
   - rc=0 on success or no-op when no synthesis worktree exists
   - rc=2 on SESSION_ROOT/SESSION_ID unset
 """
-import json
 import os
 import subprocess
 from pathlib import Path
@@ -111,6 +110,18 @@ def test_create_synthesis_worktree_rejects_pre_existing_worktree(tmp_path):
     r2 = _run(["create_synthesis_worktree", baseline], repo, env)
     assert r2.returncode == 2
     assert "exist" in r2.stderr.lower() or "already" in r2.stderr.lower()
+
+
+def test_create_synthesis_worktree_rejects_pre_existing_branch(tmp_path):
+    """Branch exists without worktree (e.g., orphan from a prior
+    git worktree remove that left the branch behind) — create must
+    reject + tell operator to cleanup_failed first."""
+    repo, sr, env, baseline = _setup(tmp_path)
+    subprocess.run(["git", "branch", "evolve/sess-test/synthesis", baseline],
+                   cwd=repo, check=True)
+    r = _run(["create_synthesis_worktree", baseline], repo, env)
+    assert r.returncode == 2
+    assert "branch" in r.stderr.lower() or "already" in r.stderr.lower()
 
 
 # ---- cleanup_failed_synthesis_worktree ------------------------------

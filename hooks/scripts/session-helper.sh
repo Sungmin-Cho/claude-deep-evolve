@@ -1538,8 +1538,9 @@ cmd_create_synthesis_worktree() {
 
   mkdir -p "$(dirname "$wt_path")"
 
-  if ! git worktree add -q "$wt_path" -b "$branch" "$baseline" 2>&1; then
-    echo "create_synthesis_worktree: git worktree add failed" >&2
+  local wt_err
+  if ! wt_err=$(git worktree add -q "$wt_path" -b "$branch" "$baseline" 2>&1); then
+    echo "create_synthesis_worktree: git worktree add failed: $wt_err" >&2
     return 2
   fi
   return 0
@@ -1575,16 +1576,18 @@ cmd_cleanup_failed_synthesis_worktree() {
   local failed_branch="evolve/${SESSION_ID}/synthesis-failed-${ts}"
 
   if git show-ref --verify --quiet "refs/heads/$branch"; then
-    if ! git branch -m "$branch" "$failed_branch" 2>&1; then
-      echo "cleanup_failed_synthesis_worktree: failed to rename $branch → $failed_branch" >&2
+    local mv_err
+    if ! mv_err=$(git branch -m "$branch" "$failed_branch" 2>&1); then
+      echo "cleanup_failed_synthesis_worktree: failed to rename $branch → $failed_branch: $mv_err" >&2
       return 2
     fi
   fi
 
   # Force-remove worktree (we don't care about uncommitted state — the
   # branch already captured the failed integration history)
-  if ! git worktree remove --force "$wt_path" 2>&1; then
-    echo "cleanup_failed_synthesis_worktree: git worktree remove failed" >&2
+  local rm_err
+  if ! rm_err=$(git worktree remove --force "$wt_path" 2>&1); then
+    echo "cleanup_failed_synthesis_worktree: git worktree remove failed: $rm_err" >&2
     return 2
   fi
 
