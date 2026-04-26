@@ -1164,7 +1164,8 @@ case statement uniform with `inner-loop.md` / `outer-loop.md` / `synthesis.md` /
 `coordinator.md` (single source-of-truth across all 4 v3.1 protocol files):
 
 ```bash
-VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | sed 's/.*"\(.*\)".*/\1/')
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" \
+  | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
 case "$VERSION" in
   2.*)            VERSION_TIER="pre_v3" ;;
   3.0|3.0.*)      VERSION_TIER="v3_0" ;;

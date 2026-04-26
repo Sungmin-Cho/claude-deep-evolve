@@ -18,7 +18,8 @@
 > inner-loop.md + outer-loop.md directly without invoking coordinator.md).
 
 ```bash
-VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | sed 's/.*"\(.*\)".*/\1/')
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" \
+  | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
 
 # Compute VERSION_TIER (4-arm pattern uniform with inner-loop / outer-loop / synthesis)
 case "$VERSION" in

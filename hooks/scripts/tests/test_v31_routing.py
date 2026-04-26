@@ -188,6 +188,82 @@ def test_commands_routing_summary_explains_version_tier_dispatch():
 
 # === SOT consistency across protocol files ===
 
+def test_version_extraction_sed_pattern_uniform_across_protocols():
+    """W-1 fix (G13 Option A re-review 2026-04-26): all 6 protocol files
+    that compute VERSION must use the canonical sed pattern that handles
+    BOTH quoted (`deep_evolve_version: "3.1.0"`) and unquoted
+    (`deep_evolve_version: 3.1.0`) yaml forms.
+
+    Pre-W-1-fix divergence:
+      - inner-loop.md / outer-loop.md / synthesis.md / resume.md:119 used
+        `sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g'` (handles both)
+      - init.md (Step 12) / resume.md (Step 5) / coordinator.md (Version Gate)
+        used `sed 's/.*"\\(.*\\)".*/\\1/'` (quoted-only — would silently
+        misclassify unquoted yaml as pre_v3 fallback)
+
+    Bug class this guards against: future hand-edit / bare-echo path emits
+    unquoted yaml; quoted-only sed extracts the literal line unchanged
+    instead of just the version string, falling through case to `pre_v3`
+    arm and silently routing v3.1+ session through legacy single-seed path.
+    Same regression class as F1 routing absence (silent fallthrough).
+    """
+    canonical = "sed 's/^deep_evolve_version:[[:space:]]*//; s/\"//g'"
+    files = [
+        ("init.md", REPO / "skills/deep-evolve-workflow/protocols/init.md"),
+        ("resume.md", REPO / "skills/deep-evolve-workflow/protocols/resume.md"),
+        ("inner-loop.md", REPO / "skills/deep-evolve-workflow/protocols/inner-loop.md"),
+        ("outer-loop.md", REPO / "skills/deep-evolve-workflow/protocols/outer-loop.md"),
+        ("synthesis.md", REPO / "skills/deep-evolve-workflow/protocols/synthesis.md"),
+        ("coordinator.md", REPO / "skills/deep-evolve-workflow/protocols/coordinator.md"),
+    ]
+    for label, p in files:
+        c = p.read_text()
+        # Each file must use the canonical sed pattern at least once.
+        assert canonical in c, (
+            f"{label} missing canonical VERSION-extraction sed pattern. "
+            f"Expected: {canonical!r}. "
+            f"Forbidden quoted-only variant `sed 's/.*\"...\\1/'` was a known footgun."
+        )
+        # Forbid the quoted-only variant explicitly (regression guard).
+        forbidden_partial = 'sed \'s/.*"\\(.*\\)".*/\\1/\''
+        assert forbidden_partial not in c, (
+            f"{label} contains the quoted-only sed variant — "
+            f"would silently misclassify unquoted yaml as pre_v3."
+        )
+
+
+def test_version_extraction_handles_quoted_and_unquoted_yaml():
+    """Simulate the canonical sed pattern in Python to confirm it correctly
+    extracts the version from BOTH yaml emit forms. Direct functional test
+    of the pattern's robustness (vs the assertion-on-string-presence test
+    above which only catches drift)."""
+    import re
+
+    def extract_version(yaml_line: str) -> str:
+        # Canonical pattern: strip "deep_evolve_version:" prefix + whitespace,
+        # then strip all double quotes. Equivalent to:
+        #   sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g'
+        s = re.sub(r'^deep_evolve_version:\s*', '', yaml_line)
+        s = s.replace('"', '')
+        return s.strip()
+
+    # Quoted form (current writers' output)
+    assert extract_version('deep_evolve_version: "3.1.0"') == "3.1.0"
+    assert extract_version('deep_evolve_version: "3.0.0"') == "3.0.0"
+    assert extract_version('deep_evolve_version: "2.2.2"') == "2.2.2"
+
+    # Unquoted form (hand-edit / bare-echo / future emit path)
+    assert extract_version('deep_evolve_version: 3.1.0') == "3.1.0"
+    assert extract_version('deep_evolve_version: 3.0.0') == "3.0.0"
+    assert extract_version('deep_evolve_version: 2.2.2') == "2.2.2"
+
+    # Tab-indented (PyYAML default 2-space indent → no tab; defensive)
+    assert extract_version('deep_evolve_version:\t3.1.0') == "3.1.0"
+
+    # Extra whitespace
+    assert extract_version('deep_evolve_version:   "3.1.0"  ') == "3.1.0"
+
+
 def test_version_tier_classification_uniform_across_protocols():
     """All 6 protocol files participating in VERSION_TIER routing must classify
     versions consistently:
