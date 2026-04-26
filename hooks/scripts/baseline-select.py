@@ -119,6 +119,7 @@ def _filter_non_quarantine(seeds):
     """5.b: killed_reason != shortcut_quarantine AND final_q > 0."""
     return [s for s in seeds
             if s.get("killed_reason") != "shortcut_quarantine"
+            and s.get("status") != "killed_shortcut_quarantine"
             and s["final_q"] > 0]
 
 

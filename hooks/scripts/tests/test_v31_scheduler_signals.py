@@ -54,6 +54,8 @@ virtual_parallel:
     assert s1["experiments_used"] == 4
     assert s1["remaining_budget"] == 6  # 10 - 4
     assert s1["independent_exploration_satisfied"] is True  # >= 3
+    assert s1["experiments_used_this_epoch"] == 4, \
+        "producer must emit the field consumed by scheduler-decide fairness checks"
     # Q history for seed-1: [0.38, 0.40, 0.42] → delta 0.04 > 0.02 threshold → "up"
     assert s1["recent_Q_trend"] == "up", \
         "seed-1 Q monotonically increasing should yield 'up'"
@@ -63,6 +65,47 @@ virtual_parallel:
     assert "session_Q_trend" in data
     assert "entropy_current" in data
     assert "forum_activity" in data
+
+
+def test_status_kept_events_feed_q_trend_legacy_shape(tmp_path):
+    """Inner-loop prose historically emitted status=kept. Signals must not
+    go blind when reading that shape; pair it with the evaluated score for q.
+    """
+    session_yaml = tmp_path / "session.yaml"
+    session_yaml.write_text("""
+deep_evolve_version: "3.1.0"
+virtual_parallel:
+  n_current: 1
+  budget_total: 10
+  budget_unallocated: 0
+  seeds:
+    - id: 1
+      status: active
+      direction: "A"
+      experiments_used: 2
+      keeps: 2
+      borrows_given: 0
+      borrows_received: 0
+      current_q: 0.42
+      allocated_budget: 10
+""")
+    journal = tmp_path / "journal.jsonl"
+    journal.write_text(
+        '{"event":"evaluated","seed_id":1,"id":1,"score":0.38,"ts":"2026-04-23T10:00:00"}\n'
+        '{"status":"kept","seed_id":1,"id":1,"ts":"2026-04-23T10:00:01"}\n'
+        '{"event":"evaluated","seed_id":1,"id":2,"score":0.42,"ts":"2026-04-23T10:05:00"}\n'
+        '{"status":"kept","seed_id":1,"id":2,"ts":"2026-04-23T10:05:01"}\n'
+    )
+    r = subprocess.run(["python3", str(COLLECTOR),
+                        "--session-yaml", str(session_yaml),
+                        "--journal", str(journal),
+                        "--forum", str(tmp_path / "nonexistent.jsonl")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    data = json.loads(r.stdout)
+    s1 = data["seeds"][0]
+    assert s1["recent_Q_trend"] == "up"
+    assert s1["last_events"][-1] == "kept"
 
 
 def test_seed_with_under_3_experiments_not_independent(tmp_path):

@@ -97,12 +97,15 @@ def main():
 
     values = parse_metrics(stdout)
     score = compute_score(values)
+    missing_metrics = len(values) != len(METRICS)
 
     if METRIC_DIRECTION == "minimize":
         # Scoring contract: higher-is-better.
         # With baseline_raw recorded, minimize metric is inverted so baseline=1.0,
         # improvement>1.0, regression<1.0 (no clamp).
-        if score <= 0:
+        if missing_metrics:
+            score = 0.0
+        elif score <= 0:
             # 0 or negative raw: ceiling (infinitely better than baseline).
             # Guards against division-by-zero; 2.0 is arbitrary but bounded downstream.
             score = 2.0 if BASELINE_SCORE is not None else 1.0

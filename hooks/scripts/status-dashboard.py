@@ -91,8 +91,9 @@ def _iter_jsonl(path: Path) -> list[dict]:
 
 
 def _aggregate_journal(events: list[dict]) -> dict[int, dict[str, int]]:
-    """Per-seed: experiments (kept+discarded+evaluated), keeps."""
+    """Per-seed: terminal experiments (kept+discarded), keeps."""
     agg: dict[int, dict[str, int]] = {}
+    seen_terminal: set[tuple[int, Any]] = set()
     for ev in events:
         sid = ev.get("seed_id")
         if not _is_int(sid):
@@ -100,7 +101,13 @@ def _aggregate_journal(events: list[dict]) -> dict[int, dict[str, int]]:
         sid = int(sid)
         bucket = agg.setdefault(sid, {"exp": 0, "keep": 0})
         et = ev.get("event") or ev.get("status")
-        if et in ("kept", "discarded", "evaluated"):
+        if et in ("kept", "discarded"):
+            exp_id = ev.get("id")
+            if exp_id is not None:
+                key = (sid, exp_id)
+                if key in seen_terminal:
+                    continue
+                seen_terminal.add(key)
             bucket["exp"] += 1
         if et == "kept":
             bucket["keep"] += 1

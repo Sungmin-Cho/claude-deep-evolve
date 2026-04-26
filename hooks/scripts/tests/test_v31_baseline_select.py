@@ -140,6 +140,20 @@ def test_non_quarantine_fallback_excludes_shortcut_quarantine():
     assert out["tier"] == "non_quarantine_fallback"
 
 
+def test_non_quarantine_fallback_excludes_shortcut_status_even_if_reasoning_text():
+    """Resume rebuild used to put free-form reasoning in killed_reason.
+    The status still carries the condition and must exclude shortcut seeds.
+    """
+    out = _run_ok({"seeds": [
+        _seed(id=1, status="killed_shortcut_quarantine",
+              killed_reason="3 flagged keeps + AI judges shortcut-prone",
+              final_q=0.95),
+        _seed(id=2, status="killed_crash_give_up",
+              killed_reason="crash_give_up", final_q=0.20),
+    ]})
+    assert out["chosen_seed_id"] == 2
+
+
 def test_non_quarantine_fallback_requires_final_q_positive():
     """5.b also requires final_q > 0; killed seeds with final_q=0 don't count."""
     out = _run_ok({"seeds": [

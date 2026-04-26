@@ -3,7 +3,7 @@
 # Usage: session-helper.sh <subcommand> [args...]
 set -Eeuo pipefail
 
-HELPER_VERSION="3.1.0"
+HELPER_VERSION="3.1.1"
 export DEEP_EVOLVE_HELPER=1
 
 # === Dependencies ===
@@ -1163,10 +1163,18 @@ with open(jl_path) as f:
             # The seed entry's `status` field uses {active, killed_<condition>,
             # completed} per T1 schema. Prefix "killed_" so downstream
             # consumers (T26 cross-seed-audit, scheduler) recognize it.
-            cond = ev.get("condition", "killed")
+            cond = ev.get("condition") or "killed"
+            if not isinstance(cond, str):
+                cond = str(cond)
             seeds_by_id[sid]["status"] = f"killed_{cond}" if not cond.startswith("killed") else cond
             seeds_by_id[sid]["killed_at"] = ev.get("ts")
-            seeds_by_id[sid]["killed_reason"] = ev.get("reasoning")
+            seeds_by_id[sid]["killed_reason"] = cond[len("killed_"):] if cond.startswith("killed_") else cond
+            if ev.get("reasoning") is not None:
+                seeds_by_id[sid]["killed_reasoning"] = ev.get("reasoning")
+            if "final_q" in ev:
+                seeds_by_id[sid]["final_q"] = ev.get("final_q")
+            if "experiments_used" in ev:
+                seeds_by_id[sid]["experiments_used"] = ev.get("experiments_used")
 sy.setdefault("virtual_parallel", {})["seeds"] = [seeds_by_id[k] for k in sorted(seeds_by_id)]
 sy["virtual_parallel"]["n_current"] = sum(
     1 for s in sy["virtual_parallel"]["seeds"] if s["status"] == "active"
@@ -1511,26 +1519,26 @@ cmd_append_kill_queue_entry() {
 # coordinator's ambient SEED_ID does not override the queued seed_id
 # (T16 auto-inject prevention).
 #
-# Known limitations (v3.1.0 ship; full fix scheduled for v3.1.1):
+# Known limitations (v3.1.x ship; full fix scheduled for a future release):
 #   C-2 Retry non-idempotence: if Phase 3 awk/mv fails after Phase 2
 #       emits seed_killed events to journal, a caller retry re-drains
 #       matched entries and emits duplicate seed_killed. Real impact
 #       requires Phase 3 filesystem failure — rare on healthy disks.
-#       Full fix (v3.1.1): entry_id per queue record + idempotent
+#       Full fix: entry_id per queue record + idempotent
 #       drain matching via journal.seed_killed.entry_id dedup.
 #   C-3-A Cross-drain race: two simultaneous drain_kill_queue
 #       invocations (e.g. distinct completed seeds) each snapshot the
 #       queue + rewrite independently. The last mv wins; earlier
 #       drain's removed entries can be resurrected. Only fires with
 #       parallel drain paths — v3.1.0's sequential coordinator does
-#       not trigger this. Full fix (v3.1.1): drain-exclusive flock
+#       not trigger this. Full fix: drain-exclusive flock
 #       on a dedicated .drain-lock file.
 #   C-3-B Identical-append multiset collapse: awk's set-difference
 #       uses line-as-token equality (seen[$0]). Byte-identical
 #       concurrent appends within the same second (same seed,
 #       condition, final_q, experiments_used — queued_at is 1-second
 #       precision) are classified as "already seen" and dropped.
-#       Full fix (v3.1.1): entry_id-based multiset matching instead
+#       Full fix: entry_id-based multiset matching instead
 #       of line-hash set-difference.
 # See .deep-review/reports/2026-04-24-224316-review.md C-2 + C-3.
 cmd_drain_kill_queue() {
