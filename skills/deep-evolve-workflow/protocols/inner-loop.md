@@ -456,7 +456,7 @@ IF $VERSION starts with "3.":
                  Write 9-column results.tsv row BEFORE reset (`rationale=""`, `flagged=true`)
                  — forensic data preserved even if commit is gc'd later.
                  Append journal event BEFORE reset — §5.5 contract:
-                 `{"id": <id>, "status": "discarded", "reason": "flagged_unexplained", "rationale": "", "timestamp": "<now>"}`
+                 `{"id": <id>, "event": "discarded", "seed_id": <seed_id>, "reason": "flagged_unexplained", "rationale": "", "timestamp": "<now>"}`
                  Branch & Clean-Tree Guard + `git reset --hard HEAD~1`.
                  Append `{"id": <id>, "status": "rollback_completed", "timestamp": "<now>"}`.
                  Update `session.yaml`: `experiments.total++`, `experiments.discarded++`.
@@ -474,7 +474,7 @@ IF $VERSION starts with "3.":
   **Step 5.e — Persist**:
 
   **Keep branch** (score improved, rationale passed 5.d OR flagged not applicable):
-    - Append journal: `{"id": <id>, "status": "kept", "rationale": "<text>", "score_delta": <n>, "loc_delta": <n>, "flagged": <bool>, "timestamp": "<now>"}`
+    - Append journal: `{"id": <id>, "event": "kept", "seed_id": <seed_id>, "q": <score>, "score": <score>, "rationale": "<text>", "score_delta": <n>, "loc_delta": <n>, "flagged": <bool>, "timestamp": "<now>"}`
     - Append 9-column results.tsv row: `<COMMIT>\t<score>\tkept\t<idea_category>\t<score_delta>\t<loc_delta>\t<flagged>\t<rationale>\t<idea description>`
     - Update `session.yaml`:
       - `metric.current = score`
@@ -506,7 +506,7 @@ IF $VERSION starts with "3.":
       v2 and v3.0.x sessions: skip this bullet (no forum).
 
   **Discard branch** (from 5.b `reason="regression"`, OR 5.a `reason="crash"`, OR 5.a `reason="diagnosed_gave_up"`):
-    - Append journal: `{"id": <id>, "status": "discarded", "reason": "<regression|crash|diagnosed_gave_up>", "timestamp": "<now>"}`
+    - Append journal: `{"id": <id>, "event": "discarded", "seed_id": <seed_id>, "reason": "<regression|crash|diagnosed_gave_up>", "timestamp": "<now>"}`
     - Append 9-column results.tsv row: `<COMMIT>\t<score>\tdiscarded\t<idea_category>\t<score_delta>\t<loc_delta>\t<flagged>\t\t<idea description>`
       (empty `rationale` for discard branch — rationale is only required on keep)
     - Update `session.yaml`:
@@ -677,7 +677,7 @@ ELSE (v2):
   judgment는 항상 단일 규칙을 따릅니다: **score_new > score_old + min_delta → keep**
   
   **If score_new > score_old + min_delta** (where `min_delta` = `strategy.yaml.judgment.min_delta`, default 0.001):
-  - Append to `journal.jsonl`: `{"id": <id>, "status": "kept", "timestamp": "<now>"}`
+  - Append to `journal.jsonl`: `{"id": <id>, "event": "kept", "timestamp": "<now>"}`
   - Append to `results.tsv`: `<COMMIT>\t<score>\tkept\t<idea description>`
   - Update `session.yaml`: `metric.current = score`, `metric.best = max(best, score)`, increment `experiments.total` and `experiments.kept`
   - **Code Archive**: Record the kept commit in `$SESSION_ROOT/code-archive/`:
@@ -691,7 +691,7 @@ ELSE (v2):
     ```
   
   **If score same or worse:**
-  - Append to `journal.jsonl`: `{"id": <id>, "status": "discarded", "timestamp": "<now>"}`
+  - Append to `journal.jsonl`: `{"id": <id>, "event": "discarded", "timestamp": "<now>"}`
   - Append to `results.tsv`: `<COMMIT>\t<score>\tdiscarded\t<idea description>`
   - Update `session.yaml`: increment `experiments.total` and `experiments.discarded`
   - Run **Branch & Clean-Tree Guard** (verify branch + clean worktree)
@@ -702,7 +702,7 @@ ELSE (v2):
   - Attempt a simple fix (1 attempt only)
   - If fix works, re-evaluate
   - If fix fails:
-    - Append to `journal.jsonl`: `{"id": <id>, "status": "discarded", "reason": "crash", "timestamp": "<now>"}`
+    - Append to `journal.jsonl`: `{"id": <id>, "event": "discarded", "reason": "crash", "timestamp": "<now>"}`
     - Append to `results.tsv`: `<COMMIT>\t0\tcrash\t<idea description>`
     - Update `session.yaml`: increment `experiments.total` and `experiments.crashed`
     - Run **Branch & Clean-Tree Guard** (verify branch + clean worktree)

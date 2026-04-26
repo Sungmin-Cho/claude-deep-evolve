@@ -70,6 +70,14 @@ def test_v31_journal_events_require_seed_id_tag():
     )
 
 
+def test_v31_terminal_experiment_events_use_event_field_not_status_only():
+    c = _content()
+    assert '"event": "kept"' in c
+    assert '"event": "discarded"' in c
+    assert '"status": "kept"' not in c
+    assert '"status": "discarded"' not in c
+
+
 def test_v2_step_1_content_preserved():
     c = _content()
     assert "**Step 1 — Idea Selection**" in c

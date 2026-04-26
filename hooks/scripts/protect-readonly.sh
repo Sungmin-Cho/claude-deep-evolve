@@ -117,6 +117,32 @@ JSON
   exit 2
 }
 
+block_sealed_read() {
+  cat <<JSON
+{"decision":"block","reason":"Deep Evolve Guard (v3 seal_prepare_read): 실험 중 prepare.py / prepare-protocol.md의 Read가 차단되었습니다. shortcut 탐지 회피용 하드코드 방지. 비활성화하려면 strategy.yaml.shortcut_detection.seal_prepare_read: false."}
+JSON
+  exit 2
+}
+
+command_references() {
+  local needle="$1"
+  [[ "$COMMAND_PAYLOAD" == *"$needle"* || "$COMMAND" == *"$needle"* ]]
+}
+
+is_direct_prepare_execution() {
+  local first second rest
+  read -r first second rest <<< "$COMMAND"
+  case "$first" in
+    python|python[0-9]*|*/python|*/python[0-9]*) ;;
+    *) return 1 ;;
+  esac
+  second="${second#\"}"
+  second="${second%\"}"
+  second="${second#\'}"
+  second="${second%\'}"
+  [[ "$second" == "$SESSION_ROOT/prepare.py" || "$second" == "prepare.py" ]]
+}
+
 # === v3.0.0: optional read-block for prepare.py / prepare-protocol.md ===
 # Gated on DEEP_EVOLVE_SEAL_PREPARE=1 (opt-in from strategy.yaml.shortcut_detection).
 # Blocks Read tool calls that would reveal scenario text the agent could hardcode
@@ -137,10 +163,7 @@ if [[ "$SEAL_PREPARE_READ" == "1" && "$TOOL_NAME" == "Read" ]]; then
       FILE_PATH="$(normalize_path "$PROJECT_ROOT/$FILE_PATH")"
     fi
     if [[ "$FILE_PATH" == "$PROTECTED_PREPARE" || "$FILE_PATH" == "$PROTECTED_PROTOCOL" ]]; then
-      cat <<JSON
-{"decision":"block","reason":"Deep Evolve Guard (v3 seal_prepare_read): 실험 중 prepare.py / prepare-protocol.md의 Read가 차단되었습니다. shortcut 탐지 회피용 하드코드 방지. 비활성화하려면 strategy.yaml.shortcut_detection.seal_prepare_read: false."}
-JSON
-      exit 2
+      block_sealed_read
     fi
   fi
 fi
@@ -173,6 +196,10 @@ if [[ "$TOOL_NAME" != "Bash" && "$TOOL_NAME" != "Read" ]]; then
       if [[ "$META_MODE" != "program_update" && "$META_MODE" != "outer_loop" ]]; then
         block_protected
       fi ;;
+    "$SESSION_ROOT"/worktrees/seed_*/program.md)
+      if [[ "$META_MODE" != "program_update" && "$META_MODE" != "outer_loop" ]]; then
+        block_protected
+      fi ;;
     "$PROTECTED_STRATEGY")
       if [[ "$META_MODE" != "outer_loop" ]]; then
         block_protected
@@ -186,9 +213,23 @@ COMMAND=""
 if echo "$TOOL_INPUT" | grep -q '"command"'; then
   COMMAND="$(echo "$TOOL_INPUT" | grep -o '"command"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"command"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
 fi
+COMMAND_PAYLOAD="$TOOL_INPUT"
 
 if [[ -z "$COMMAND" ]]; then
   exit 0
+fi
+
+# v3.0.0 seal_prepare_read must also cover Bash-based file reads such as
+# `cat .deep-evolve/<sid>/prepare.py`; executing prepare.py remains allowed.
+if [[ "$SEAL_PREPARE_READ" == "1" ]]; then
+  for PROTECTED in "prepare.py" "prepare-protocol.md" "$SESSION_ROOT/prepare.py" "$SESSION_ROOT/prepare-protocol.md"; do
+    if command_references "$PROTECTED"; then
+      if [[ "$PROTECTED" == "prepare.py" || "$PROTECTED" == "$SESSION_ROOT/prepare.py" ]] && is_direct_prepare_execution; then
+        continue
+      fi
+      block_sealed_read
+    fi
+  done
 fi
 
 # Build protected file list (conditional on META_MODE)
@@ -203,12 +244,14 @@ if [[ "$META_MODE" != "outer_loop" ]]; then
   BASH_PROTECTED_FILES+=("strategy.yaml" "$SESSION_ROOT/strategy.yaml")
 fi
 
-# Check if the bash command references protected files with write operations
+# Deny-by-default for Bash references to protected files. Shell parsing is not
+# reliable enough to distinguish every read/write form; direct prepare.py
+# execution is the one active-run exception needed for evaluations.
 for PROTECTED in "${BASH_PROTECTED_FILES[@]}"; do
-  if echo "$COMMAND" | grep -qE "(>|>>|sed\s+-i|tee|cp|mv|chmod|chown|perl\s+.*-i)\s*.*$PROTECTED"; then
-    block_protected
-  fi
-  if echo "$COMMAND" | grep -qF "$PROTECTED" && echo "$COMMAND" | grep -qE "(>|>>|sed\s+-i|tee\s|cp\s|mv\s)"; then
+  if command_references "$PROTECTED"; then
+    if [[ "$PROTECTED" == "prepare.py" || "$PROTECTED" == "$SESSION_ROOT/prepare.py" ]] && is_direct_prepare_execution; then
+      continue
+    fi
     block_protected
   fi
 done

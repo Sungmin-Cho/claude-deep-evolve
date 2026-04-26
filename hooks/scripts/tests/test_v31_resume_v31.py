@@ -623,6 +623,10 @@ def test_resume_drift_routes_to_rebuild_seeds_from_journal(tmp_path):
             f"rebuild_seeds_from_journal must reflect journal truth: "
             f"seed_3 was killed in journal but yaml status={seed_3_status!r}"
         )
+        assert post_seeds[3].get("killed_reason") == "sustained_regression", (
+            "killed_reason must store the whitelist condition, not free-form "
+            "reasoning, so baseline-select can exclude shortcut_quarantine"
+        )
 
 
 # ---------- Scenario 6: v3.0 resume under v3.1 code (T46) ----------

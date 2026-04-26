@@ -213,7 +213,7 @@ def test_dashboard_malformed_journal_skip_warn(tmp_path):
 
 
 def test_dashboard_aggregates_experiments_per_seed(tmp_path):
-    """Behavioral test: count of `kept`/`discarded` events with seed_id=k
+    """Behavioral test: count of terminal `kept`/`discarded` events with seed_id=k
     must match the exp= column for that seed. W-6 trace from journal
     aggregation to dashboard column."""
     sr = _stage_session(tmp_path)
@@ -224,7 +224,7 @@ def test_dashboard_aggregates_experiments_per_seed(tmp_path):
             ev = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if ev.get("event") in ("kept", "discarded", "evaluated"):
+        if ev.get("event") in ("kept", "discarded"):
             sid = ev.get("seed_id")
             if isinstance(sid, int):
                 seen[sid] = seen.get(sid, 0) + 1
@@ -240,6 +240,40 @@ def test_dashboard_aggregates_experiments_per_seed(tmp_path):
         assert m, f"seed [{sid}] line missing"
         assert int(m.group(1)) == count, \
             f"seed [{sid}] exp mismatch: dashboard={m.group(1)} journal={count}"
+
+
+def test_dashboard_does_not_double_count_evaluated_and_kept_same_experiment(tmp_path):
+    sr = tmp_path / "session"
+    sr.mkdir()
+    (sr / "session.yaml").write_text("""
+session_id: s1
+virtual_parallel:
+  n_current: 1
+  budget_total: 10
+  budget_unallocated: 9
+  seeds:
+    - id: 1
+      status: active
+      direction: A
+      experiments_used: 1
+      keeps: 1
+      borrows_given: 0
+      borrows_received: 0
+      final_q: 1.1
+      allocated_budget: 10
+""")
+    (sr / "journal.jsonl").write_text(
+        '{"event":"evaluated","seed_id":1,"id":1,"score":1.1,"ts":"2026-04-23T10:00:00Z"}\n'
+        '{"event":"kept","seed_id":1,"id":1,"q":1.1,"ts":"2026-04-23T10:01:00Z"}\n'
+    )
+    (sr / "forum.jsonl").write_text("")
+    r = _run([
+        "--session-yaml", str(sr / "session.yaml"),
+        "--journal", str(sr / "journal.jsonl"),
+        "--forum", str(sr / "forum.jsonl"),
+    ])
+    assert r.returncode == 0, r.stderr
+    assert re.search(r"\[1\][^\n]*exp=1\b", r.stdout), r.stdout
 
 
 def test_dashboard_aggregates_borrow_recv_given(tmp_path):

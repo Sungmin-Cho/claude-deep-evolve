@@ -48,6 +48,22 @@ def load_jsonl(path):
     return out
 
 
+def event_type(event):
+    """Canonical event kind; accepts legacy journal rows that used status."""
+    return event.get("event") or event.get("status")
+
+
+def numeric_q(event, evaluated_by_key):
+    q = event.get("q", event.get("score"))
+    if isinstance(q, (int, float)) and not isinstance(q, bool):
+        return float(q)
+    key = (event.get("seed_id"), event.get("id"))
+    q = evaluated_by_key.get(key)
+    if isinstance(q, (int, float)) and not isinstance(q, bool):
+        return float(q)
+    return 0.0
+
+
 def _die(msg, rc=2):
     print(f"error: {msg}", file=sys.stderr)
     sys.exit(rc)
@@ -75,6 +91,15 @@ def main():
     journal_events = load_jsonl(args.journal)
     forum_events = load_jsonl(args.forum)
 
+    evaluated_by_key = {}
+    for e in journal_events:
+        if event_type(e) != "evaluated":
+            continue
+        key = (e.get("seed_id"), e.get("id"))
+        score = e.get("score", e.get("q"))
+        if key[0] is not None and key[1] is not None and isinstance(score, (int, float)) and not isinstance(score, bool):
+            evaluated_by_key[key] = float(score)
+
     # Build per-seed signals
     per_seed = []
     for s in seeds_cfg:
@@ -84,8 +109,8 @@ def main():
         sid = s["id"]
         # Last 5 Q values for this seed (from journal "kept" events)
         seed_kepts = [e for e in journal_events
-                      if e.get("event") == "kept" and e.get("seed_id") == sid]
-        qs = [e.get("q", 0.0) for e in seed_kepts][-5:]
+                      if event_type(e) == "kept" and e.get("seed_id") == sid]
+        qs = [numeric_q(e, evaluated_by_key) for e in seed_kepts][-5:]
         # Last 3 events for this seed
         seed_events = [e for e in journal_events if e.get("seed_id") == sid][-3:]
         per_seed.append({
@@ -93,8 +118,11 @@ def main():
             "status": s.get("status", "active"),
             "direction": s.get("direction"),
             "recent_Q_trend": first_last_delta_trend(qs),
-            "last_events": [e.get("event") for e in seed_events],
+            "last_events": [event_type(e) for e in seed_events],
             "experiments_used": s.get("experiments_used", 0),
+            "experiments_used_this_epoch": s.get(
+                "experiments_used_this_epoch", s.get("experiments_used", 0)
+            ),
             "keeps": s.get("keeps", 0),
             "borrows_given": s.get("borrows_given", 0),
             "borrows_received": s.get("borrows_received", 0),
@@ -116,7 +144,7 @@ def main():
     # ephemeral block state — matches § 11.3 git-log-is-truth posture.
     in_flight = {}  # seed_id -> bool
     for e in journal_events:
-        et = e.get("event")
+        et = event_type(e)
         if et == "seed_scheduled":
             sid = e.get("chosen_seed_id")
             if sid is not None:
@@ -136,15 +164,15 @@ def main():
         events_up_to = [e for e in journal_events if e.get("ts", "") <= t]
         qs_per_seed = {}
         for e in events_up_to:
-            if e.get("event") == "kept":
+            if event_type(e) == "kept":
                 sid = e.get("seed_id")
-                q = e.get("q", 0.0)
+                q = numeric_q(e, evaluated_by_key)
                 qs_per_seed[sid] = max(qs_per_seed.get(sid, 0.0), q)
         if qs_per_seed:
             best_q_series.append(max(qs_per_seed.values()))
 
     # forum_activity: forum events in last 5 blocks (blocks = seed_scheduled events)
-    sched_events = [e for e in journal_events if e.get("event") == "seed_scheduled"]
+    sched_events = [e for e in journal_events if event_type(e) == "seed_scheduled"]
     last_5_sched_ts = [e.get("ts") for e in sched_events[-5:]]
     if last_5_sched_ts:
         recent_forum = [e for e in forum_events
@@ -157,7 +185,7 @@ def main():
         "session_Q_trend": first_last_delta_trend(best_q_series),
         "entropy_current": None,  # wired via v3.0 entropy tracker in T25 integration
         "flagged_rate": sum(1 for e in journal_events
-                            if e.get("event") == "shortcut_flagged"),
+                            if event_type(e) == "shortcut_flagged"),
         "forum_activity": len(recent_forum),
         "budget_unallocated": vp.get("budget_unallocated", 0),
         "n_current": vp.get("n_current", len(seeds_cfg)),
