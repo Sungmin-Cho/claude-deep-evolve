@@ -328,3 +328,110 @@ def test_allowed_decision_set_matches_scheduler_decide_source():
     assert src_set == ALLOWED_DECISION, (
         f"ALLOWED_DECISION drift: source={src_set}, test={ALLOWED_DECISION}"
     )
+
+
+# ---------- G12 re-review G2 fix: required fields per decision ----------
+
+def test_kill_then_schedule_requires_kill_target():
+    """G12 re-review G2 fix (2026-04-26): scheduler-decide must reject
+    kill_then_schedule decisions missing kill_target (rc=2 = operator
+    error), not accept with kill_target:null. Pre-G2 returned rc=0 +
+    accepted:true with null field, which coordinator then propagated
+    as `apply_kill(null)` → silent downstream failure."""
+    decision = {
+        "decision": "kill_then_schedule",
+        # kill_target OMITTED — must reject
+        "chosen_seed_id": 1,
+        "block_size": 3,
+        "reasoning": "x",
+        "signals_used": [],
+    }
+    out, rc, err = _decide(decision)
+    assert rc == 2, (
+        f"missing kill_target must rc=2 (operator error), got rc={rc} "
+        f"out={out!r} err={err!r}"
+    )
+    assert "kill_target" in err.lower(), (
+        f"error must mention kill_target field: {err!r}"
+    )
+
+
+def test_kill_then_schedule_rejects_null_kill_target():
+    """G12 re-review G2 fix: explicit null is equivalent to missing —
+    must rc=2."""
+    decision = {
+        "decision": "kill_then_schedule",
+        "kill_target": None,
+        "chosen_seed_id": 1,
+        "block_size": 3,
+        "reasoning": "x",
+        "signals_used": [],
+    }
+    out, rc, err = _decide(decision)
+    assert rc == 2, f"null kill_target must rc=2 (got rc={rc}, err={err!r})"
+
+
+def test_kill_then_schedule_rejects_non_int_kill_target():
+    """G12 re-review G2 fix: non-int kill_target (string, bool) must rc=2."""
+    decision = {
+        "decision": "kill_then_schedule",
+        "kill_target": "1",  # string, not int
+        "chosen_seed_id": 1,
+        "block_size": 3,
+        "reasoning": "x",
+        "signals_used": [],
+    }
+    out, rc, err = _decide(decision)
+    assert rc == 2, f"string kill_target must rc=2 (got rc={rc}, err={err!r})"
+
+
+def test_grow_then_schedule_requires_new_seed_id():
+    """G12 re-review G2 fix (2026-04-26): scheduler-decide must reject
+    grow_then_schedule decisions missing new_seed_id (rc=2 = operator
+    error). Pre-G2 returned rc=0 + accepted:true with null field, which
+    coordinator then propagated as `dispatch_seed(new_seed_id=null)` →
+    silent downstream failure."""
+    decision = {
+        "decision": "grow_then_schedule",
+        # new_seed_id OMITTED — must reject
+        "chosen_seed_id": 4,
+        "block_size": 3,
+        "reasoning": "x",
+        "signals_used": [],
+    }
+    out, rc, err = _decide(decision)
+    assert rc == 2, (
+        f"missing new_seed_id must rc=2 (operator error), got rc={rc} "
+        f"out={out!r} err={err!r}"
+    )
+    assert "new_seed_id" in err.lower(), (
+        f"error must mention new_seed_id field: {err!r}"
+    )
+
+
+# ---------- G12 re-review G1 fix: errexit safety ----------
+
+def test_coordinator_errexit_safe_pattern_documented():
+    """G12 re-review G1 fix (2026-04-26): coordinator.md must use the
+    errexit-safe `if cmd; then rc=0; else rc=$?; fi` pattern around
+    scheduler-decide.py invocation. Pre-G1 used bare `validated=$(...)
+    rc=$?` which under set -e exits BEFORE rc=$? executes — empirically
+    verified.
+
+    This is a content-level test (coordinator.md is markdown executed
+    by AI agent, not directly bash-tested). Asserts the pattern is
+    present + the legacy bare pattern is absent."""
+    coord = ROOT / "skills/deep-evolve-workflow/protocols/coordinator.md"
+    rm = coord.read_text(encoding="utf-8")
+    # Errexit-safe pattern: `if validated=$(...)` — captures rc safely
+    import re
+    safe_pattern = re.search(
+        r'if\s+validated=\$\(\s*hooks/scripts/scheduler-decide\.py',
+        rm,
+    )
+    assert safe_pattern, (
+        "coordinator.md must use errexit-safe `if validated=$(...) ...; "
+        "then rc=0; else rc=$?; fi` pattern around scheduler-decide.py "
+        "invocation (G1 fix per 2026-04-26 re-review). Bare `var=$(...)` "
+        "+ `rc=$?` triggers errexit before rc capture."
+    )

@@ -6,9 +6,20 @@ clamps block_size to allowed set {1,2,3,5,8} with lower-tie-break, emits
 a block_size_adjusted journal event if clamping occurred.
 
 Exit codes:
-  0 -- decision accepted (possibly clamped)
-  2 -- operator error (invalid JSON, missing required fields, unknown decision
-       type, non-int block_size). Stderr carries 'error: ...' message.
+  0 -- decision accepted (possibly clamped). stdout: result JSON with
+       accepted:true.
+  1 -- decision rejected (business rule violation, e.g., kill_target ==
+       chosen_seed_id, new_seed_allocation below P3 floor). stdout:
+       rejection JSON with accepted:false and reason field. Coordinator
+       should log + continue (next AI proposal). G12 final review F2
+       fix (2026-04-26): added rc=1 distinction so shell callers using
+       `if scheduler-decide ...; then` correctly treat rejection as
+       failure. Coordinator wraps in errexit-safe `if/else` per re-review
+       G1 fix (2026-04-26).
+  2 -- operator error (invalid JSON, missing required fields, unknown
+       decision type, non-int block_size, missing decision-specific
+       required field per REQUIRED_BY_DECISION). Stderr carries
+       'error: ...' message.
 """
 import argparse
 import json
@@ -18,6 +29,21 @@ import sys
 ALLOWED_BLOCK = [1, 2, 3, 5, 8]
 ALLOWED_DECISION = {"schedule", "kill_then_schedule", "grow_then_schedule"}
 REQUIRED_FIELDS = {"decision", "chosen_seed_id", "block_size", "reasoning", "signals_used"}
+
+# G12 re-review G2 fix (2026-04-26): per-decision required fields. The
+# coordinator case statement consumes these fields directly:
+#   kill_then_schedule → apply_kill(validated.kill_target)
+#   grow_then_schedule → dispatch_seed(new_seed_id=validated.new_seed_id)
+# Pre-G2 scheduler-decide accepted decisions with these fields omitted /
+# null, propagating null operations downstream. Empirical verification
+# (re-review 2026-04-26-152334): kill decision without kill_target
+# returned rc=0 + accepted:true + kill_target:null. Post-G2: missing/
+# null/non-int required fields rejected at rc=2 (operator error).
+REQUIRED_BY_DECISION = {
+    "schedule": [],  # only base REQUIRED_FIELDS needed
+    "kill_then_schedule": ["kill_target"],
+    "grow_then_schedule": ["new_seed_id"],
+}
 
 
 def _die(msg, rc=2):
@@ -69,6 +95,21 @@ def main():
 
     if d["decision"] not in ALLOWED_DECISION:
         _die(f"invalid decision type: {d['decision']!r} (allowed: {sorted(ALLOWED_DECISION)})")
+
+    # G12 re-review G2 fix (2026-04-26): per-decision required fields.
+    # The coordinator case statement consumes these fields directly
+    # (apply_kill(validated.kill_target), dispatch_seed(new_seed_id=...)).
+    # Pre-G2 scheduler-decide accepted decisions with these fields
+    # omitted/null, propagating null operations downstream. Validate
+    # schema BEFORE business rejections (G3 ordering fix) — malformed
+    # operator/AI inputs must rc=2 (abort), not rc=1 (continue retry).
+    decision_required = REQUIRED_BY_DECISION.get(d["decision"], [])
+    for field in decision_required:
+        v = d.get(field)
+        if v is None:
+            _die(f"{d['decision']} requires non-null {field} (got: missing or null)")
+        if not isinstance(v, int) or isinstance(v, bool):
+            _die(f"{d['decision']}.{field} must be integer (got: {v!r})")
 
     # T42 W-7 hardening: kill_target must differ from chosen_seed_id for
     # kill_then_schedule (killing seed N then scheduling the same seed N is

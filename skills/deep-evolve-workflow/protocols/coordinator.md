@@ -86,16 +86,28 @@ while session_active:
   decision = invoke_AI_for_decision(signals, structured_prompt_per_§6.2)
 
   # 5. Validate + clamp
-  # G12 final review F2 fix (2026-04-26): scheduler-decide.py emits
-  # rc=1 on business rejection (accepted: false) per the rc=0=accepted
-  # contract. Capture rc to distinguish:
+  # G12 final review F2 fix (2026-04-26) + re-review G1 fix (2026-04-26):
+  # scheduler-decide.py emits rc=1 on business rejection (accepted: false)
+  # per the rc=0=accepted contract. Capture rc safely under errexit:
   #   rc=0  → decision accepted, validated.accepted = true, proceed to case
   #   rc=1  → decision rejected (validated.accepted = false), log + continue
   #   rc=2  → operator error (malformed input), abort coordinator
-  validated=$(hooks/scripts/scheduler-decide.py \
-    --decision "$decision" \
-    --signals "$signals")
-  rc=$?
+  #
+  # G1 fix: wrap in `if cmd; then ... else rc=$?; fi` pattern. Bare
+  # `var=$(failing_cmd); rc=$?` triggers errexit BEFORE rc=$? executes
+  # under `set -e` / `set -Eeuo pipefail` (commonly used in helper
+  # scripts), aborting the coordinator on every business rejection.
+  # Empirical verification (re-review 2026-04-26-152334): `bash -e -c
+  # 'var=$(false); echo REACHED'` exits without printing REACHED.
+  # The if/else pattern below is errexit-safe — the substitution failure
+  # is consumed by the if condition, not propagated to errexit.
+  if validated=$(hooks/scripts/scheduler-decide.py \
+      --decision "$decision" \
+      --signals "$signals"); then
+    rc=0
+  else
+    rc=$?
+  fi
   if [ $rc -eq 1 ]; then
     # Business rejection (e.g., kill_target == chosen_seed_id, allocation
     # below P3 floor). Log and continue to next iteration; AI scheduler
