@@ -153,30 +153,64 @@ def test_grow_then_schedule_rejected_when_allocation_below_p3():
         assert err.strip()
 
 
+def _read_fixture_pool_and_n(fixture_name, tmp_path):
+    """T42 review fix (2026-04-26 Stage 1 Issue #1 + Stage 2 Info #1):
+    parse the fixture's session.yaml to extract `unallocated_pool` and
+    `virtual_parallel.N`, making the helper-driven tests genuinely
+    fixture-driven (vs the pre-fix dead `pool_yaml` variable). If
+    the fixture's P3 boundary values change in the future, the test
+    follows automatically — no literal-value drift."""
+    import yaml
+    fixture_yaml = _copy_fixture(fixture_name, tmp_path) / "session.yaml"
+    data = yaml.safe_load(fixture_yaml.read_text())
+    vp = data["virtual_parallel"]
+    return int(vp["unallocated_pool"]), int(vp["N"])
+
+
 def test_grow_allocation_pool_sufficient_via_compute_helper(tmp_path):
-    """T42 fixture-driven: with pool=3 (just above P3), compute_grow_allocation
-    must succeed (rc=0) and return allocation=3 per Q6 ceil() formula:
-    ceil(3 / (2*3)) = 1, max(1, 3) = 3."""
-    pool_yaml = _copy_fixture("pool_just_above_p3", tmp_path) / "session.yaml"
+    """T42 fixture-driven: pool >= P3 floor (3) → compute_grow_allocation
+    must succeed (rc=0) and return allocation per Q6 ceil() formula:
+    ceil(pool / (2*N)) then max with P3 floor.
+
+    Fixture: pool_just_above_p3 (pool=3, N=3) → ceil(3/6)=1, max(1,3)=3.
+
+    G12 review fix 2026-04-26: pool/N now extracted from fixture session.yaml
+    (was: hardcoded "3" "3" with copied-but-unused fixture)."""
+    pool, n_current = _read_fixture_pool_and_n("pool_just_above_p3", tmp_path)
+    assert pool == 3 and n_current == 3, (
+        f"pool_just_above_p3 fixture sanity: expected pool=3 N=3, got "
+        f"pool={pool} N={n_current} (fixture drift)"
+    )
     helper = ROOT / "hooks/scripts/session-helper.sh"
     p = subprocess.run(
-        ["bash", str(helper), "compute_grow_allocation", "3", "3"],
+        ["bash", str(helper), "compute_grow_allocation", str(pool), str(n_current)],
         capture_output=True, text=True,
     )
-    assert p.returncode == 0, f"pool=3 must allow grow (err={p.stderr!r})"
-    # Output should be the allocation
+    assert p.returncode == 0, f"pool={pool} must allow grow (err={p.stderr!r})"
+    # Output should be the allocation; with pool=3 N=3 → P3-floor 3 wins
     assert p.stdout.strip() == "3", f"expected 3, got {p.stdout!r}"
 
 
 def test_grow_allocation_pool_below_p3_rejected(tmp_path):
-    """T42 fixture-driven: pool=2 < P3 floor. compute_grow_allocation must
-    reject with rc != 0 + actionable error."""
+    """T42 fixture-driven: pool < P3 floor → compute_grow_allocation must
+    reject with rc != 0 + actionable error.
+
+    Fixture: pool_below_p3 (pool=2, N=3) → below floor.
+
+    G12 review fix 2026-04-26: pool/N now extracted from fixture session.yaml
+    (was: hardcoded "2" "3" with no fixture copy at all despite
+    'fixture-driven' docstring claim)."""
+    pool, n_current = _read_fixture_pool_and_n("pool_below_p3", tmp_path)
+    assert pool == 2 and n_current == 3, (
+        f"pool_below_p3 fixture sanity: expected pool=2 N=3, got "
+        f"pool={pool} N={n_current} (fixture drift)"
+    )
     helper = ROOT / "hooks/scripts/session-helper.sh"
     p = subprocess.run(
-        ["bash", str(helper), "compute_grow_allocation", "2", "3"],
+        ["bash", str(helper), "compute_grow_allocation", str(pool), str(n_current)],
         capture_output=True, text=True,
     )
-    assert p.returncode != 0, "pool=2 must reject grow (below P3 floor)"
+    assert p.returncode != 0, f"pool={pool} must reject grow (below P3 floor)"
     assert p.stderr.strip(), "must emit error message"
 
 
