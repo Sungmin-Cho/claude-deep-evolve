@@ -7,23 +7,43 @@
 
 ## Version Gate
 
-> **T37 annotation**: This file is v3.1+ only. v3.0.x sessions never
-> enter coordinator.md — their inner-loop.md / outer-loop.md handle the
-> non-virtual-parallel single-seed flow inline. The strict
-> `case "$VERSION" in 3.1.*) ;; *) exit 1 ;; esac` below is intentional;
-> see synthesis.md for the W-1 4-arm pattern that does support pre-v3.1
-> graceful exit. Coordinator's caller (the dispatcher) routes pre-v3.1
-> sessions away from this file before invoking it.
+> **T37 + T38 (W2 G11 fold-in)**: This file is for v3.1+ sessions only.
+> The 4-arm `case "$VERSION" in` pattern below mirrors inner-loop.md /
+> outer-loop.md / synthesis.md so all 4 v3.1 protocol files share a single
+> VERSION_TIER source-of-truth. Coordinator-specific addition: after computing
+> VERSION_TIER, exit unless tier == `v3_1_plus`. Forward-compat: v3.2.x and
+> v4.x sessions route through coordinator unchanged. Defense-in-depth:
+> v3.0.x / v2.x / pre-v3 sessions are rejected at coordinator-gate level even
+> if dispatcher routing breaks (dispatcher should route them through
+> inner-loop.md + outer-loop.md directly without invoking coordinator.md).
 
 ```bash
 VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | sed 's/.*"\(.*\)".*/\1/')
+
+# Compute VERSION_TIER (4-arm pattern uniform with inner-loop / outer-loop / synthesis)
 case "$VERSION" in
-  3.1.*) ;;
+  2.*)
+    VERSION_TIER="pre_v3"
+    ;;
+  3.0|3.0.*)
+    VERSION_TIER="v3_0"
+    ;;
+  3.*|4.*)
+    VERSION_TIER="v3_1_plus"
+    ;;
   *)
-    echo "coordinator.md entered with non-v3.1 session — this is a bug" >&2
-    exit 1
+    echo "warn: unrecognized VERSION='${VERSION:-<unset>}' — treating as pre_v3" >&2
+    VERSION_TIER="pre_v3"
     ;;
 esac
+export VERSION_TIER
+
+# Coordinator-only gate: tier must be v3_1_plus
+if [ "$VERSION_TIER" != "v3_1_plus" ]; then
+  echo "error: coordinator.md requires v3.1+ session (VERSION='${VERSION:-<unset>}', VERSION_TIER='$VERSION_TIER')" >&2
+  echo "error: dispatcher should route v3.0.x / v2.x sessions through inner-loop.md + outer-loop.md directly" >&2
+  exit 1
+fi
 ```
 
 ## Session Setup (once per coordinator start / resume)

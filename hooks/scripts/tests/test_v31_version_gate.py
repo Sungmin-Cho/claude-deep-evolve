@@ -13,6 +13,7 @@ session under v3.1 code routes to legacy path) is exercised by G12's
 test_v31_resume_v31.py scenario 6.
 """
 import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).parents[3]
@@ -53,19 +54,99 @@ def test_synthesis_initializes_version_tier():
         "synthesis.md must export VERSION_TIER alongside its existing case"
 
 
-def test_coordinator_keeps_strict_v3_1_only_gate():
-    """coordinator.md is v3.1+ exclusive (per file header line 1).
-    T37 leaves the gate code unchanged but adds an annotation comment."""
+def _coordinator_gate_subprocess(version_str, session_root="/tmp/t38-mock"):
+    """Simulate coordinator.md's gate with a fixed VERSION value.
+
+    Strategy: read the gate's bash block from coordinator.md, replace the
+    dynamic `VERSION=$(grep ... session.yaml | sed ...)` line with a literal
+    `VERSION="<version_str>"` assignment, then exec the resulting block under
+    /bin/bash. Returns (rc, stderr_text)."""
     c = _read("coordinator.md")
-    # Must still bail on non-3.1
-    assert re.search(r'\b3\.1\.\*\)\s*;;', c) or \
-        re.search(r'starts with "3\.1', c)
-    # Annotation comment T37 adds
+    gate_start = c.index("## Version Gate")
+    gate_end = c.index("\n## ", gate_start + 1)
+    block = c[gate_start:gate_end]
+    bash_blocks = re.findall(r"```bash\n(.*?)\n```", block, re.DOTALL)
+    assert bash_blocks, "coordinator.md Version Gate must contain at least one bash block"
+    bash = "\n".join(bash_blocks)
+    # Replace the dynamic VERSION extraction with a literal
+    bash = re.sub(
+        r'VERSION=\$\([^)]*\)(?:[^\n]*)',
+        f'VERSION="{version_str}"',
+        bash,
+        count=1,
+    )
+    full = f'export SESSION_ROOT={session_root!s}\n{bash}\n'
+    p = subprocess.run(
+        ["/bin/bash", "-c", full],
+        capture_output=True, text=True,
+    )
+    return p.returncode, p.stderr
+
+
+# ---------- T38 (W2 G11 fold-in): forward-compat tier-based gate ----------
+
+def test_coordinator_uses_unified_version_tier_with_forward_compat():
+    """T38 W2: coordinator.md must use the same 4-arm VERSION_TIER pattern as
+    T37 in inner-loop / outer-loop / synthesis. The strict `3.1.*)` arm is
+    replaced with the unified pattern, then a tier == v3_1_plus check
+    enforces coordinator-only entry. This is the content-shape test; the 6
+    routing-behavior tests below exercise the runtime semantics."""
+    c = _read("coordinator.md")
+    # Must contain VERSION_TIER export (T37 W6 lesson)
+    assert re.search(r'\bexport\s+VERSION_TIER\b', c), \
+        "coordinator.md must `export VERSION_TIER`"
+    # Must contain all 3 tier values (uniform with T37)
+    for tier in ("pre_v3", "v3_0", "v3_1_plus"):
+        assert tier in c, f"VERSION_TIER value '{tier}' missing from coordinator.md"
+    # Must contain the tier-equality check (the coordinator-only addition)
     assert re.search(
-        r"v3\.1\+\s+only|see\s+synthesis\.md|legacy.*fallback",
+        r'\[\s+"\$VERSION_TIER"\s+!=\s+"v3_1_plus"\s+\]',
         c,
-        re.IGNORECASE,
-    ), "coordinator.md must annotate its v3.1+-only stance"
+    ), "coordinator.md must check VERSION_TIER != v3_1_plus and exit"
+
+
+def test_coordinator_accepts_v3_1_session():
+    """Baseline: v3.1.0 must pass through coordinator gate."""
+    rc, _ = _coordinator_gate_subprocess("3.1.0")
+    assert rc == 0, "v3.1.0 must pass through coordinator gate"
+
+
+def test_coordinator_accepts_v3_2_session_forward_compat():
+    """W2 fix: v3.2.0 sessions must route through coordinator (was: rc=1 reject
+    on the strict `3.1.*)` arm). This is the regression-class test that fails
+    on the pre-W2 gate and passes on the post-W2 unified-tier gate."""
+    rc, _ = _coordinator_gate_subprocess("3.2.0")
+    assert rc == 0, "coordinator.md must accept v3.2 sessions (forward-compat W2)"
+
+
+def test_coordinator_accepts_v4_session_forward_compat():
+    """W2 fix continuation: v4.x must also be accepted as v3_1_plus tier."""
+    rc, _ = _coordinator_gate_subprocess("4.0.0")
+    assert rc == 0, "coordinator.md must accept v4.x sessions (forward-compat W2)"
+
+
+def test_coordinator_rejects_v3_0_session():
+    """Defense-in-depth (W2 design choice B): v3.0 routes through legacy
+    inner-loop/outer-loop directly via dispatcher; entering coordinator means
+    dispatcher bug. Coordinator must NOT silently proceed under v3.0."""
+    rc, err = _coordinator_gate_subprocess("3.0.5")
+    assert rc != 0, "coordinator.md must reject v3.0.x sessions"
+    assert "v3" in err.lower() or "tier" in err.lower(), \
+        f"coordinator.md must explain rejection in stderr (got: {err!r})"
+
+
+def test_coordinator_rejects_v2_session():
+    """v2.x sessions must be rejected at coordinator-gate level."""
+    rc, err = _coordinator_gate_subprocess("2.4.0")
+    assert rc != 0
+    assert err.strip(), "coordinator.md must emit error message on v2 entry"
+
+
+def test_coordinator_rejects_garbage_version():
+    """Default arm catches malformed VERSION (per T37 W-1 lesson — never
+    silent fallthrough). Treats as pre_v3 → tier check fails → exit 1."""
+    rc, _ = _coordinator_gate_subprocess("not-a-version")
+    assert rc != 0, "coordinator.md default arm must route garbage to pre_v3 → exit 1"
 
 
 # ---------- T37: 4-arm pattern (W-1 lesson) ----------
