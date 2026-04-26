@@ -520,7 +520,7 @@ If at least one completed session exists:
    Include `program` version tracking, `outer_loop` state, and `evaluation_epoch`:
    ```yaml
    session_id: "<computed>"
-   deep_evolve_version: "3.0.0"
+   deep_evolve_version: "3.1.0"
    status: initializing                 # C-7: transitions to 'active' at end of Step 11
    created_at: "<ISO 8601 now>"
    parent_session:    # null for root sessions; populated if continue selected
