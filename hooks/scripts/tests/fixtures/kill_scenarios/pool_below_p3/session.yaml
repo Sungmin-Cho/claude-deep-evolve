@@ -1,0 +1,12 @@
+deep_evolve_version: "3.1.0"
+session_id: "ks-pool-belowp3"
+total_budget: 32
+virtual_parallel:
+  N: 3
+  seeds:
+    - { seed_id: 1, status: "active", allocated_budget: 10, experiments_used: 5, current_q: 0.42 }
+    - { seed_id: 2, status: "active", allocated_budget: 10, experiments_used: 6, current_q: 0.51 }
+    - { seed_id: 3, status: "active", allocated_budget: 10, experiments_used: 4, current_q: 0.38 }
+  unallocated_pool: 2
+evaluation_epoch:
+  current: 2

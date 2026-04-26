@@ -1,0 +1,13 @@
+deep_evolve_version: "3.1.0"
+session_id: "ks-kts-recipe"
+total_budget: 50
+virtual_parallel:
+  N: 4
+  seeds:
+    - { seed_id: 1, status: "active", allocated_budget: 12, experiments_used: 8, current_q: 0.62 }
+    - { seed_id: 2, status: "active", allocated_budget: 12, experiments_used: 10, current_q: 0.55 }
+    - { seed_id: 3, status: "active", allocated_budget: 12, experiments_used: 5, current_q: 0.18 }
+    - { seed_id: 4, status: "active", allocated_budget: 12, experiments_used: 7, current_q: 0.49 }
+  unallocated_pool: 2
+evaluation_epoch:
+  current: 3

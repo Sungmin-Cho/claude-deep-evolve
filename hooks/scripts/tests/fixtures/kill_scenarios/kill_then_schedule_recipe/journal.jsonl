@@ -1,0 +1,5 @@
+{"ts":"2026-04-25T10:00:00Z","event":"seed_block_completed","seed_id":3,"block":1,"final_q":0.21}
+{"ts":"2026-04-25T10:30:00Z","event":"seed_block_completed","seed_id":3,"block":2,"final_q":0.18}
+{"ts":"2026-04-25T11:00:00Z","event":"seed_block_completed","seed_id":1,"block":1,"final_q":0.55}
+{"ts":"2026-04-25T11:30:00Z","event":"seed_block_completed","seed_id":2,"block":1,"final_q":0.50}
+{"ts":"2026-04-25T12:00:00Z","event":"seed_block_completed","seed_id":4,"block":1,"final_q":0.45}

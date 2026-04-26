@@ -70,6 +70,48 @@ def main():
     if d["decision"] not in ALLOWED_DECISION:
         _die(f"invalid decision type: {d['decision']!r} (allowed: {sorted(ALLOWED_DECISION)})")
 
+    # T42 W-7 hardening: kill_target must differ from chosen_seed_id for
+    # kill_then_schedule (killing seed N then scheduling the same seed N is
+    # nonsensical -- no kill effect). Rejection signal MUST mention
+    # kill_target/chosen_seed_id so per-task review test can verify the
+    # violated field, not just any failure (defense against
+    # stack-trace-as-rejection regression class).
+    if d["decision"] == "kill_then_schedule":
+        kill_t = d.get("kill_target")
+        chosen = d.get("chosen_seed_id")
+        if kill_t is not None and kill_t == chosen:
+            rejection = {
+                "accepted": False,
+                "decision": d["decision"],
+                "reason": (
+                    f"kill_target ({kill_t}) must differ from chosen_seed_id "
+                    f"({chosen}) -- killing seed N then scheduling the same "
+                    f"seed N is nonsensical (no kill effect)"
+                ),
+            }
+            print(json.dumps(rejection, ensure_ascii=False, indent=2))
+            return
+
+    # T42 Q6 spec enforcement: P3_floor (3) on new_seed_allocation for
+    # grow_then_schedule. Below-floor allocations would silently create an
+    # un-killable seed; instead, scheduler must chain kill_then_schedule first
+    # to free pool capacity. isinstance-not-bool guard prevents True == 1
+    # regression (T26 borrows_given lesson).
+    if d["decision"] == "grow_then_schedule":
+        nsa = d.get("new_seed_allocation")
+        if (not isinstance(nsa, int)) or isinstance(nsa, bool) or nsa < 3:
+            rejection = {
+                "accepted": False,
+                "decision": d["decision"],
+                "reason": (
+                    f"new_seed_allocation ({nsa!r}) below P3_floor (3) -- "
+                    f"scheduler must chain kill_then_schedule first to free "
+                    f"pool capacity"
+                ),
+            }
+            print(json.dumps(rejection, ensure_ascii=False, indent=2))
+            return
+
     try:
         bs = int(d["block_size"])
     except (TypeError, ValueError):
@@ -91,6 +133,8 @@ def main():
         "reasoning": d["reasoning"],
         "signals_used": d["signals_used"],
         "kill_target": d.get("kill_target"),
+        "new_seed_id": d.get("new_seed_id"),
+        "new_seed_allocation": d.get("new_seed_allocation"),
         "new_seed_direction": d.get("new_seed_direction"),
     }
     journal_events = []
