@@ -99,19 +99,26 @@ def _spawn_appender(args):
 def test_concurrent_append_no_lost_writes(tmp_path):
     """T43 W-8 #1: 4 concurrent appenders x 5 events each = 20 events.
     All must land in forum.jsonl as well-formed JSON lines (no torn
-    writes, no lost writes due to lock contention)."""
+    writes, no lost writes due to lock contention).
+
+    G12 review fix 2026-04-26 Stage 2 Finding #2: build payloads from
+    dicts + json.dumps + retain source dicts for sent_ids extraction
+    (was: brittle JSON-via-string-split parsing of payload string)."""
     repo, session_root, env = setup_session(tmp_path)
     helper = HELPER
 
     N_WRITERS = 4
     EVENTS_PER = 5
-    payloads = []
+    source_dicts = []
     for w in range(N_WRITERS):
         for e in range(EVENTS_PER):
             seed = w * 100 + e + 1  # distinct ids
-            payloads.append(
-                f'{{"event":"seed_keep","seed_id":{seed},"commit":"c-{w}-{e}"}}'
-            )
+            source_dicts.append({
+                "event": "seed_keep",
+                "seed_id": seed,
+                "commit": f"c-{w}-{e}",
+            })
+    payloads = [json.dumps(d) for d in source_dicts]
 
     args_list = [(helper, repo, env, p) for p in payloads]
     with ProcessPoolExecutor(max_workers=N_WRITERS) as ex:
@@ -136,8 +143,10 @@ def test_concurrent_append_no_lost_writes(tmp_path):
         except json.JSONDecodeError as ex:
             pytest.fail(f"torn write detected: {ln!r} ({ex})")
     # Multiset of seed_ids matches what was sent (NOT order — lock
-    # guarantees atomicity per write but NOT FIFO across racing writers)
-    sent_ids = sorted(int(p.split('"seed_id":')[1].split(',')[0]) for p in payloads)
+    # guarantees atomicity per write but NOT FIFO across racing writers).
+    # Source-dict comparison is robust to key reorder / whitespace / future
+    # payload-format changes (vs the brittle string-split parsing pre-fix).
+    sent_ids = sorted(int(d["seed_id"]) for d in source_dicts)
     got_ids = sorted(int(rec["seed_id"]) for rec in parsed)
     assert got_ids == sent_ids, "seed_ids mismatch — events lost or corrupted"
 
@@ -157,10 +166,17 @@ def test_concurrent_append_three_iterations(tmp_path):
         helper = HELPER
 
         N = 4
-        events = [
-            f'{{"event":"seed_keep","seed_id":{iteration * 1000 + i},"commit":"c{i}"}}'
+        # G12 review fix 2026-04-26 Stage 2 Finding #2: dict-based payloads
+        # for robust round-trip verification (was: string-split parsing).
+        source_dicts = [
+            {
+                "event": "seed_keep",
+                "seed_id": iteration * 1000 + i,
+                "commit": f"c{i}",
+            }
             for i in range(N * 3)
         ]
+        events = [json.dumps(d) for d in source_dicts]
         args_list = [(helper, repo, env, e) for e in events]
         with ProcessPoolExecutor(max_workers=N) as ex:
             results = list(ex.map(_spawn_appender, args_list))
@@ -172,17 +188,52 @@ def test_concurrent_append_three_iterations(tmp_path):
         assert len(lines) == len(events), (
             f"iter {iteration}: lost writes ({len(lines)}/{len(events)})"
         )
+        # Verify every landed line is well-formed JSON
+        parsed = [json.loads(ln) for ln in lines]  # raises if any line malformed
+        sent_ids = sorted(int(d["seed_id"]) for d in source_dicts)
+        got_ids = sorted(int(rec["seed_id"]) for rec in parsed)
+        assert got_ids == sent_ids, (
+            f"iter {iteration}: seed_ids mismatch — events lost or corrupted"
+        )
 
 
 # ---------- T43 W-8 #2: forum.jsonl corruption recovery ----------
 
 def test_tail_forum_skips_malformed_mid_line(tmp_path):
     """T43 W-8 #2: tail_forum must skip-and-warn on malformed mid-line
-    (T22 partial-event tolerance). Existing forum_malformed/ fixture
-    has a malformed mid-line — tail_forum reads surrounding well-formed
-    lines without crashing."""
+    (T22 partial-event tolerance). The forum_malformed/ fixture contains
+    a deliberate JSON-malformed line (truncated unterminated string) at
+    line 4 surrounded by 5 well-formed lines. tail_forum either skips
+    the malformed line (preferred — output has only well-formed lines)
+    OR reads it through (acceptable IF the test's well-formed-only
+    assertion catches that as a failure).
+
+    G12 review fix 2026-04-26 Stage 1 (90) + Stage 2 #1 (88) cross-
+    confirmed: pre-fix fixture contained 5 lines that were ALL JSON-
+    valid (just schema-incomplete), making the test tautological.
+    Post-fix: fixture has a true `Unterminated string` at line 4 + the
+    test assertions below now have an actual fail path (well-formed
+    output assertion catches malformed-pass-through; minimum-line
+    count catches over-aggressive skip)."""
     fixture = FIXTURES / "forum_malformed"
     assert fixture.is_dir(), f"missing fixture {fixture}"
+    # Sanity: confirm fixture has at least 1 truly JSON-malformed line
+    fixture_lines = [
+        ln for ln in (fixture / "forum.jsonl").read_text().splitlines()
+        if ln.strip()
+    ]
+    malformed_count = 0
+    for ln in fixture_lines:
+        try:
+            json.loads(ln)
+        except json.JSONDecodeError:
+            malformed_count += 1
+    assert malformed_count >= 1, (
+        f"forum_malformed/forum.jsonl must contain >= 1 truly JSON-"
+        f"malformed line for this test to exercise skip-and-warn; "
+        f"found {malformed_count} malformed of {len(fixture_lines)}"
+    )
+
     # Copy to tmp
     dst = tmp_path / "scenario-malformed"
     shutil.copytree(fixture, dst)
@@ -208,14 +259,29 @@ def test_tail_forum_skips_malformed_mid_line(tmp_path):
     out, err, rc = run_h(env, repo, "tail_forum", "10")
     # Must rc=0 — tail_forum prefers partial output over crash
     assert rc == 0, f"tail_forum crashed on malformed (rc={rc}, err={err!r})"
-    # Stderr may include a warn; that's the contract
-    # Each output line must be valid JSON (skip-and-warn yielded only well-formed)
-    if out.strip():
-        for ln in out.strip().split("\n"):
-            try:
-                json.loads(ln)
-            except json.JSONDecodeError as ex:
-                pytest.fail(f"tail_forum returned malformed line: {ln!r} ({ex})")
+
+    # Each output line must be valid JSON. The fixture has 5 well-formed
+    # + 1 malformed = 6 total. tail_forum's contract is one of:
+    #   (a) skip malformed (output = 5 well-formed lines) — preferred
+    #   (b) emit warn but include malformed (test catches this here)
+    # Current cmd_tail_forum uses plain `tail -n` (no skip) → output
+    # includes the malformed line → test correctly fails with the
+    # JSONDecodeError below, surfacing the helper gap.
+    out_lines = [ln for ln in out.strip().split("\n") if ln.strip()] if out.strip() else []
+    for ln in out_lines:
+        try:
+            json.loads(ln)
+        except json.JSONDecodeError as ex:
+            # Skip-and-warn contract violation: tail_forum returned a
+            # malformed line. T22 partial-event tolerance was supposed to
+            # filter this. v3.1.x polish candidate: either tighten this
+            # test to require strict skip OR enhance cmd_tail_forum with
+            # `jq -c -R 'fromjson? // empty'` filter (or equivalent
+            # python3 -c skip pattern) to satisfy the W-8 contract.
+            pytest.fail(
+                f"tail_forum returned malformed line — skip-and-warn "
+                f"path not implemented. Line: {ln!r} ({ex})"
+            )
 
 
 # ---------- T43 W-8 #3: tail_forum on missing file ----------

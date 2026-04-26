@@ -1289,7 +1289,28 @@ cmd_tail_forum() {
   fi
   local forum="$SESSION_ROOT/forum.jsonl"
   [ -f "$forum" ] || return 0   # empty forum is valid
-  tail -n "$n" "$forum"
+  # T43 review fix (G12 2026-04-26): T22 partial-event tolerance —
+  # skip-and-warn on JSON-malformed lines. Pre-fix: plain `tail -n`
+  # passed malformed lines through unchanged, which broke the W-8
+  # corruption-recovery contract (read-only consumers crash on
+  # downstream json.loads). Post-fix: filter via `python3 -c` that
+  # skips unparseable lines and logs a warn to stderr per skip count.
+  tail -n "$n" "$forum" | python3 -c '
+import json, sys
+skipped = 0
+for line in sys.stdin:
+    stripped = line.strip()
+    if not stripped:
+        continue
+    try:
+        json.loads(stripped)
+    except json.JSONDecodeError:
+        skipped += 1
+        continue
+    sys.stdout.write(line if line.endswith("\n") else line + "\n")
+if skipped:
+    print(f"warn: tail_forum: skipped {skipped} malformed JSONL line(s)", file=sys.stderr)
+'
 }
 
 # --- v3.1.0 journal event helper (spec § 6.5, § 9.2) ---
