@@ -25,13 +25,21 @@ ALLOWED_DECISION = {"schedule", "kill_then_schedule", "grow_then_schedule"}
 
 def _decide(decision_json):
     """Invoke scheduler-decide.py with --decision <json> and return parsed
-    output (stdout JSON if rc=0, else None) plus rc + stderr."""
+    output + rc + stderr.
+
+    G12 final review F2 fix (2026-04-26): rc semantics tightened.
+      rc=0 → decision accepted (out["accepted"] == True)
+      rc=1 → business rejection (out["accepted"] == False; rejection
+             JSON on stdout with reason field)
+      rc=2 → operator error (malformed input; error message on stderr)
+    """
     p = subprocess.run(
         ["python3", str(DECIDE), "--decision", json.dumps(decision_json)],
         capture_output=True, text=True,
     )
     out = None
-    if p.returncode == 0 and p.stdout.strip():
+    # Both rc=0 (accepted) and rc=1 (rejected) emit JSON to stdout
+    if p.returncode in (0, 1) and p.stdout.strip():
         try:
             out = json.loads(p.stdout)
         except json.JSONDecodeError:
@@ -90,16 +98,28 @@ def test_kill_target_must_differ_from_chosen_seed_id():
         "signals_used": [],
     }
     out, rc, err = _decide(decision)
-    # Must reject AND explain
+    # G12 final review F2 fix (2026-04-26): rejection paths emit rc=1
+    # (business rejection) with rejection JSON on stdout. rc=2 is
+    # operator error only (malformed input). Test accepts:
+    #   rc=1 + out["accepted"] == False (post-F2 contract; preferred)
+    #   rc=2 + non-empty stderr (legacy operator-error path)
     rejection_text = ""
-    if rc == 0:
+    if rc == 1:
         assert out is not None and out.get("accepted") is False, (
-            f"kill_target == chosen_seed_id must reject (out={out!r})"
+            f"rc=1 must include rejection JSON with accepted:false (out={out!r})"
         )
         rejection_text = (out.get("reason") or "") + " " + (out.get("error") or "")
-    else:
-        assert err.strip(), "rc != 0 must include error message in stderr"
+    elif rc == 2:
+        assert err.strip(), "rc=2 must include error message in stderr"
         rejection_text = err
+    else:
+        # rc=0: pre-F2 path (helper not yet patched) — accept rejection JSON
+        # in stdout per old contract; surface as test failure if accepted:True
+        assert out is not None and out.get("accepted") is False, (
+            f"rc=0 with accepted:True is a regression — kill_target == "
+            f"chosen_seed_id must reject (out={out!r})"
+        )
+        rejection_text = (out.get("reason") or "") + " " + (out.get("error") or "")
     # Rejection signal must reference the violation (not a generic crash)
     rejection_lower = rejection_text.lower()
     assert any(token in rejection_lower for token in (
@@ -133,24 +153,63 @@ def test_grow_then_schedule_happy_path():
 
 def test_grow_then_schedule_rejected_when_allocation_below_p3():
     """T42 W-8 #3 (Q6 spec): new_seed_allocation < 3 (P3 floor) must be
-    rejected. Parser/validator emits accepted: false with reason."""
+    rejected when AI explicitly supplies a below-floor allocation.
+
+    G12 final review F2 fix (2026-04-26): rc=1 + accepted:false (post-F2
+    contract). G12 final review F3 fix: AI may legitimately omit
+    new_seed_allocation (coordinator computes via compute_grow_allocation);
+    only AI-supplied below-floor values are rejected here."""
     decision = {
         "decision": "grow_then_schedule",
         "new_seed_id": 4,
-        "new_seed_allocation": 2,  # below P3 floor
+        "new_seed_allocation": 2,  # AI-supplied below P3 floor — must reject
         "chosen_seed_id": 4,
         "block_size": 3,
         "reasoning": "pool tight",
         "signals_used": [],
     }
     out, rc, err = _decide(decision)
-    # Either rc != 0 or accepted: false (with reason)
-    if rc == 0:
+    # Post-F2: rc=1 + accepted:false (preferred); legacy paths accept rc=2
+    if rc == 1:
+        assert out is not None and out.get("accepted") is False, (
+            f"rc=1 must emit rejection JSON (out={out!r})"
+        )
+        assert "P3" in (out.get("reason") or "") or \
+            "below" in (out.get("reason") or "").lower(), (
+            f"rejection reason must mention P3/below: {out.get('reason')!r}"
+        )
+    elif rc == 2:
+        assert err.strip(), "rc=2 must include error in stderr"
+    else:
+        # rc=0: regression — must not accept below-floor allocation
         assert out is not None and out.get("accepted") is False, (
             f"new_seed_allocation < P3 floor must be rejected (out={out!r})"
         )
-    else:
-        assert err.strip()
+
+
+def test_grow_then_schedule_accepts_absent_allocation():
+    """G12 final review F3 fix (2026-04-26): AI may legitimately omit
+    `new_seed_allocation` per spec § 15.1 Q6 — coordinator computes via
+    `compute_grow_allocation` after validation. Pre-fix scheduler-decide
+    rejected absent allocation, blocking the documented coordinator
+    contract. Post-F3: scheduler-decide accepts absent allocation;
+    only AI-supplied below-floor values are rejected."""
+    decision = {
+        "decision": "grow_then_schedule",
+        "new_seed_id": 4,
+        # new_seed_allocation absent — coordinator will compute via helper
+        "chosen_seed_id": 4,
+        "block_size": 3,
+        "reasoning": "convergence stagnation; defer allocation to helper",
+        "signals_used": ["convergence_event"],
+    }
+    out, rc, err = _decide(decision)
+    assert rc == 0, (
+        f"grow_then_schedule with absent new_seed_allocation must accept "
+        f"per F3 fix (rc={rc}, err={err!r})"
+    )
+    assert out is not None and out.get("accepted") is True
+    assert out.get("decision") == "grow_then_schedule"
 
 
 def _read_fixture_pool_and_n(fixture_name, tmp_path):

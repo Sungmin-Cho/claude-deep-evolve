@@ -76,6 +76,14 @@ def main():
     # kill_target/chosen_seed_id so per-task review test can verify the
     # violated field, not just any failure (defense against
     # stack-trace-as-rejection regression class).
+    #
+    # G12 final review F2 fix (2026-04-26): rejection paths must signal
+    # FAILURE to shell callers via rc != 0. Pre-fix `return` (implicit
+    # rc=0) violated the rc=0=accepted contract and let coordinator
+    # case-statement route rejected decisions as executable. Post-fix:
+    # rc=1 = business rejection (accepted:false), distinct from rc=2 =
+    # operator error (malformed input). Shell `if scheduler-decide ...`
+    # now correctly treats rejection as failure.
     if d["decision"] == "kill_then_schedule":
         kill_t = d.get("kill_target")
         chosen = d.get("chosen_seed_id")
@@ -90,27 +98,40 @@ def main():
                 ),
             }
             print(json.dumps(rejection, ensure_ascii=False, indent=2))
-            return
+            sys.exit(1)  # F2 fix: rc=1 = business rejection
 
     # T42 Q6 spec enforcement: P3_floor (3) on new_seed_allocation for
     # grow_then_schedule. Below-floor allocations would silently create an
     # un-killable seed; instead, scheduler must chain kill_then_schedule first
     # to free pool capacity. isinstance-not-bool guard prevents True == 1
     # regression (T26 borrows_given lesson).
+    #
+    # G12 final review F3 fix (2026-04-26): coordinator.md grow_then_schedule
+    # case (line 102-110) calls compute_grow_allocation AFTER validation —
+    # AI scheduler may legitimately omit `new_seed_allocation` per spec
+    # § 15.1 Q6 (helper computes via ceil() formula). Pre-fix check
+    # rejected absent allocation, blocking the documented coordinator
+    # contract. Post-fix: only validate IF AI supplied allocation; absent
+    # → defer to compute_grow_allocation. The original below-floor
+    # rejection class (AI proposes allocation=1 explicitly) is preserved.
     if d["decision"] == "grow_then_schedule":
         nsa = d.get("new_seed_allocation")
-        if (not isinstance(nsa, int)) or isinstance(nsa, bool) or nsa < 3:
-            rejection = {
-                "accepted": False,
-                "decision": d["decision"],
-                "reason": (
-                    f"new_seed_allocation ({nsa!r}) below P3_floor (3) -- "
-                    f"scheduler must chain kill_then_schedule first to free "
-                    f"pool capacity"
-                ),
-            }
-            print(json.dumps(rejection, ensure_ascii=False, indent=2))
-            return
+        if nsa is not None:
+            # AI supplied allocation — must be int (not bool) and >= P3 floor
+            if (not isinstance(nsa, int)) or isinstance(nsa, bool) or nsa < 3:
+                rejection = {
+                    "accepted": False,
+                    "decision": d["decision"],
+                    "reason": (
+                        f"new_seed_allocation ({nsa!r}) below P3_floor (3) -- "
+                        f"scheduler must chain kill_then_schedule first to free "
+                        f"pool capacity"
+                    ),
+                }
+                print(json.dumps(rejection, ensure_ascii=False, indent=2))
+                sys.exit(1)  # F2 fix: rc=1 = business rejection
+        # If nsa is None: AI omitted allocation; coordinator computes via
+        # compute_grow_allocation post-validation (spec § 15.1 Q6).
 
     try:
         bs = int(d["block_size"])

@@ -86,9 +86,35 @@ while session_active:
   decision = invoke_AI_for_decision(signals, structured_prompt_per_§6.2)
 
   # 5. Validate + clamp
-  validated = $(hooks/scripts/scheduler-decide.py \
+  # G12 final review F2 fix (2026-04-26): scheduler-decide.py emits
+  # rc=1 on business rejection (accepted: false) per the rc=0=accepted
+  # contract. Capture rc to distinguish:
+  #   rc=0  → decision accepted, validated.accepted = true, proceed to case
+  #   rc=1  → decision rejected (validated.accepted = false), log + continue
+  #   rc=2  → operator error (malformed input), abort coordinator
+  validated=$(hooks/scripts/scheduler-decide.py \
     --decision "$decision" \
     --signals "$signals")
+  rc=$?
+  if [ $rc -eq 1 ]; then
+    # Business rejection (e.g., kill_target == chosen_seed_id, allocation
+    # below P3 floor). Log and continue to next iteration; AI scheduler
+    # will propose a different decision next turn.
+    log "scheduler_decision_rejected: $(echo "$validated" | jq -r .reason)"
+    continue
+  elif [ $rc -ne 0 ]; then
+    echo "error: scheduler-decide.py operator error (rc=$rc)" >&2
+    exit 1
+  fi
+
+  # Defense-in-depth: assert validated.accepted == true before applying.
+  # F2 fix: even if scheduler-decide.py somehow emits rc=0 with
+  # accepted:false (regression), the case statement should NOT route a
+  # rejected decision as executable.
+  if [ "$(echo "$validated" | jq -r .accepted)" != "true" ]; then
+    log "scheduler_decision_rejected_via_accepted_flag: $(echo "$validated" | jq -r .reason)"
+    continue
+  fi
 
   # 6. Apply decision_type
   case validated.decision in

@@ -351,3 +351,61 @@ def test_remove_seed_worktree_idempotent_on_missing(tmp_path):
         ), (
             f"rc=1 on missing must include structured signal: err={err!r}"
         )
+
+
+def test_create_preserves_pre_existing_branch_on_path_failure(tmp_path):
+    """G12 final review F1 fix (2026-04-26): cmd_create_seed_worktree
+    must NOT delete a pre-existing branch when `git worktree add -b
+    "$branch"` fails. Pre-fix: cleanup unconditionally ran `git branch
+    -D "$branch"`, deleting any operator-created branch with committed
+    work. Post-fix: pre-call branch existence check (`git rev-parse
+    --verify --quiet refs/heads/$branch`) gates the cleanup.
+
+    Regression class this catches: data-loss when partial cleanup state
+    (worktree dir manually rm'd but branch ref remained) triggers a
+    create-retry. Pre-fix: retry's `worktree add -b` fails because branch
+    exists → cleanup deletes the operator's branch. Post-fix: retry's
+    failure is reported clearly + branch is preserved for operator
+    investigation."""
+    repo, session_root, env = _setup_session(tmp_path)
+
+    # Pre-create the branch (simulates partial cleanup state)
+    branch = "evolve/sess-t41/seed-7"
+    subprocess.run(
+        ["git", "branch", branch],
+        cwd=repo, check=True, capture_output=True,
+    )
+    # Sanity: branch exists pre-call
+    pre = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    assert pre.returncode == 0, "test setup: pre-existing branch must exist"
+
+    # Pre-create blocking file at target (mkdir EEXIST collision; same
+    # FS-portable pattern as test_create_fails_loudly_on_target_collision)
+    worktrees_parent = session_root / "worktrees"
+    worktrees_parent.mkdir(parents=True, exist_ok=True)
+    target = worktrees_parent / "seed_7"
+    target.write_text("blocking file")
+
+    out, err, rc = _run_h(env, repo, "create_seed_worktree", "7")
+
+    # Helper must fail (target is a regular file, mkdir EEXIST)
+    assert rc != 0, f"create must fail on target collision (rc={rc})"
+
+    # Pre-existing branch MUST be preserved (NOT deleted by cleanup)
+    post = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    assert post.returncode == 0, (
+        f"Pre-existing branch '{branch}' was DELETED by cleanup "
+        f"(F1 regression). Helper output: out={out!r}, err={err!r}"
+    )
+
+    # Stderr should explain the preservation (operator-friendly)
+    assert "pre-existing branch" in err or "preserved" in err.lower(), (
+        f"stderr should explain branch preservation for operator: "
+        f"err={err!r}"
+    )

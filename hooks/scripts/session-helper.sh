@@ -860,11 +860,28 @@ cmd_create_seed_worktree() {
     return 1
   fi
   # Create worktree + branch from current HEAD
+  # Pre-call branch existence check (G12 final review F1 fix 2026-04-26):
+  # `git worktree add -b "$branch"` ALSO fails when the branch already
+  # existed (e.g., partial cleanup state where worktree dir was rm'd but
+  # branch ref remained). The original cleanup `git branch -D` was
+  # unconditional, which DELETED a pre-existing seed branch with
+  # committed work in such cases — data loss. Defense: record branch
+  # existence pre-call; only delete if WE created it (branch did NOT
+  # exist beforehand).
   local err
+  local branch_existed_pre=0
+  if git rev-parse --verify --quiet "refs/heads/$branch" >/dev/null 2>&1; then
+    branch_existed_pre=1
+  fi
   if ! err=$(git worktree add "$wt_path" -b "$branch" 2>&1 >/dev/null); then
     # Cleanup-on-failure (spec § 11): -b created the branch before path
     # check; delete the orphan to preserve cleanup-on-failure invariant.
-    git branch -D "$branch" 2>/dev/null || true
+    # ONLY delete if branch did not exist pre-call (we created it).
+    if [ "$branch_existed_pre" -eq 0 ]; then
+      git branch -D "$branch" 2>/dev/null || true
+    else
+      echo "create_seed_worktree: pre-existing branch '$branch' preserved (operator must investigate orphan state — committed work on this branch was NOT touched)" >&2
+    fi
     echo "create_seed_worktree: git worktree add failed for seed $seed_id: $err" >&2
     return 1
   fi
