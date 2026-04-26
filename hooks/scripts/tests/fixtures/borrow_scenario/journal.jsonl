@@ -1,0 +1,4 @@
+{"ts":"2026-04-25T10:00:00Z","event":"seed_initialized","seed_id":1,"beta_direction":"feature engineering"}
+{"ts":"2026-04-25T10:01:00Z","event":"seed_initialized","seed_id":2,"beta_direction":"signal filtering"}
+{"ts":"2026-04-25T11:00:00Z","event":"seed_block_completed","seed_id":1,"block":1,"final_q":0.55,"experiments_used":6}
+{"ts":"2026-04-25T11:30:00Z","event":"seed_block_completed","seed_id":2,"block":1,"final_q":0.42,"experiments_used":5}
