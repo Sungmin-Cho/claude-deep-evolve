@@ -24,6 +24,24 @@ def _content():
     return CMD.read_text(encoding="utf-8")
 
 
+def _bash_blocks_minus_comments(content):
+    """Extract bash code from ```bash ... ``` blocks, strip comment lines.
+
+    Used to filter markdown-prose mentions of env vars from actual bash
+    conditionals that EVALUATE them at runtime (W1 G11 fold-in fix —
+    pre-W1 test matched comment prose like
+    `# DEEP_EVOLVE_NO_PARALLEL=1 forces N=1`)."""
+    blocks = re.findall(r"```bash\n(.*?)\n```", content, re.DOTALL)
+    out_lines = []
+    for b in blocks:
+        for line in b.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            out_lines.append(line)
+    return "\n".join(out_lines)
+
+
 # ---------- T35: Step 0.5 section presence ----------
 
 def test_step_0_5_section_header_present():
@@ -276,34 +294,178 @@ def test_status_resolves_session_root_before_dashboard():
 
 # ---------- T35: W-6 trace-variable-propagation ----------
 
-def test_w6_trace_no_parallel_export_to_a26_consumer():
-    """W-6 trace (this is the test that catches W-3-class regressions —
-    grep alone misses propagation breaks): the env var name exported
-    here must MATCH the env var name read at A.2.6. We assert both
-    sites use the literal string 'DEEP_EVOLVE_NO_PARALLEL'."""
-    c_cmd = _content()
+# ---------- T39 (W1 G11 fold-in): bash-semantic-tight W-6 trace ----------
+
+def _w6_alias_candidates(bash, env_var):
+    """Return list of variable names traceable from env_var in this bash text.
+
+    Includes env_var itself plus any local alias assigned from it via
+    `ALIAS="${ENV_VAR:-default}"` or `ALIAS="$ENV_VAR"` patterns.
+
+    G12 G11 fold-in C1 fix (Codex adversarial 2026-04-26 F1): A.2.6 currently
+    aliases env vars before runtime check (`NO_PARALLEL="${DEEP_EVOLVE_NO_PARALLEL:-0}"`
+    then `[ "$NO_PARALLEL" = "1" ]`). The pre-fix W-6 trace only checked
+    literal `$DEEP_EVOLVE_NO_PARALLEL` in the conditional and would have
+    falsely failed against the correct alias-flow consumer code, pushing
+    executor to unnecessarily edit A.2.6. This helper makes the trace
+    alias-aware: we recognize both direct usage AND the alias indirection
+    that A.2.6 actually uses today."""
+    candidates = [env_var]
+    alias_re = rf'(\w+)="\$\{{?{re.escape(env_var)}(?::-[^}}"]*)?\}}?"'
+    candidates.extend(m.group(1) for m in re.finditer(alias_re, bash))
+    return candidates
+
+
+def test_w6_trace_no_parallel_consumer_bash_semantic():
+    """W1 fix: the pre-W1 W-6 trace matched the env var name in any context
+    including comment prose. Tightened to require an *evaluating* bash
+    conditional ([ ... ] / [[ ... ]] / case ... in 1)) inside a ```bash
+    code block, with comment lines stripped first.
+
+    G12 fold-in C1 fix (Codex adversarial 2026-04-26): alias-aware — we
+    recognize `$DEEP_EVOLVE_NO_PARALLEL` directly OR any variable assigned
+    from it (e.g., `NO_PARALLEL="${DEEP_EVOLVE_NO_PARALLEL:-0}"; ...
+    [ "$NO_PARALLEL" = "1" ]`). The actual A.2.6 implementation uses the
+    alias form; the original literal-only patterns falsely failed.
+
+    Regression class this catches: someone removes BOTH the alias
+    assignment AND the runtime check from A.2.6 but leaves the doc
+    comment behind. Pre-W1 substring match on comment passes; deployment
+    crashes. Post-W1 fails loudly."""
     a26_path = (Path(__file__).parents[3]
                 / "skills/deep-evolve-workflow/protocols/init.md")
     a26_full = a26_path.read_text(encoding="utf-8")
     a26 = a26_full.split("### A.2.6", 1)[1].split("## A.2.5:", 1)[0]
-    assert "DEEP_EVOLVE_NO_PARALLEL" in c_cmd
-    assert "DEEP_EVOLVE_NO_PARALLEL" in a26
-    # Defensive: the VALUE convention must match too (1 = forced N=1)
-    assert (
-        re.search(r'DEEP_EVOLVE_NO_PARALLEL\s*==?\s*["\']?1["\']?', a26)
-    ), "A.2.6 must check for value == 1, matching CLI export"
+    bash = _bash_blocks_minus_comments(a26)
+    candidates = _w6_alias_candidates(bash, "DEEP_EVOLVE_NO_PARALLEL")
+    assert len(candidates) >= 1, "DEEP_EVOLVE_NO_PARALLEL must be referenced in A.2.6 bash"
+    matched_via = None
+    for var in candidates:
+        v = re.escape(var)
+        patterns = [
+            # POSIX test with single =, both single- and double-quoted forms
+            rf'\[\s+"\${v}"\s+=\s+["\']?1["\']?\s+\]',
+            # Bash double-bracket
+            rf'\[\[\s+"\${v}"\s+(?:==?|=)\s+["\']?1["\']?\s+\]\]',
+            # Bash extended-test ==
+            rf'\[\s+"\${v}"\s+==\s+["\']?1["\']?\s+\]',
+            # case match (whitespace-tolerant)
+            rf'case\s+"\${v}"\s+in[\s\S]*?\b1\)',
+        ]
+        if any(re.search(p, bash) for p in patterns):
+            matched_via = var
+            break
+    assert matched_via, (
+        "A.2.6 must contain a bash conditional that *evaluates* "
+        "DEEP_EVOLVE_NO_PARALLEL == 1 directly or via a local alias "
+        "(e.g., NO_PARALLEL=\"${DEEP_EVOLVE_NO_PARALLEL:-0}\"; "
+        "[ \"$NO_PARALLEL\" = \"1\" ]). Candidates probed: "
+        f"{candidates}. Searched in stripped bash (first 400 chars):\n"
+        f"{bash[:400]}..."
+    )
 
 
-def test_w6_trace_n_min_n_max_export_to_a26_consumer():
-    """W-6 trace continuation: N_MIN / N_MAX names match across sites."""
-    c_cmd = _content()
+def test_w6_trace_n_min_consumer_bash_arithmetic():
+    """W1 continuation: N_MIN consumer must perform actual integer
+    comparison (-lt / -le / -gt / -ge) — not just mention the var in a
+    comment or assignment.
+
+    Accepts either bash arithmetic test (`[ "$N_MIN" -gt ...]`) or
+    Python-level int comparison (`python3 -c '...int(...N_MIN...)...'`),
+    matching T35's argv-safe `python3 -c '...' "$VAL"` clamp pattern.
+
+    G12 fold-in C1 fix: alias-aware — recognizes `$DEEP_EVOLVE_N_MIN`,
+    `${DEEP_EVOLVE_N_MIN:-...}`, `$N_MIN_USER` (A.2.6 alias name), and
+    Python `nmin`/`int(sys.argv[i])` argv flows."""
     a26_path = (Path(__file__).parents[3]
                 / "skills/deep-evolve-workflow/protocols/init.md")
     a26_full = a26_path.read_text(encoding="utf-8")
     a26 = a26_full.split("### A.2.6", 1)[1].split("## A.2.5:", 1)[0]
-    for var in ("DEEP_EVOLVE_N_MIN", "DEEP_EVOLVE_N_MAX"):
-        assert var in c_cmd, f"{var} must be exported by Step 0.5"
-        assert var in a26, f"{var} must be consumed by A.2.6"
+    bash = _bash_blocks_minus_comments(a26)
+    candidates = _w6_alias_candidates(bash, "DEEP_EVOLVE_N_MIN")
+    matched_via = None
+    for var in candidates:
+        v = re.escape(var)
+        bash_arith = re.search(
+            rf'\[\s+"\$\{{?{v}\}}?"\s+-(?:lt|le|gt|ge|eq|ne)\s+',
+            bash,
+        )
+        py_arith = re.search(
+            rf'python3\s+-c\s+["\'][^"\']*{v}',
+            bash,
+        )
+        # Python argv-passed value: A.2.6 invokes
+        # `python3 -c '...nmin = int(sys.argv[1])...' "$N_MIN_USER" "$N_MAX_USER"`
+        # — the test recognizes the inline `nmin` arithmetic on the consumer side.
+        py_argv_inline = re.search(
+            rf'python3\s+-c\s+["\'][^"\']*int\([^)]*sys\.argv[\s\S]*?\bn?min\b[\s\S]*?["\'][^"\n]*"\${v}"',
+            bash,
+        )
+        if bash_arith or py_arith or py_argv_inline:
+            matched_via = var
+            break
+    assert matched_via, (
+        "A.2.6 must arithmetic-compare DEEP_EVOLVE_N_MIN directly, via a "
+        "local alias (e.g., N_MIN_USER=\"${DEEP_EVOLVE_N_MIN:-1}\"), or via "
+        "a Python `int(sys.argv[i])` clamp invoked with `\"$N_MIN_USER\"`. "
+        f"Candidates probed: {candidates}."
+    )
+
+
+def test_w6_trace_n_max_consumer_bash_arithmetic():
+    """W1 continuation: symmetric for N_MAX. Alias-aware per G12 C1 fix —
+    recognizes `$DEEP_EVOLVE_N_MAX`, `$N_MAX_USER`, and Python argv-flow."""
+    a26_path = (Path(__file__).parents[3]
+                / "skills/deep-evolve-workflow/protocols/init.md")
+    a26_full = a26_path.read_text(encoding="utf-8")
+    a26 = a26_full.split("### A.2.6", 1)[1].split("## A.2.5:", 1)[0]
+    bash = _bash_blocks_minus_comments(a26)
+    candidates = _w6_alias_candidates(bash, "DEEP_EVOLVE_N_MAX")
+    matched_via = None
+    for var in candidates:
+        v = re.escape(var)
+        bash_arith = re.search(
+            rf'\[\s+"\$\{{?{v}\}}?"\s+-(?:lt|le|gt|ge|eq|ne)\s+',
+            bash,
+        )
+        py_arith = re.search(
+            rf'python3\s+-c\s+["\'][^"\']*{v}',
+            bash,
+        )
+        py_argv_inline = re.search(
+            rf'python3\s+-c\s+["\'][^"\']*int\([^)]*sys\.argv[\s\S]*?\bn?max\b[\s\S]*?["\'][^"\n]*"\${v}"',
+            bash,
+        )
+        if bash_arith or py_arith or py_argv_inline:
+            matched_via = var
+            break
+    assert matched_via, (
+        "A.2.6 must arithmetic-compare DEEP_EVOLVE_N_MAX directly or via "
+        f"a local alias / argv flow. Candidates probed: {candidates}."
+    )
+
+
+def test_w6_helper_excludes_comment_prose_unit():
+    """W1 unit test for the helper itself: _bash_blocks_minus_comments
+    must NOT return comment lines, even inside bash code blocks; must NOT
+    return prose outside code blocks. Smoke-test discipline so future
+    test edits don't silently break the filter."""
+    sample = (
+        "Some markdown text DEEP_EVOLVE_NO_PARALLEL=1 here.\n"
+        "```bash\n"
+        "# DEEP_EVOLVE_NO_PARALLEL=1 forces N=1\n"
+        '[ "$DEEP_EVOLVE_NO_PARALLEL" = "1" ] && N=1\n'
+        "```\n"
+        "More markdown prose with N_MIN=2 in it.\n"
+    )
+    out = _bash_blocks_minus_comments(sample)
+    # Must contain the conditional
+    assert '[ "$DEEP_EVOLVE_NO_PARALLEL" = "1" ]' in out
+    # Must NOT contain the comment line
+    assert "# DEEP_EVOLVE_NO_PARALLEL=1 forces N=1" not in out
+    # Must NOT contain the markdown prose lines (outside code block)
+    assert "Some markdown text" not in out
+    assert "More markdown prose" not in out
 
 
 def test_status_does_not_hijack_bareword_status_in_goal():
