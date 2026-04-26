@@ -124,6 +124,9 @@ cmd_help() {
   echo "  compute_init_budget_split, compute_grow_allocation"
   echo "  append_forum_event, tail_forum"
   echo "  append_journal_event                            — Append validated event to journal.jsonl (§ 6.5, § 9.2)"
+  echo "  append_kill_queue_entry, drain_kill_queue       — In-flight kill deferral (§ 5.5 W-9)"
+  echo "  create_synthesis_worktree, cleanup_failed_synthesis_worktree"
+  echo "  rebuild_seeds_from_journal                      — Resume reconciliation (§ 11 + T46 fold-in)"
 }
 
 cmd_compute_session_id() {

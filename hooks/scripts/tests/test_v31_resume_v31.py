@@ -409,38 +409,32 @@ def test_resume_mid_block_synthesizes_completed_from_git_log(tmp_path):
         "compared against git HEAD/log → seed_block_completed synthesis."
     )
 
-    # Behavioral assertion: if rebuild_seeds_from_journal helper is exposed,
-    # invoke it and verify synthesis output. If not exposed, skip with note
-    # (helper exposure is a T33 implementation detail; T46 covers the
-    # contract not the precise helper signature).
-    helper_help = subprocess.run(
-        ["bash", str(HELPER), "help"],
-        capture_output=True, text=True,
+    # T46 review fix (Stage 2 C-1 2026-04-26): helper-discovery guard
+    # removed — `rebuild_seeds_from_journal` IS dispatched at session-
+    # helper.sh:1923 but NOT advertised in usage() block. Pre-fix guard
+    # `if "rebuild_seeds_from_journal" in helper_help` always evaluated
+    # False, leaving the behavioral block as dead code (the suite-level
+    # 0.22s runtime confirmed no real git plumbing executed). Post-fix:
+    # call subcommand unconditionally; dispatch existence is verified
+    # by the helper returning rc=0 with "SESSION_ROOT not set" stderr
+    # when called bare (proof that the case-arm is reachable).
+    result = subprocess.run(
+        ["bash", str(HELPER), "rebuild_seeds_from_journal"],
+        cwd=repo, env=env, capture_output=True, text=True,
     )
-    if "rebuild_seeds_from_journal" in (helper_help.stdout + helper_help.stderr):
-        result = subprocess.run(
-            ["bash", str(HELPER), "rebuild_seeds_from_journal"],
-            cwd=repo, env=env, capture_output=True, text=True,
-        )
-        # Helper should EITHER emit seed_block_completed event OR signal
-        # synthesis intent in stdout. Either way, must NOT crash.
-        assert result.returncode == 0, (
-            f"rebuild_seeds_from_journal must succeed in mid-block synthesis case: "
-            f"rc={result.returncode}, err={result.stderr!r}"
-        )
-        # Read the (possibly extended) journal to verify synthesis happened
-        post_journal = (session_root / "journal.jsonl").read_text().strip().split("\n")
-        events = [json.loads(ln)["event"] for ln in post_journal if ln.strip()]
-        # Either synthesized seed_block_completed appears, OR helper writes
-        # a separate state file recording the synthesis (implementation choice).
-        assert "seed_block_completed" in events or \
-            "committed" in events or \
-            (session_root / ".resume-state.json").exists() or \
-            "synthesized" in (result.stdout + result.stderr).lower(), (
-            f"rebuild_seeds_from_journal did not produce evidence of "
-            f"synthesis — events={events}, stdout={result.stdout!r}, "
-            f"stderr={result.stderr!r}"
-        )
+    # T46 review iteration: plan-stage logic-bug discovery —
+    # `rebuild_seeds_from_journal` does YAML-from-journal rebuild (T33
+    # Step 3.5.b drift resolution scope), NOT § 11.3 git-log-is-truth
+    # mid-block synthesis. § 11.3 logic lives in resume.md prose at
+    # Step 3.5.d as bash code executed by the AI agent reading the
+    # protocol — NOT exposed as a helper subcommand. Behavioral testing
+    # of § 11.3 mid-block synthesis is therefore NOT possible via
+    # subprocess invocation; only no-crash invocation + content-level
+    # routing pattern check. Scope reduced accordingly.
+    assert result.returncode == 0, (
+        f"rebuild_seeds_from_journal must dispatch cleanly: "
+        f"rc={result.returncode}, err={result.stderr!r}"
+    )
 
 
 # ---------- Scenario 3: mid-block, no matching commit (T46) ----------
@@ -491,34 +485,22 @@ def test_resume_mid_block_no_commit_discards_plan(tmp_path):
         "planned_commit_sha not in git HEAD → seed_block_discarded event."
     )
 
-    # Behavioral: if helper exposed, invoke + assert non-crash + discard signal
-    helper_help = subprocess.run(
-        ["bash", str(HELPER), "help"],
-        capture_output=True, text=True,
+    # T46 review fix (Stage 2 C-1 2026-04-26): unconditional helper call
+    # (was: dead-code guard on usage() listing).
+    result = subprocess.run(
+        ["bash", str(HELPER), "rebuild_seeds_from_journal"],
+        cwd=repo, env=env, capture_output=True, text=True,
     )
-    if "rebuild_seeds_from_journal" in (helper_help.stdout + helper_help.stderr):
-        result = subprocess.run(
-            ["bash", str(HELPER), "rebuild_seeds_from_journal"],
-            cwd=repo, env=env, capture_output=True, text=True,
-        )
-        assert result.returncode == 0, (
-            f"rebuild_seeds_from_journal must not crash on missing-commit case: "
-            f"rc={result.returncode}, err={result.stderr!r}"
-        )
-        post_events = []
-        for ln in (session_root / "journal.jsonl").read_text().splitlines():
-            if ln.strip():
-                try:
-                    post_events.append(json.loads(ln)["event"])
-                except (json.JSONDecodeError, KeyError):
-                    pass
-        # Discard signal must appear (event OR stdout)
-        assert "seed_block_discarded" in post_events or \
-            "discarded" in post_events or \
-            "discard" in (result.stdout + result.stderr).lower(), (
-            f"rebuild_seeds_from_journal must signal discard for missing-commit "
-            f"case — events={post_events}, output={result.stdout + result.stderr!r}"
-        )
+    # T46 review iteration: same scope reduction as scenario 2 — § 11.3
+    # discard logic lives in resume.md prose at Step 3.5.d, not in the
+    # `rebuild_seeds_from_journal` helper. Behavioral discard event
+    # emission is not testable via subprocess invocation. No-crash check
+    # remains as the dispatch verification; content-level structural
+    # pattern (asserted above) covers the routing requirement.
+    assert result.returncode == 0, (
+        f"rebuild_seeds_from_journal must dispatch cleanly on missing-commit case: "
+        f"rc={result.returncode}, err={result.stderr!r}"
+    )
 
 
 # ---------- Scenario 4: worktree missing (T46) ----------
@@ -532,17 +514,31 @@ def test_resume_worktree_missing_routes_to_recovery(tmp_path):
     in pytest. Structural pattern requires W-11.1 + recovery flow
     co-location, not bare keyword."""
     rm = RESUME_MD.read_text(encoding="utf-8")
-    # Must reference W-11.1 + recovery flow co-located (not just bare keyword)
+    # T46 review fix (Stage 2 I-2 2026-04-26): tightened to require a
+    # *structural action* keyword co-located with W-11.1, not just any
+    # prose word like "recover" or "prompt". The pre-fix regex passed
+    # incidentally because "AskUserQuestion" appears within 500 chars of
+    # multiple W-11.1 references in resume.md prose; even if the
+    # `resume_worktree_missing` journal-event emission were removed, the
+    # prose alone would satisfy. Post-fix anchors on the actual emit-
+    # site keywords: `resume_worktree_missing` (the event name at
+    # resume.md:297), `rc=3` (the W-11.1 contract code), or `recreate`
+    # (the recovery action verb).
     assert re.search(
-        r'W-11\.1[\s\S]{0,500}?(recreate|AskUserQuestion|recover|prompt)',
+        r'W-11\.1[\s\S]{0,500}?(resume_worktree_missing|rc=3|recreate)',
+        rm,
+    ) or re.search(
+        r'(resume_worktree_missing|rc=3)[\s\S]{0,500}?W-11\.1',
         rm,
     ) or re.search(
         r'worktree[\s\S]{0,200}?(deleted|missing|not\s+found)[\s\S]{0,500}?'
-        r'(AskUserQuestion|prompt|rc=3|recreate)',
+        r'(resume_worktree_missing|rc=3|recreate)',
         rm, re.IGNORECASE,
     ), (
         "resume.md Step 3.5.c must specify W-11.1 worktree-missing recovery "
-        "flow — keyword + recovery action co-located, not separate mentions."
+        "flow with a structural action keyword (resume_worktree_missing event "
+        "emission, rc=3 contract code, or recreate verb) co-located within "
+        "500 chars — bare prose like 'recover'/'prompt' is too lax."
     )
 
 
@@ -589,7 +585,11 @@ def test_resume_drift_routes_to_rebuild_seeds_from_journal(tmp_path):
     assert "resume_drift_detected" in rm, \
         "resume.md must emit resume_drift_detected event on drift"
     # Co-location: helper invocation + event emit must appear in same Step 3.5 region
-    step3_5 = rm.split("Step 3.5", 1)[1].split("Step 3.6", 1)[0] \
+    # T46 review fix (Stage 2 C-2 2026-04-26): bound Step 3.5 region by
+    # the next real downstream heading (`## Step 4`) — resume.md has no
+    # "Step 3.6" heading, so `.split("Step 3.6")[0]` was a no-op that
+    # silently degraded to whole-file scan.
+    step3_5 = rm.split("Step 3.5", 1)[1].split("## Step 4", 1)[0] \
         if "Step 3.5" in rm else ""
     assert "rebuild_seeds_from_journal" in step3_5 and \
         "resume_drift_detected" in step3_5, (
@@ -597,32 +597,31 @@ def test_resume_drift_routes_to_rebuild_seeds_from_journal(tmp_path):
         "must both appear within Step 3.5 (drift resolution flow)."
     )
 
-    # Behavioral: if helper exposed, invoke + assert post-state reconciled
-    helper_help = subprocess.run(
-        ["bash", str(HELPER), "help"],
-        capture_output=True, text=True,
+    # T46 review fix (Stage 2 C-1 2026-04-26): unconditional helper call
+    # (was: dead-code guard on usage() listing).
+    result = subprocess.run(
+        ["bash", str(HELPER), "rebuild_seeds_from_journal"],
+        cwd=repo, env=env, capture_output=True, text=True,
     )
-    if "rebuild_seeds_from_journal" in (helper_help.stdout + helper_help.stderr):
-        result = subprocess.run(
-            ["bash", str(HELPER), "rebuild_seeds_from_journal"],
-            cwd=repo, env=env, capture_output=True, text=True,
-        )
-        assert result.returncode == 0, (
-            f"rebuild_seeds_from_journal must succeed: rc={result.returncode}, "
-            f"err={result.stderr!r}"
-        )
-        # At minimum, the drift event must land in journal — OR stdout signals drift
-        post_journal_events = []
-        for ln in (session_root / "journal.jsonl").read_text().splitlines():
-            if ln.strip():
-                try:
-                    post_journal_events.append(json.loads(ln)["event"])
-                except (json.JSONDecodeError, KeyError):
-                    pass
-        assert "resume_drift_detected" in post_journal_events or \
-            "drift" in result.stdout.lower(), (
-            f"rebuild_seeds_from_journal must emit resume_drift_detected — "
-            f"events={post_journal_events}, output={result.stdout!r}"
+    assert result.returncode == 0, (
+        f"rebuild_seeds_from_journal must dispatch cleanly: "
+        f"rc={result.returncode}, err={result.stderr!r}"
+    )
+    # T46 review iteration: helper updates session.yaml in-place
+    # (rebuilds seeds[] from journal events), but does NOT emit
+    # resume_drift_detected — that event is emitted by resume.md prose
+    # at Step 3.5.b when the AI agent compares pre/post yaml states.
+    # Verify yaml was rewritten to reflect journal truth (seed_3 status
+    # changed from active → killed_<reason> per journal kill event).
+    import yaml as _yaml_post
+    post_yaml = _yaml_post.safe_load((session_root / "session.yaml").read_text()) or {}
+    post_seeds = {s.get("id") or s.get("seed_id"): s
+                  for s in (post_yaml.get("virtual_parallel", {}).get("seeds") or [])}
+    if 3 in post_seeds:
+        seed_3_status = post_seeds[3].get("status", "")
+        assert "killed" in seed_3_status, (
+            f"rebuild_seeds_from_journal must reflect journal truth: "
+            f"seed_3 was killed in journal but yaml status={seed_3_status!r}"
         )
 
 
@@ -659,10 +658,44 @@ def test_resume_v3_0_session_routes_to_legacy(tmp_path):
     # equivalent gate is the IS_V31 binary flag derived from $VERSION
     # 3-arm match, which routes v3.0 to the no-reconciliation branch).
     rm = RESUME_MD.read_text(encoding="utf-8")
-    assert "v3_0" in rm or "pre_v3_1" in rm or \
-        re.search(r'VERSION_TIER.*v3_0', rm) or \
-        ("IS_V31" in rm and re.search(r'v3\.0|v2\.x', rm)), \
-        "resume.md must route v3.0 sessions to legacy path"
+    # T46 review fix (Stage 2 I-1 2026-04-26): tightened to require the
+    # actual gate code — not just prose substrings. Resume.md uses W-5
+    # IS_V31 design with an if/else form (NOT case-statement):
+    #
+    #   if echo "$VERSION" | grep -q '^3\.1'; then
+    #     IS_V31=1
+    #   else
+    #     IS_V31=0
+    #     echo "Step 3.5: v$VERSION session — ..."
+    #   fi
+    #
+    # This is genuine executable routing: the `^3\.1` regex check
+    # implicitly routes v3.0.x and v2.x to the else-branch (IS_V31=0).
+    # The test accepts any conditional form (if/case/test) that
+    # co-locates VERSION inspection with IS_V31 binary assignment.
+    gate_routing = (
+        # if/else form: VERSION check + IS_V31=0 in else-branch (resume.md actual)
+        re.search(
+            r'(?:if|case)[\s\S]{0,200}?\$VERSION[\s\S]{0,400}?IS_V31\s*=\s*[01]',
+            rm,
+        ) or
+        # case form (defensive — for future refactors)
+        re.search(
+            r'case\s+"\$VERSION"[\s\S]{0,600}?IS_V31\s*=',
+            rm,
+        ) or
+        # T37/T38 VERSION_TIER pattern (forward-compat for future refactor
+        # to unify with inner-loop / outer-loop / synthesis / coordinator)
+        re.search(r'VERSION_TIER[\s\S]{0,300}?v3_0', rm) or
+        re.search(r'v3_0[\s\S]{0,300}?VERSION_TIER', rm)
+    )
+    assert gate_routing, (
+        "resume.md must contain executable routing code that gates "
+        "IS_V31 on $VERSION inspection (current W-5 design uses if/else "
+        "checking `^3\\.1` regex; future T37/T38 VERSION_TIER refactor "
+        "would also satisfy). Pre-fix accepted bare 'v3_0' substring "
+        "anywhere — would have falsely passed if actual gate code removed."
+    )
 
     # virtual_parallel block should NOT be required for v3.0
     # (legacy schema preserved per spec § 10.1 + R7 mitigation)
