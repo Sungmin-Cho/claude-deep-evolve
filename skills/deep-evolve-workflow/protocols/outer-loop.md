@@ -91,14 +91,20 @@ Meta Analysis (Step 6.5.1). It is gated on `$VERSION_TIER` == "v3_1_plus";
 v2 (`pre_v3`) and v3.0.x (`v3_0`) sessions skip to Meta Analysis without
 executing any substeps below.
 
-**W3 G11 fold-in (T40)**: each substep below carries its own
-`if [ "$VERSION_TIER" = "v3_1_plus" ]; then ... fi` gate for sub-agent
-partial-copy safety. A subagent dispatched to edit a single substep
-(say, 6.5.0.2) can copy out the substep region with its gate intact —
-the patch lands without dropping the v3_1_plus guard. Bash variables
+**W3 G11 fold-in (T40)**: each fenced `bash` code block within each
+substep below carries its own `if [ "$VERSION_TIER" = "v3_1_plus" ]; then ... fi`
+gate (rather than one wrapping the whole substep), giving per-bash-fence
+partial-copy safety — the strongest granularity since fences are the
+discrete copy-target unit a subagent might extract. Substep 6.5.0.1
+contains 1 fenced bash block (1 gate); 6.5.0.2 contains multiple bash
+blocks separated by markdown prose (one gate per fence — markdown
+prevents a single `if/fi` from spanning prose); 6.5.0.3 contains 1
+fenced bash block (1 gate). Total: ~9 gates today. Bash variables
 persist across `fi`/`if` boundaries within the same coordinator
 process; cross-substep data flow (e.g., `EPOCH_KEEPS` from 6.5.0.1
-read in 6.5.0.2) is preserved without a single global sandwich.
+read in 6.5.0.2; `CURRENT_GEN`, `HELPER_SCRIPTS_DIR`, `SIMILARITIES_JSON`,
+`INSPIRED_BY_MAP`, `CROSS_SEED_BORROWS`, `CLASSIFY` flowing across
+substeps) is preserved without a single global sandwich.
 
 ### 6.5.0.1 Forum summary generation (wires T5)
 

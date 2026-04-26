@@ -369,13 +369,56 @@ def test_step_6_5_0_no_global_sandwich():
     c = _read("outer-loop.md")
     region = _step_6_5_0_region(c)
     assert region, "Step 6.5.0 entry header missing in outer-loop.md"
-    gates = re.findall(
-        r'if\s+\[\s+"\$VERSION_TIER"\s+=\s+"v3_1_plus"\s+\]\s*;\s*then',
-        region,
+
+    # T40 code-quality fold-in (review 2026-04-26): count gates only inside
+    # fenced ```bash code blocks, not in markdown prose. The entry-prose
+    # paragraph cites the literal `if [ ... ]; then` pattern in backticks
+    # as documentation (line 95-ish); naive region-wide regex counts that
+    # citation as an orphan gate.
+    #
+    # Indent-aware fence matching: 6.5.0.2's bash fences live inside
+    # numbered list items with 3-space indentation. Pattern allows any
+    # leading whitespace before the opening ```bash and closing ``` so
+    # both column-0 fences (6.5.0.1, 6.5.0.3) and indented fences (6.5.0.2)
+    # are captured. Standard column-0 fence regex from T39 is intentionally
+    # narrower (A.2.6 uses only column-0 fences).
+    def _count_runtime_gates(text):
+        bash_blocks = re.findall(
+            r"^[ \t]*```bash\s*\n([\s\S]*?)^[ \t]*```\s*$",
+            text, re.MULTILINE,
+        )
+        bash_only = "\n".join(bash_blocks)
+        return re.findall(
+            r'if\s+\[\s+"\$VERSION_TIER"\s+=\s+"v3_1_plus"\s+\]\s*;\s*then',
+            bash_only,
+        )
+
+    gates = _count_runtime_gates(region)
+
+    # Per-substep validation catches the redistribution-regression class
+    # (e.g., 6.5.0.1 loses its gate but 6.5.0.2 gains a duplicate; total
+    # still >= 3 but the regression is silent). Each substep must
+    # independently have >= 1 runtime gate, AND the region total must
+    # equal the sum of per-substep counts (no orphan code-gate outside
+    # any substep — would indicate a leftover sandwich-shaped gate).
+    per_substep_total = 0
+    for sub in ("1", "2", "3"):
+        sub_region = _outer_loop_substep_region(sub)
+        sub_gates = _count_runtime_gates(sub_region)
+        assert len(sub_gates) >= 1, (
+            f"Step 6.5.0.{sub} must contain >= 1 runtime gate inside a "
+            f"fenced bash block, found {len(sub_gates)}"
+        )
+        per_substep_total += len(sub_gates)
+
+    assert len(gates) == per_substep_total, (
+        f"Step 6.5.0 region has {len(gates)} runtime gates but per-substep "
+        f"sum is {per_substep_total}. Difference indicates orphan gate "
+        f"outside any substep (likely a partial sandwich remnant)."
     )
     assert len(gates) >= 3, (
-        f"Step 6.5.0 must contain >= 3 per-substep gates (post-W3 refactor), "
-        f"found {len(gates)}. Pre-W3 sandwich detected — refactor incomplete."
+        f"Step 6.5.0 must contain >= 3 runtime gates (one per substep "
+        f"minimum), found {len(gates)}. Refactor incomplete."
     )
     # Also verify the old closing comment is gone
     assert "close `if [ \"$VERSION_TIER\" = \"v3_1_plus\" ]` opened at Step 6.5.0 entry" not in region, \
