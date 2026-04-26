@@ -859,6 +859,9 @@ cmd_create_seed_worktree() {
   # Create worktree + branch from current HEAD
   local err
   if ! err=$(git worktree add "$wt_path" -b "$branch" 2>&1 >/dev/null); then
+    # Cleanup-on-failure (spec § 11): -b created the branch before path
+    # check; delete the orphan to preserve cleanup-on-failure invariant.
+    git branch -D "$branch" 2>/dev/null || true
     echo "create_seed_worktree: git worktree add failed for seed $seed_id: $err" >&2
     return 1
   fi
