@@ -116,12 +116,20 @@ v3.0 AAR 기반 Inner/Outer Loop에 parallel N-seed 탐색을 추가하는 major
 
 ### 변경
 - `session.yaml` 스키마: `deep_evolve_version: "3.1.0"`; 신규
-  `virtual_parallel` 블록 (`enabled` bool, `N` int 1–9,
-  `block_size` int ∈ {1,2,3,5,8}, `seeds[]` array — 각 항목에
-  `seed_id`, `seed_origin ∈ {β, γ}`, `worktree_path`, `branch_name`,
-  `description`, `status ∈ {active, killed, completed}`, `q_metric`,
-  `borrows_received`, `borrows_given`, `experiments_used`, `keeps`,
-  killed/completed 시 `final_q` 추가).
+  `virtual_parallel` 블록. 최상위 필드: `n_current` (int, 활성 seed 수),
+  `n_initial` (int, 세션 init 시 값), `n_range` (`{min: 1, max: 9}`,
+  AI 허용 N 범위), `budget_total` (int, seed들이 공유하는 총 실험 예산).
+  Per-seed `seeds[]` 항목: `id` (int, seed 식별자), `status ∈ {active,
+  killed, completed}`, `direction` (str, β/γ 방향 요약), `hypothesis`
+  (str, 초기 가설), `initial_rationale` (str), `worktree_path`, `branch`,
+  `created_at` (ISO 8601), `created_by ∈ {init_batch, grow_then_schedule}`
+  (init-time vs 세션 중 γ 대체 — runtime에서 spec의 β/γ 구분 역할),
+  `experiments_used`, `keeps`, `borrows_given`, `borrows_received`
+  (MIN-wins per § 7.4 P1), `current_q` (float, 최신 Q score),
+  `allocated_budget` (int, 이 seed의 `budget_total` 분배몫), `killed_at`
+  (null|ISO), `killed_reason` (null|str). 블록 크기 (`{1, 2, 3, 5, 8}`)는
+  scheduler turn마다 AI Q3 판단으로 결정 — session.yaml 필드가 **아님**;
+  `seed_scheduled` journal 이벤트에 기록.
 - `journal.jsonl` v3.1 확장 이벤트 (journal-side): `seed_initialized`,
   `seed_block_completed`, `seed_block_failed`, `seed_killed`
   (`queued_at`/`applied_at`/`final_q`/`experiments_used` 포함),

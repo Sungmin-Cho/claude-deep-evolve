@@ -122,12 +122,22 @@ coordinator.md).
 
 ### Changed
 - `session.yaml` schema: `deep_evolve_version: "3.1.0"`; new
-  `virtual_parallel` block with `enabled` (bool), `N` (int 1–9),
-  `block_size` (int ∈ {1,2,3,5,8}), `seeds[]` array (each entry has
-  `seed_id`, `seed_origin ∈ {β, γ}`, `worktree_path`, `branch_name`,
-  `description`, `status ∈ {active, killed, completed}`, `q_metric`,
-  `borrows_received`, `borrows_given`, `experiments_used`, `keeps`,
-  `final_q` if killed/completed).
+  `virtual_parallel` block. Top-level fields: `n_current` (int, active seed
+  count), `n_initial` (int, value at session init), `n_range`
+  (`{min: 1, max: 9}`, AI's allowed N range), `budget_total` (int,
+  total experiment budget shared across seeds). Per-seed entries in
+  `seeds[]` carry: `id` (int, seed identifier), `status ∈ {active, killed,
+  completed}`, `direction` (str, β/γ direction summary), `hypothesis` (str,
+  initial hypothesis), `initial_rationale` (str), `worktree_path`,
+  `branch`, `created_at` (ISO 8601), `created_by ∈ {init_batch,
+  grow_then_schedule}` (init-time vs mid-session γ replacement —
+  serves the same role as the spec's β/γ distinction at runtime),
+  `experiments_used`, `keeps`, `borrows_given`, `borrows_received`
+  (MIN-wins per § 7.4 P1), `current_q` (float, latest Q score),
+  `allocated_budget` (int, this seed's share of `budget_total`),
+  `killed_at` (null|ISO), `killed_reason` (null|str). Block size
+  (`{1, 2, 3, 5, 8}`) is an AI Q3 judgment per scheduler turn — NOT
+  a session.yaml field; it lives in `seed_scheduled` journal events.
 - `journal.jsonl` extended events for v3.1 (journal-side):
   `seed_initialized`, `seed_block_completed`, `seed_block_failed`,
   `seed_killed` (with `queued_at`/`applied_at`/`final_q`/`experiments_used`),
