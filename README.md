@@ -18,6 +18,60 @@ deep-evolve operates **outside** the standard [Harness Engineering](https://mart
 
 With v2.0's Outer Loop, deep-evolve goes further: it not only improves the target code but also evolves the **strategy** that drives experiments — and can even expand the **evaluation harness** itself when convergence is detected. This 3-layer self-evolution (parameters → strategy text → evaluation expansion) makes the system a true meta-optimizer that improves its own improvement process.
 
+## What's New in 3.1.0
+
+Virtual parallel N-seed exploration. Each session runs N=1..9 independent
+seed worktrees in parallel (block-of-experiments coordination via Q3
+AI-judged block ∈ {1,2,3,5,8}), with cross-seed observation through a
+shared forum and an adaptive scheduler that decides which seed gets the
+next block.
+
+- **Per-seed worktree isolation** — N seed worktrees under
+  `.deep-evolve/<sid>/seeds/<seed_id>/worktree/` (T2 worktree manager).
+  Coordinator dispatches subagents via prose contract; per-seed inner
+  loop runs unchanged code paths with `seed_id` injected into journal events.
+- **β/γ seed differentiation** — β (init-time intentionally-ambiguous
+  directions, generated once at A.3) and γ (mid-session AI-replacement
+  via `grow_then_schedule` decision when fairness floor or scheduler
+  signals demand a new direction). Both share the seed schema; only
+  `seed_origin ∈ {β, γ}` differs.
+- **Adaptive scheduler** — `scheduler-decide.py` returns one of
+  `{schedule, kill_then_schedule, grow_then_schedule}`. Per-seed signals
+  (Q, in_flight_block, borrows_received MIN-wins, last_keep_age) +
+  session-wide signals (P3 floor, fairness deficit) feed into AI
+  decision; helper enforces JSON schema + `REQUIRED_BY_DECISION` per-decision
+  required fields + numeric isinstance-not-bool validation.
+- **Active borrow exchange** — Cross-seed observation via
+  `.deep-evolve/<sid>/forum.jsonl` (append-only, flock-protected). Two-phase
+  borrow lifecycle: `borrow_planned` (journal-side, Step 5.f intent
+  marker) → `cross_seed_borrow` (forum-side, emitted when the borrow is
+  actually executed in a kept commit) — with `borrow_abandoned` as a
+  janitor cleanup for stale planned events that never executed. Borrow
+  preflight enforces P2 flagged-filter + P3 allocation floor +
+  per-(borrower, source_commit) dedup. MIN-wins on `borrows_received`
+  for fairness signal.
+- **Session-end synthesis with cascade fallback** — Synthesis worktree
+  consumes all seed branches; AI proposes merge plan; on Q regression
+  cascade falls back through 5.a preferred-baseline → 5.b
+  non-quarantine → 5.c best-effort → 5.d no-baseline (§ 8.2). Each branch
+  emits a structured fallback note via `generate-fallback-note.py`.
+- **Init + resume + meta-archive schema_v4** — A.1.6 AI classifies project
+  along (project_type, eval_parallelizability) → `n_suggested`. A.2.6
+  AskUserQuestion confirms N (honors `--no-parallel`/`--n-min`/`--n-max`
+  env vars). Resume reconciles yaml/journal drift via prefer-journal SOT
+  (Step 3.5.b). Meta-archive entries gain `virtual_parallel` block at
+  schema_version=4; v2/v3/v4 coexist via 4-arm version gate. Section F
+  prunes v3 entries at 270 days (paralleling v2's 180-day rule).
+- **CLI surface** — `--no-parallel` forces N=1; `--n-min=<k>` /
+  `--n-max=<k>` narrow AI's N decision range (cross-flag invariant
+  N_MIN ≤ N_MAX enforced, rc=2 on violation); `--kill-seed=<id>` writes
+  pending entry to `kill_requests.jsonl` for next-scheduler-turn
+  AskUserQuestion confirmation; `--status` subcommand prints per-seed
+  dashboard (§ 13.1).
+
+Reference: Wen et al. 2026 (AAR foundation, retained from v3.0); v3.1
+extends the AAR Inner/Outer Loop with virtual-parallel exploration.
+
 ## What's New in 3.0.0
 
 Four AAR-inspired behavioral layers added to the Inner/Outer Loop. All new features
@@ -304,6 +358,12 @@ Then asks: merge to main, create PR, keep branch, or discard?
 
 # View lineage tree
 /deep-evolve history --lineage
+
+# v3.1.0 — virtual parallel exploration
+/deep-evolve --no-parallel               # Force N=1 (single-seed mode)
+/deep-evolve --n-min=2 --n-max=5         # Narrow AI's N decision range
+/deep-evolve --kill-seed=<seed_id>       # Mid-session retire a seed
+/deep-evolve --status                    # Per-seed dashboard
 ```
 
 ## Supported Domains

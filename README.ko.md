@@ -18,6 +18,55 @@ deep-evolve는 표준 [Harness Engineering](https://martinfowler.com/articles/ha
 
 v2.0의 Outer Loop로 deep-evolve는 한 단계 더 나아갑니다: 대상 코드뿐 아니라 실험을 이끄는 **전략** 자체를 진화시키고, 수렴이 감지되면 **평가 harness** 자체를 확장할 수도 있습니다. 이 3계층 자기 진화(파라미터 → 전략 텍스트 → 평가 확장)는 시스템을 자체 개선 프로세스를 개선하는 진정한 메타 옵티마이저로 만듭니다.
 
+## 3.1.0 신규 기능
+
+Virtual parallel N-seed 탐색. 각 세션이 N=1..9개의 독립 seed worktree에서
+병렬 실행 (블록 단위 실험 조정, Q3 AI 판단 block ∈ {1,2,3,5,8}). 공유
+forum을 통한 seed 간 관찰, 다음 블록을 어느 seed가 받을지 결정하는
+적응형 스케줄러.
+
+- **Per-seed worktree 격리** — `.deep-evolve/<sid>/seeds/<seed_id>/worktree/`
+  하위 N개 seed worktree (T2 worktree manager). Coordinator가 prose
+  contract로 subagent 발화; per-seed inner loop는 기존 코드 경로 그대로
+  + journal 이벤트에 `seed_id` 주입.
+- **β/γ seed 구분** — β (init 시 의도적 모호 방향, A.3에서 1회 생성),
+  γ (세션 중 fairness floor/scheduler signal에 의한 AI 재생성,
+  `grow_then_schedule` 결정 시). 두 종류 모두 동일 seed schema 공유,
+  `seed_origin ∈ {β, γ}`로만 구별.
+- **적응형 스케줄러** — `scheduler-decide.py`가
+  `{schedule, kill_then_schedule, grow_then_schedule}` 중 하나 반환.
+  Per-seed signals (Q, in_flight_block, borrows_received MIN-wins,
+  last_keep_age) + session-wide signals (P3 floor, fairness deficit)이
+  AI 판단에 입력. Helper가 JSON schema + `REQUIRED_BY_DECISION` 검증 +
+  isinstance-not-bool 숫자 가드 강제.
+- **Active borrow 교환** — Seed 간 관찰 통로
+  `.deep-evolve/<sid>/forum.jsonl` (append-only, flock 보호). 2단계 borrow
+  lifecycle: `borrow_planned` (journal-side, Step 5.f intent marker) →
+  `cross_seed_borrow` (forum-side, 실제 차용이 kept commit에서 실행될 때
+  발행) — `borrow_abandoned`는 실행되지 않고 stale로 남은 planned 이벤트를
+  정리하는 janitor 마커. Borrow preflight에서 P2 flagged 필터 + P3 floor +
+  (borrower, source_commit) per-쌍 dedup 강제. `borrows_received`는
+  MIN-wins로 fairness 신호 제공.
+- **세션 종료 synthesis + cascade fallback** — Synthesis worktree에서
+  모든 seed 브랜치 통합. AI 병합 계획이 Q 회귀 시 5.a preferred-baseline
+  → 5.b non-quarantine → 5.c best-effort → 5.d no-baseline 순으로 폴백
+  (§ 8.2). 각 branch마다 `generate-fallback-note.py`가 구조화된 설명 발행.
+- **Init + resume + meta-archive schema_v4** — A.1.6에서 AI가
+  (project_type, eval_parallelizability) 기반으로 `n_suggested` 분류.
+  A.2.6 AskUserQuestion으로 N 확정 (`--no-parallel`/`--n-min`/`--n-max`
+  env var 존중). Resume 시 yaml/journal drift는 prefer-journal SOT로
+  복원 (Step 3.5.b). Meta-archive entry는 schema_version=4에 `virtual_parallel`
+  블록 추가; v2/v3/v4가 4-arm version gate로 공존. Section F가 v3 entry는
+  270일 prune (v2의 180일 룰과 평행).
+- **CLI 표면** — `--no-parallel`은 N=1 강제; `--n-min=<k>` / `--n-max=<k>`로
+  AI의 N 결정 범위 좁힘 (N_MIN ≤ N_MAX 교차 불변식 강제, 위반 시 rc=2);
+  `--kill-seed=<id>`는 `kill_requests.jsonl`에 pending 항목 기록 후 다음
+  scheduler turn에서 AskUserQuestion 확정; `--status` 서브커맨드는 per-seed
+  대시보드 출력 (§ 13.1).
+
+참고: Wen et al. 2026 (AAR 기반, v3.0에서 유지); v3.1은 AAR Inner/Outer
+Loop를 virtual-parallel 탐색으로 확장.
+
 ## 3.0.0 신규 기능
 
 AAR 논문에서 영감 받은 4개 동작 레이어를 Inner/Outer Loop에 추가. v3 세션에서만
@@ -303,6 +352,12 @@ ghi9012  0.973684   keep      런타임 언어 파일 쓰기 패턴 추가
 
 # lineage tree 표시
 /deep-evolve history --lineage
+
+# v3.1.0 — virtual parallel 탐색
+/deep-evolve --no-parallel               # N=1 강제 (단일 seed 모드)
+/deep-evolve --n-min=2 --n-max=5         # AI N 결정 범위 좁힘
+/deep-evolve --kill-seed=<seed_id>       # 세션 중 seed 종료
+/deep-evolve --status                    # Per-seed 대시보드
 ```
 
 ## 지원 도메인
