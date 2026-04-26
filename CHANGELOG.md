@@ -1,5 +1,233 @@
 # Changelog
 
+## [3.1.0] — 2026-04-26 (Virtual Parallel N-seed)
+
+Major release adding parallel N-seed exploration to the v3.0 AAR-Inspired
+Inner/Outer Loop. Each session now runs N=1..9 independent seed worktrees
+coordinated by an adaptive scheduler over a shared forum, with session-end
+synthesis merging the per-seed results into a single best branch. Gated on
+`session.yaml.deep_evolve_version: "3.1.0"`. v3.0.x sessions remain fully
+supported via VERSION_TIER routing — `pre_v3` / `v3_0` / `v3_1_plus` arms
+across 4 protocol files (inner-loop.md, outer-loop.md, synthesis.md,
+coordinator.md).
+
+### Added
+- **Virtual parallel N-seed** (§ 4 Architecture, § 5 Seed Lifecycle):
+  N=1..9 seed worktrees under `.deep-evolve/<sid>/seeds/<seed_id>/worktree/`.
+  Coordinator dispatches subagents via prose contract; per-seed inner loop
+  runs unchanged with `seed_id` injected into journal events.
+- **β/γ seed differentiation** (§ 5): β seeds (init-time intentionally-
+  ambiguous directions, generated once at A.3), γ seeds (mid-session
+  AI-replacement via `grow_then_schedule` decision). `seed_origin ∈ {β, γ}`
+  in seed schema.
+- **Adaptive scheduler** (§ 6): `hooks/scripts/scheduler-decide.py` returns
+  one of `ALLOWED_DECISION = {schedule, kill_then_schedule, grow_then_schedule}`.
+  `REQUIRED_BY_DECISION` per-decision required-field schema enforced
+  (kill_then_schedule: kill_target; grow_then_schedule: new_seed_id).
+  Drift-detector test asserts dict-key parity with `ALLOWED_DECISION` to
+  catch future contributors who add a decision type without updating the
+  schema. Per-seed signals — Q, in_flight_block, borrows_received MIN-wins,
+  last_keep_age. Session-wide signals — P3 allocation floor (default 3),
+  fairness deficit. Soft fairness floor (§ 6.6).
+- **Forum + borrow exchange** (§ 7): `.deep-evolve/<sid>/forum.jsonl`
+  append-only, flock-protected. 2-phase borrow lifecycle —
+  `borrow_planned` (journal-side, Step 5.f intent marker) →
+  `cross_seed_borrow` (forum-side, emitted when borrow is executed in
+  the next kept commit), with `borrow_abandoned` (journal-side janitor)
+  cleaning stale planned events older than 2 blocks without a matching
+  `cross_seed_borrow`. Forum field SOT — `to_seed`/`from_seed` (no `_id`
+  suffix) across all 8+ codebase sites. `dedup_planned` keyed on
+  journal-side `borrow_planned`; `dedup_executed` keyed on forum-side
+  `cross_seed_borrow` (data-source contract per spec § 7.1).
+  `borrows_received` MIN-wins per § 7.4 P1.
+- **Borrow guardrails** (§ 7.4 P2/P3): `hooks/scripts/borrow-preflight.py`
+  enforces P2 flagged-filter (no shortcut/legibility-failed sources) +
+  P3 allocation floor + per-(borrower, source_commit) dedup.
+- **Convergence classifier** (§ 7.5): `hooks/scripts/convergence-detect.py`
+  3-class borrow-ancestry-closure classifier — `evidence_based`,
+  `borrow_chain_convergence`, `contagion_suspected`. Outer Loop weights
+  them 2× / 1× / 0 stagnation credit.
+- **Kill management** (§ 5.5): `hooks/scripts/kill-conditions.py`
+  5-condition whitelist (faithful § 5.5a 4-clause `sustained_regression`
+  pseudocode); `hooks/scripts/kill-request-writer.sh` for `--kill-seed`
+  CLI; `session-helper.sh` `append_kill_queue_entry` /
+  `drain_kill_queue` with W-9 in-flight deferral + Phase 2/3
+  snapshot-then-process atomicity. `seed_killed` events carry
+  `queued_at`/`applied_at`/`final_q`/`experiments_used`.
+- **Session-end synthesis** (§ 8): `synthesis.md` 7-step orchestration +
+  N=1 short-circuit per § 8.5. `baseline-select.py` 4-step cascade
+  (5.a preferred → 5.b non-quarantine → 5.c best-effort → 5.d no-baseline)
+  + 4-level tiebreak (final_q → keeps → borrows → seed_id).
+  `cross-seed-audit.py` Step 3 forum aggregator (borrow matrix +
+  convergence tally + per-seed activity). `generate-fallback-note.py`
+  structured fallback explanation with verbatim Korean AskUserQuestion
+  options per spec § 8.2.
+- **Synthesis worktree helpers** (§ 4.1, § 8.2 Step 5): `session-helper.sh`
+  `cmd_create_synthesis_worktree` + `cmd_cleanup_failed_synthesis_worktree`
+  (renames branch to `synthesis-failed-<ts>` for audit trail).
+- **Init flow** (§ 5, § 13): A.1.6 AI classification along
+  (project_type, eval_parallelizability) → `n_suggested` (1..9 matrix).
+  A.2.6 AskUserQuestion N confirmation (honors `DEEP_EVOLVE_NO_PARALLEL` /
+  `DEEP_EVOLVE_N_MIN` / `DEEP_EVOLVE_N_MAX` env vars from CLI flags).
+  A.3.6 per-seed worktree creation + β generator + per-seed program.md
+  + session.yaml seeds[] population. New `init_vp_analysis` /
+  `seed_initialized` journal events (in `(unset SEED_ID; ...)` subshells
+  to scope coordinator-side events away from per-seed SEED_ID).
+- **Resume reconciliation** (§ 11): resume.md Step 3.5 v3.1 reconciliation —
+  3.5.a yaml + journal seed-set read; 3.5.b W-3 drift detection with
+  prefer-journal resolution + `resume_drift_detected` event +
+  `rebuild_seeds_from_journal` helper; 3.5.c per-seed
+  `validate_seed_worktree` with rc=3 → AskUserQuestion W-11.1 recovery,
+  rc=4/5/6 → exit 1; 3.5.d git-log-is-truth replay per § 11.3 with
+  `planned_commit_sha` / `pre_plan_head_sha` matching → synthesized
+  `committed`/`discarded` events.
+- **CLI flags** (§ 13): `--no-parallel`, `--n-min=<k>`, `--n-max=<k>`,
+  `--kill-seed=<id>`, `--status` subcommand. Cross-flag invariant
+  N_MIN ≤ N_MAX enforced (rc=2 on violation). `--status` is a thin
+  terminal dispatcher invoking new pure-function helper
+  `hooks/scripts/status-dashboard.py` rendering per-seed dashboard
+  per § 13.1.
+- **Meta-archive schema_v4** (§ 10, § 9.4): `transfer.md` 4-arm version
+  gate (`2` / `3` / `4` / `>=5`) with v3 entries → `N_prior=1`,
+  v4 entries → full `virtual_parallel` snapshot as prior signal to A.1.6
+  classifier. Section F prune candidates extended with v3-schema
+  270-day rule (paralleling v2-schema 180-day rule).
+- **VERSION_TIER routing**: `$VERSION_TIER ∈ {pre_v3, v3_0, v3_1_plus}`
+  + `IS_V31` boolean canonical across 4 protocol files (inner-loop.md,
+  outer-loop.md, synthesis.md, coordinator.md). 4-arm case statement
+  pattern uniform — virtual_parallel-DEPENDENT sub-steps gated on
+  `v3_1_plus`; virtual_parallel-INDEPENDENT (shortcut_detection,
+  seal_prepare) gated on `!= pre_v3`.
+- **Pytest test suite** (§ 12.1 W-8 per-file enumeration): 40
+  `test_v31_*.py` files exercising every v3.1 surface — borrow lifecycle
+  (`borrow_abandoned`, `borrow_guardrails`, `borrow_preflight`),
+  scheduler (`scheduler_decide`, `scheduler_decision`,
+  `scheduler_signals`, `scheduler_fairness`), kill management
+  (`kill_conditions`, `kill_queue`, `kill_request`, `kill_seed_cli`),
+  forum + cross-seed (`forum_io`, `forum_summary`, `cross_seed_audit`,
+  `convergence_detect`, `step_5e_forum_emission`), synthesis
+  (`baseline_select`, `synthesis_protocol`, `synthesis_worktree`,
+  `synthesis_fallback`, `fallback_note`), seed lifecycle (`beta_init`,
+  `beta_growth`, `budget_alloc`, `worktree_manager`, `worktree_helpers`,
+  `write_seed_program`), init + resume (`init_protocol`, `resume_v31`,
+  `session_yaml_schema`, `journal_events`, `transfer_schema_v4`),
+  CLI + status (`cli_flags`, `status_subcommand`, `helper_locator`),
+  protocol fixtures (`coordinator_protocol_exists`, `version_gate`,
+  `inner_loop_updates`, `outer_loop_updates`, `subagent_prompt`).
+  Total: 517 passed, 1 xfailed (T22 polling gap intentionally surfaced).
+- **New fixtures**: `multi_seed_mock/`, `synthesis_regression/`,
+  `forum_multi_seed/`, `forum_malformed/`, `v3_0_resume_sample/`,
+  `transfer_schema_v3/`, `transfer_schema_v4/`, `kill_scenarios/`
+  (4 sub-fixtures), `borrow_scenario/`.
+
+### Changed
+- `session.yaml` schema: `deep_evolve_version: "3.1.0"`; new
+  `virtual_parallel` block. Top-level fields: `n_current` (int, active seed
+  count), `n_initial` (int, value at session init), `n_range`
+  (`{min: 1, max: 9}`, AI's allowed N range), `budget_total` (int,
+  total experiment budget shared across seeds). Per-seed entries in
+  `seeds[]` carry: `id` (int, seed identifier), `status ∈ {active, killed,
+  completed}`, `direction` (str, β/γ direction summary), `hypothesis` (str,
+  initial hypothesis), `initial_rationale` (str), `worktree_path`,
+  `branch`, `created_at` (ISO 8601), `created_by ∈ {init_batch,
+  grow_then_schedule}` (init-time vs mid-session γ replacement —
+  serves the same role as the spec's β/γ distinction at runtime),
+  `experiments_used`, `keeps`, `borrows_given`, `borrows_received`
+  (MIN-wins per § 7.4 P1), `current_q` (float, latest Q score),
+  `allocated_budget` (int, this seed's share of `budget_total`),
+  `killed_at` (null|ISO), `killed_reason` (null|str). Block size
+  (`{1, 2, 3, 5, 8}`) is an AI Q3 judgment per scheduler turn — NOT
+  a session.yaml field; it lives in `seed_scheduled` journal events.
+- `journal.jsonl` extended events for v3.1 (journal-side):
+  `seed_initialized`, `seed_block_completed`, `seed_block_failed`,
+  `seed_killed` (with `queued_at`/`applied_at`/`final_q`/`experiments_used`),
+  `init_vp_analysis`, `resume_drift_detected`, `synthesis_commit`,
+  `synthesis_failed`, `borrow_planned`, `borrow_abandoned`,
+  `seed_scheduled`. All v3.1-specific events are emitted in
+  `(unset SEED_ID; ...)` subshells when written by the coordinator
+  (vs per-seed inner-loop subagents which inherit the seed-scoped
+  SEED_ID). Forum-side events (`cross_seed_borrow`, `convergence_event`)
+  are written separately to `forum.jsonl` per § 7.1 data-source contract.
+- `forum.jsonl` (new) — `.deep-evolve/<sid>/forum.jsonl`, append-only,
+  flock-protected. Field SOT: `to_seed`/`from_seed` (NO `_id` suffix).
+  Tail-skip-and-warn on malformed lines (data-flow direction:
+  consumer-tolerance for partial-event resilience).
+- `kill_requests.jsonl` (new) — pending kill queue. Coordinator drains
+  via `drain_kill_queue` at next scheduler turn + AskUserQuestion
+  confirmation; W-9 in-flight deferral; W-1 HELPER_SOURCED guard.
+- `meta-archive.jsonl` schema_v4 — adds `virtual_parallel` snapshot to
+  E.0 recording. v3.0.x sessions continue emitting schema_version=3
+  (no snapshot); all three (v2/v3/v4) coexist.
+- `protocols/inner-loop.md` Step 0.5 (block params intake +
+  seed_id tagging contract — closes Gap 4); v3.1 forum consultation in
+  Step 1; Step 5.f borrow evaluation (calls borrow-preflight.py).
+- `protocols/outer-loop.md` Step 6.5.0 (epoch boundary sync:
+  forum-summary.md generation, convergence detection, AI-driven N
+  re-evaluation) + 6.5.6 v3.1 addendum (evidence_based −2 /
+  borrow_chain_convergence −1 / contagion_suspected 0 + WARN +
+  AskUserQuestion escalation). Per-substep VERSION_TIER gates.
+- `protocols/synthesis.md` (new) — 7-step orchestration + N=1 short-
+  circuit + Step 6 3-branch fallback ladder per spec § 8.2 verbatim
+  AskUserQuestion options.
+- `protocols/coordinator.md` (new) — coordinator dispatch protocol +
+  scheduler-decide invocation contract + forward-compat VERSION_TIER
+  gate.
+- `commands/deep-evolve.md` Step 0.5 — 4 new flags (`--no-parallel`,
+  `--n-min`, `--n-max`, `--kill-seed`) + `--status` subcommand. Env-var
+  flags propagate to A.2.6 in init.md.
+- `transfer.md` schema_version=4 read path with W-1 forward-compat
+  default `*)` skip + warn; v5+ rejected loudly with rc=2.
+- `session-helper.sh` HELPER_VERSION 3.0.0 → 3.1.0; new subcommands
+  `append_seed_to_session_yaml`, `set_virtual_parallel_field`,
+  `cmd_create_synthesis_worktree`, `cmd_cleanup_failed_synthesis_worktree`,
+  `append_kill_queue_entry`, `drain_kill_queue`,
+  `rebuild_seeds_from_journal`.
+
+### Migration
+- v3.0.x sessions resume under v3.1 code via VERSION_TIER routing —
+  `v3_0` arm preserves single-seed code paths unchanged. No schema
+  migration; v3.0 sessions stay schema_version=3 in meta-archive.
+- v3.1 sessions write schema_version=4 entries with `virtual_parallel`
+  snapshot. v3.0 readers ignore unknown blocks (additive schema; § 9.4 R12
+  mitigation).
+- N=1 path: v3.1 sessions can run with N=1 via `--no-parallel` or AI
+  decision; behaves equivalently to v3.0 single-seed but uses v3.1
+  schema and event names. Resume detects N=1 short-circuit via
+  `session.yaml.virtual_parallel.N == 1`.
+- Deprecation roadmap (unchanged): 3.0.x v2 full support → 3.1.0 warning
+  → 3.2.0 read-only completion → 4.0.0 v2 schema removed. v3.1 retains
+  v3.0's v2-warning banner via VERSION_TIER `pre_v3` arm.
+
+### Known Issues (deferred to 3.1.x)
+Five non-blocking polish items deferred during G12 review iterations
+2026-04-26. Each was empirically verified as non-blocking and is
+ticketed for the v3.1.x patch backlog.
+
+- **H1**: `--signals` JSON parse runs after business rejections in
+  `scheduler-decide.py` (extends G3 ordering pattern but to the signals
+  path). Cosmetic — signals are AI-side input, less likely malformed
+  than decision JSON. Patch will move parse before business rejections.
+- **H2**: `nsa < 3` numeric guard combines type+business in single rc=1
+  exit. Misclassifies type errors (non-int) as below-P3-floor business
+  rejection. Coordinator still rejects appropriately, just with
+  misleading message. Patch will split type-validation (rc=2) from
+  business rejection (rc=1).
+- **I1**: `coordinator.md:134-139` pseudocode shows
+  `append_kill_queue_entry(validated.kill_target, reasoning)` (2 args)
+  but helper requires 4. Pseudocode-only (not directly-executed bash) —
+  AI agent reads `session-helper.sh` to derive correct signature. Patch
+  will align pseudocode with helper signature.
+- **I2c**: Cross-validation of scheduler decision fields (`kill_target`,
+  `new_seed_id`) against `--signals.seeds` requires signals-correlation
+  complexity — e.g. detecting `kill_target=999` for a seed that does not
+  exist in signals, or `new_seed_id=1` collision with existing seed.
+  Design discussion needed before implementation. Patch may extend
+  `scheduler-decide.py` cross-field validators.
+- **info-2**: Pseudocode-only banner in `coordinator.md` — doc clarity
+  polish, not functional. Patch will add explicit "PSEUDOCODE — see
+  session-helper.sh for actual signatures" header above the affected
+  block.
+
 ## [3.0.0] — 2026-04-22 (AAR-Inspired Evidence-Rich Hill-Climbing)
 
 Major release adding four AAR-inspired behavioral layers to the Inner/Outer Loop,

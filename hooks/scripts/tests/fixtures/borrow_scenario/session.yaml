@@ -1,0 +1,10 @@
+deep_evolve_version: "3.1.0"
+session_id: "borrow-scenario-01"
+total_budget: 30
+virtual_parallel:
+  N: 2
+  seeds:
+    - { seed_id: 1, status: "active", allocated_budget: 15, experiments_used: 6, current_q: 0.55 }
+    - { seed_id: 2, status: "active", allocated_budget: 15, experiments_used: 5, current_q: 0.42 }
+evaluation_epoch:
+  current: 1

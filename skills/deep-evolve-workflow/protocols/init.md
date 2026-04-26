@@ -110,9 +110,173 @@ Example (protocol mode):
 ```
 Wait for user confirmation before proceeding.
 
+## A.1.6 — Virtual Parallel Analysis (v3.1+)
+
+> **Version gate**: This stage runs ONLY when `$VERSION == "3.1.0"` (i.e., the
+> dispatcher set `deep_evolve_version: "3.1.0"`). For v2.x / v3.0.x sessions,
+> `VP_ANALYSIS=null` (no virtual_parallel block in session.yaml) and you proceed
+> directly to A.2 without performing the AI call below. Skipping is silent —
+> v3.0 sessions never had this stage and resume.md handles the absent block.
+
+When `$VERSION == "3.1.0"`, classify the project on two axes that drive the N-seed
+strategy: `project_type` (how well-defined the solution space is) and
+`eval_parallelizability` (whether evaluation can run concurrently across seeds).
+The AI returns a structured JSON object that A.2 (N confirmation) and A.3 (worktree
+creation loop) both consume.
+
+**Stage 6.1 — AI classification call**
+
+Coordinator dispatches a single subagent (Task tool) with the following prompt
+**verbatim** (W-7 lock — do not paraphrase, expand synonyms, or reorder cases;
+test `test_a16_w7_prompt_verbatim_matrix` enforces character-for-character match):
+
+> *"Given this project's goal (`{goal_string}`), target files (`{target_files}`),
+> and existing program.md contents (`{program_md_content}`), classify along two axes:*
+>
+> *(1) project_type — choose one: `narrow_tuning` (1–2 obvious hyperparameters to sweep;
+> well-defined objective; e.g. quant-tuning an existing Sharpe pipeline),
+> `standard_optimization` (multiple choices, partially-known solution space; e.g. model
+> architecture search within a known task), `open_research` (solution space poorly defined;
+> e.g. novel algorithm design).*
+>
+> *(2) eval_parallelizability — choose one: `serialized` (evaluation holds an exclusive
+> resource like a single GPU or shared backtest DB), `parallel_capable` (evaluation is
+> a pure function, independent processes, or parallelizable API calls).*
+>
+> *Return JSON: `{"project_type": "...", "eval_parallelizability": "...", "n_suggested": <int 1-9>, "reasoning": "<1-2 sentences>"}`. Use this matrix for n_suggested:*
+>
+> *narrow_tuning + serialized → 1; narrow_tuning + parallel_capable → 2;*
+> *standard_optimization + serialized → 2-3; standard_optimization + parallel_capable → 3-5;*
+> *open_research + serialized → 3-4; open_research + parallel_capable → 5-9.*
+
+The subagent's stdout MUST be a single JSON object. Coordinator captures it
+into `$AI_VP_ANALYSIS_RAW`.
+
+**Stage 6.2 — Validation (W-6 lesson: validate before consumption)**
+
+Coordinator validates the AI return BEFORE either A.2 or A.3 consumes it.
+Without validation, a malformed AI return (e.g. `n_suggested: "many"` as a
+string, or `project_type: "narrow tuning"` with a space) propagates into
+session.yaml and the worktree loop, where it either crashes or silently
+corrupts state. The validation block normalizes the output into a single
+`$VP_ANALYSIS` handle that downstream sites consume.
+
+```bash
+# Pure-python validator: rejects malformed shapes with rc=2 (operator error
+# class — the AI subagent contract was violated, not a business decision).
+# argv-safe pattern: $AI_VP_ANALYSIS_RAW passed via sys.argv (NOT shell-
+# interpolated into source) — same code-injection-safe class as G8 C-R1
+# queued_at and G9 C-1 SYNTHESIS_Q.
+if ! VP_ANALYSIS_JSON=$(python3 - "$AI_VP_ANALYSIS_RAW" <<'PY'
+import json, sys
+
+PROJECT_TYPES = {"narrow_tuning", "standard_optimization", "open_research"}
+EVAL_TYPES    = {"serialized", "parallel_capable"}
+
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    obj = json.loads(raw)
+except (json.JSONDecodeError, TypeError):
+    print("error: AI VP analysis is not valid JSON", file=sys.stderr)
+    sys.exit(2)
+
+if not isinstance(obj, dict):
+    print("error: AI VP analysis must be a JSON object", file=sys.stderr)
+    sys.exit(2)
+
+pt = obj.get("project_type")
+ep = obj.get("eval_parallelizability")
+ns = obj.get("n_suggested")
+rs = obj.get("reasoning", "")
+
+if pt not in PROJECT_TYPES:
+    print(f"error: project_type must be one of {sorted(PROJECT_TYPES)}, got {pt!r}",
+          file=sys.stderr); sys.exit(2)
+if ep not in EVAL_TYPES:
+    print(f"error: eval_parallelizability must be one of {sorted(EVAL_TYPES)}, got {ep!r}",
+          file=sys.stderr); sys.exit(2)
+# isinstance-not-bool guard: True/False would pass `isinstance(x, int)` in Python
+if not isinstance(ns, int) or isinstance(ns, bool) or not (1 <= ns <= 9):
+    print(f"error: n_suggested must be int in [1,9], got {ns!r}", file=sys.stderr)
+    sys.exit(2)
+if not isinstance(rs, str):
+    print(f"error: reasoning must be string, got {type(rs).__name__}",
+          file=sys.stderr); sys.exit(2)
+
+print(json.dumps({
+    "project_type": pt,
+    "eval_parallelizability": ep,
+    "n_suggested": ns,
+    "reasoning": rs,
+}, ensure_ascii=False))
+PY
+); then
+  rc=$?
+  # W-8 fix (Opus review 2026-04-25-161635): the prior plan prose described
+  # a 3-retry loop, but the code below just exits — this was a prose-vs-code
+  # contradiction. Decision: KEEP fail-fast (no retry loop). Rationale: a
+  # malformed AI VP analysis is a contract bug to fix in the prompt
+  # (W-7 lock), not a transient failure to retry. T6's β diversity gate is
+  # different — it retries because the AI may legitimately produce too-similar
+  # directions on first try (a quality, not contract, failure). Here, the
+  # validator rejects shape violations only. The coordinator should surface
+  # the validator stderr to the operator and require a code fix, not a
+  # silent re-roll.
+  echo "error: A.1.6 AI VP analysis validation failed (rc=$rc). The AI subagent produced a non-conforming JSON object — the prompt template (W-7 lock) or the subagent itself needs investigation. Aborting init." >&2
+  exit 2
+fi
+
+# At this point $VP_ANALYSIS_JSON is a normalized JSON object guaranteed to
+# satisfy the contract. Export it to the named handle. ALL downstream sites
+# (A.2, A.3) consume $VP_ANALYSIS — never $AI_VP_ANALYSIS_RAW.
+export VP_ANALYSIS="$VP_ANALYSIS_JSON"
+```
+
+**Stage 6.3 — Buffer analysis event for deferred flush**
+
+The validated analysis must be recorded so that resume.md can re-derive intent
+without re-asking the AI. **C1 fix (Opus final review 2026-04-25-174250):**
+$SESSION_ROOT and journal.jsonl do not exist until A.3 Steps 2 and 4 respectively.
+All writes are therefore buffered here and flushed atomically in NEW A.3 Step 4.5
+(after session.yaml is created). The `virtual_parallel` block fields
+(project_type, eval_parallelizability, selection_reason, n_initial, etc.) are
+written by `cmd_init_virtual_parallel_block` in Step 4.5 (C2 fix) — do NOT
+write them here.
+
+```bash
+# C1 fix (Opus final review 2026-04-25-174250): defer journal/yaml writes
+# until A.3 Step 2 (start_new_session) creates $SESSION_ROOT/$SESSION_ID
+# and Step 4 creates session.yaml. Buffer the events here; they get
+# flushed in A.3 Step 4.5 (NEW) below.
+INIT_EMIT_BUFFER=$(mktemp "${TMPDIR:-/tmp}/deep-evolve-init-buffer-XXXXXX.jsonl")
+chmod 600 "$INIT_EMIT_BUFFER"
+echo "$(jq -cn --argjson vp "$VP_ANALYSIS" \
+    '{event: "init_vp_analysis", vp_analysis: $vp}')" >> "$INIT_EMIT_BUFFER"
+export INIT_EMIT_BUFFER
+```
+
+**Stage 6.4 — Acknowledge N=1 short-circuit explicitly**
+
+If the validated `n_suggested == 1`, this is a legitimate outcome (e.g.
+narrow_tuning + serialized projects), NOT an error. § 5.1a documents three
+short-circuits triggered by N=1:
+
+1. β generation skipped (T6 honors `--n 1` per its own short-circuit; A.3 must
+   pass through unchanged).
+2. Synthesis steps 4–6 skipped (T28 honors `n_current == 1` at its own entry).
+3. γ fork inapplicable at init (no prior keeps; A.3 omits γ branch naturally).
+
+The A.2 prompt below treats `n_suggested == 1` as a normal, suggestable value;
+do NOT silently force `>= 2`.
+
+→ Proceed to A.2.
+
 ## A.2: Goal & Configuration
 
 If `NEW_GOAL` was set from arguments, use it. Otherwise, ask via AskUserQuestion:
+
+> **v3.1 note**: When `$VERSION == "3.1.0"`, an additional sub-stage A.2.6
+> below confirms the seed count N. Q1–Q4 below run unchanged for all versions.
 
 **Q1**: "개선 목표는 무엇인가요?" (자유 텍스트)
 
@@ -129,6 +293,171 @@ If `NEW_GOAL` was set from arguments, use it. Otherwise, ask via AskUserQuestion
 
 If `REQUESTED_COUNT` was set, use it. Otherwise:
 **Q4**: "실험 횟수는?" — Options: "30회", "50회", "100회", "감소 수익까지 자동"
+
+
+### A.2.6 — N confirmation (v3.1+)
+
+> **Version gate**: This sub-stage runs ONLY when `$VERSION == "3.1.0"`. For
+> v2.x / v3.0.x, `N_CHOSEN` is implicitly 1 and the rest of the protocol degrades
+> to the v3.0 single-seed flow — A.3 below skips its v3.1 extension entirely.
+
+A.2.6 confirms the seed count N produced by A.1.6, honoring user-supplied
+overrides. The CLI flags `--n-min` / `--n-max` / `--no-parallel` land in T35
+(G11); A.2.6 reads them as exported environment variables today, so G10 ships
+self-contained.
+
+**Stage 7.1 — Read overrides + initial N suggestion**
+
+```bash
+# Defaults: any of these may be unset (use ${VAR:-default}). Foundation
+# defensive pattern — never bare $X under set -u.
+NO_PARALLEL="${DEEP_EVOLVE_NO_PARALLEL:-0}"   # DEEP_EVOLVE_NO_PARALLEL=1 forces N=1
+N_MIN_USER="${DEEP_EVOLVE_N_MIN:-1}"          # user clamp lower bound
+N_MAX_USER="${DEEP_EVOLVE_N_MAX:-9}"          # user clamp upper bound
+
+# Validate env-var values: N_MIN / N_MAX must be integers in [1, 9].
+# Reject non-integer / out-of-range with rc=2 (operator error).
+if ! python3 -c '
+import sys
+try:
+    nmin = int(sys.argv[1]); nmax = int(sys.argv[2])
+except ValueError:
+    print("error: DEEP_EVOLVE_N_MIN / DEEP_EVOLVE_N_MAX must be integers",
+          file=sys.stderr); sys.exit(2)
+if not (1 <= nmin <= 9) or not (1 <= nmax <= 9) or nmin > nmax:
+    print(f"error: N_MIN ({nmin}) / N_MAX ({nmax}) must satisfy "
+          f"1 <= N_MIN <= N_MAX <= 9", file=sys.stderr); sys.exit(2)
+' "$N_MIN_USER" "$N_MAX_USER" 2>/dev/null; then
+  echo "error: A.2.6 N-range override validation failed" >&2
+  exit 2
+fi
+
+# Pull n_suggested + reasoning from the validated $VP_ANALYSIS handle.
+# argv-safe pattern: $VP_ANALYSIS is interpolated as sys.argv (already
+# validated to be JSON in A.1.6 Stage 6.2, but argv pattern is the same
+# class-of-fix we apply uniformly per G8 C-R1 / G9 C-1).
+# W-1 fix (Opus review 2026-04-25-161635): rc-guard the python3 -c calls per
+# the aff23c9 contract — defense-in-depth across protocol boundaries (A.1.6
+# already validated, but a corrupted VP_ANALYSIS reaching A.2.6 should fail
+# loud, not silently propagate empty strings into the prompt).
+if ! N_SUGGESTED=$(python3 -c '
+import json, sys
+print(json.loads(sys.argv[1])["n_suggested"])
+' "$VP_ANALYSIS"); then
+  echo "error: A.2.6 could not extract n_suggested from \$VP_ANALYSIS — A.1.6 contract violated" >&2
+  exit 2
+fi
+if ! VP_REASONING=$(python3 -c '
+import json, sys
+print(json.loads(sys.argv[1])["reasoning"])
+' "$VP_ANALYSIS"); then
+  echo "error: A.2.6 could not extract reasoning from \$VP_ANALYSIS — A.1.6 contract violated" >&2
+  exit 2
+fi
+```
+
+**Stage 7.2 — Apply --no-parallel short-circuit BEFORE asking**
+
+If the user passed `--no-parallel`, the answer to "what N?" is determined
+already. Asking AskUserQuestion in this case is dishonest — surface the
+override and proceed.
+
+```bash
+if [ "$NO_PARALLEL" = "1" ]; then
+  echo "A.2.6: --no-parallel set; forcing N=1 regardless of AI suggestion ($N_SUGGESTED)" >&2
+  N_CHOSEN=1
+  N_REASON="user override (--no-parallel)"
+else
+  # Stage 7.3 — clamp AI suggestion to user range + global range
+  N_CHOSEN_PROVISIONAL=$(python3 -c '
+import sys
+ns = int(sys.argv[1]); nmin = int(sys.argv[2]); nmax = int(sys.argv[3])
+# Clamp to user range first, then global [1, 9]
+clamped_user = min(max(ns, nmin), nmax)
+clamped_global = min(max(clamped_user, 1), 9)
+print(clamped_global)
+' "$N_SUGGESTED" "$N_MIN_USER" "$N_MAX_USER")
+
+  # Stage 7.4 — coordinator emits AskUserQuestion via the prose-instruction
+  # pattern (mirrors synthesis.md Step 6 Branch B).
+  cat <<EOM >&2
+A.2.6: coordinator agent must invoke AskUserQuestion with the following:
+
+  Prompt:
+    동시 진행할 seed 개수 N은? (AI 제안: ${N_CHOSEN_PROVISIONAL}, 근거: ${VP_REASONING})
+    예상 실험 비용: N × (사용자 입력 실험 횟수 ÷ N) 동일 — 병렬 효과는 wall-clock 단축뿐.
+    사용자 범위: [${N_MIN_USER}, ${N_MAX_USER}]; 전역 범위: [1, 9].
+  Options:
+    - "AI 제안 ${N_CHOSEN_PROVISIONAL} 사용"
+    - "직접 입력 (정수 1~9 ${N_MIN_USER}≤N≤${N_MAX_USER})"
+    - "단일 seed (N=1)로 v3.0 호환 모드"
+
+  After the user responds, export N_USER_CHOICE = <chosen integer> then re-
+  enter this protocol at "Stage 7.5 (post-AskUserQuestion)".
+EOM
+  N_CHOSEN=""   # set by Stage 7.5 below
+fi
+```
+
+**Stage 7.5 — (post-AskUserQuestion) Apply user choice with final clamp**
+
+When the coordinator agent has captured `N_USER_CHOICE` and re-entered this
+section, this block normalizes it. Tests provide `N_USER_CHOICE` via env
+var.
+
+```bash
+if [ -z "${N_CHOSEN:-}" ] && [ -n "${N_USER_CHOICE:-}" ]; then
+  # User may have typed something other than an integer; reject and re-ask.
+  # W-2 fix (Opus review 2026-04-25-161635): do NOT swallow stderr — the
+  # validator's diagnostic ("not an integer" / "outside [1, 9]") is more
+  # useful than the bash echo's vague "invalid". The "error:" prefix
+  # convention from the foundation pattern is honored by the python script.
+  if ! python3 -c '
+import sys
+try:
+    n = int(sys.argv[1])
+except ValueError:
+    print(f"error: N_USER_CHOICE {sys.argv[1]!r} not an integer", file=sys.stderr)
+    sys.exit(2)
+if not (1 <= n <= 9):
+    print(f"error: N_USER_CHOICE {n} outside [1, 9]", file=sys.stderr); sys.exit(2)
+' "$N_USER_CHOICE"; then
+    echo "error: A.2.6 N_USER_CHOICE invalid (see python validator stderr above); re-ask via AskUserQuestion" >&2
+    exit 2
+  fi
+  # Clamp to user range (a user-typed 7 with N_MAX=4 gets demoted to 4 with warn)
+  N_CHOSEN=$(python3 -c '
+import sys
+n = int(sys.argv[1]); nmin = int(sys.argv[2]); nmax = int(sys.argv[3])
+clamped = min(max(n, nmin), nmax)
+if clamped != n:
+    print(f"warn: user N={n} clamped to user range [{nmin},{nmax}] → {clamped}",
+          file=sys.stderr)
+print(clamped)
+' "$N_USER_CHOICE" "$N_MIN_USER" "$N_MAX_USER")
+  N_REASON="user choice (clamped to [${N_MIN_USER},${N_MAX_USER}])"
+fi
+
+# Final invariant: N_CHOSEN is now an integer in [1, 9] regardless of path
+# (no_parallel / AI-accepted / user-typed). Export for A.3 + journal.
+export N_CHOSEN
+export N_REASON
+```
+
+**Stage 7.6 — Buffer N-chosen event for deferred flush**
+
+`init_n_chosen` is recorded so resume.md can re-derive intent without re-asking.
+**C1 fix (Opus final review 2026-04-25-174250):** journal.jsonl does not exist
+until A.3 Step 4. Append to the same $INIT_EMIT_BUFFER created in A.1.6 Stage 6.3;
+the buffer is flushed in A.3 Step 4.5.
+
+```bash
+# C1 fix (same review): buffer init_n_chosen until A.3 flush.
+echo "$(jq -cn --argjson n "$N_CHOSEN" --arg reason "$N_REASON" \
+    '{event: "init_n_chosen", n_chosen: $n, reason: $reason}')" >> "$INIT_EMIT_BUFFER"
+```
+
+→ Proceed to A.2.5 (Meta Archive Lookup) unchanged.
 
 ## A.2.5: Meta Archive Lookup
 
@@ -191,7 +520,7 @@ If at least one completed session exists:
    Include `program` version tracking, `outer_loop` state, and `evaluation_epoch`:
    ```yaml
    session_id: "<computed>"
-   deep_evolve_version: "3.0.0"
+   deep_evolve_version: "3.1.0"
    status: initializing                 # C-7: transitions to 'active' at end of Step 11
    created_at: "<ISO 8601 now>"
    parent_session:    # null for root sessions; populated if continue selected
@@ -239,6 +568,91 @@ If at least one completed session exists:
      last_collapse_generation: null
    ```
 
+#### v3.1.0 extension (when $VERSION == "3.1.0")
+
+When `deep_evolve_version: "3.1.0"`, the session.yaml additionally includes the
+`virtual_parallel` block. Coordinator populates this during Section A.2/A.3:
+
+````yaml
+deep_evolve_version: "3.1.0"  # version gate
+
+virtual_parallel:
+  enabled: true                # always true in 3.1+; N=1 is just n_current: 1
+  n_current: <N>
+  n_initial: <N>               # snapshot of init N (before any n_adjusted)
+  n_range: {min: 1, max: 9}
+  project_type: "<narrow_tuning|standard_optimization|open_research>"
+  eval_parallelizability: "<serialized|parallel_capable>"
+  selection_reason: "<AI's reasoning string>"
+  budget_total: <total experiment budget>
+  budget_unallocated: 0        # initially 0 (all split across seeds); grows when kills free budget
+  synthesis:
+    budget_allocated: <min(2*N, 10)>
+    regression_tolerance: 0.05
+  seeds:
+    - id: 1
+      status: "active"          # active | killed_<condition> | completed_early
+      direction: "<β direction string, or null if N=1>"
+      hypothesis: "<β hypothesis string, or null if N=1>"
+      initial_rationale: "<β rationale, or 'single-seed session; no β generated' if N=1>"
+      worktree_path: "worktrees/seed_1"   # relative to $SESSION_ROOT
+      branch: "evolve/<session-id>/seed-1"
+      created_at: "<ISO 8601>"
+      created_by: "init_batch"  # init_batch | epoch_growth
+      experiments_used: 0
+      keeps: 0
+      borrows_given: 0
+      borrows_received: 0
+      current_q: 0.0
+      allocated_budget: <budget_total // N>   # equal split at init
+      killed_at: null
+      killed_reason: null
+    # ... seed_2 … seed_N similarly ...
+````
+
+When `$VERSION` is "2.x" or "3.0.x", use the pre-existing v2/v3.0 template
+unchanged (virtual_parallel block absent).
+
+4.5. **(v3.1+) Initialize virtual_parallel block + flush A.1.6/A.2.6 buffered events** (C1+C2 fix from final review 2026-04-25-174250):
+
+When `$VERSION == "3.1.0"`, the A.1.6 + A.2.6 stages buffered their journal
+events to `$INIT_EMIT_BUFFER` because `$SESSION_ROOT` / `$SESSION_ID` /
+session.yaml didn't exist yet. Now they do — flush the buffer and write
+the virtual_parallel block.
+
+```bash
+if echo "${VERSION:-}" | grep -q '^3\.1'; then
+  # C2 fix: write virtual_parallel block from $VP_ANALYSIS + $N_CHOSEN +
+  # user-supplied total budget. Without this, allocated_budget=0 for every
+  # seed (cmd_append_seed_to_session_yaml's int(vp.get("budget_total", 0))
+  # → 0 // N → 0).
+  # $REQUESTED_COUNT is the experiment count from A.2 Q4 (default 30).
+  if ! bash "$DEEP_EVOLVE_HELPER_PATH" \
+      init_virtual_parallel_block \
+      "$VP_ANALYSIS" \
+      "$N_CHOSEN" \
+      "${REQUESTED_COUNT:-30}"; then
+    echo "error: A.3 Step 4.5 init_virtual_parallel_block failed" >&2
+    exit 1
+  fi
+
+  # C1 fix: flush buffered journal events. Buffer was written before
+  # journal.jsonl existed; now append all buffered lines.
+  if [ -f "${INIT_EMIT_BUFFER:-/dev/null}" ]; then
+    while IFS= read -r ev; do
+      [ -z "$ev" ] && continue
+      if ! (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+          append_journal_event "$ev"); then
+        echo "error: A.3 Step 4.5 buffered event flush failed for: $ev" >&2
+        exit 1
+      fi
+    done < "$INIT_EMIT_BUFFER"
+    rm -f "$INIT_EMIT_BUFFER"
+    unset INIT_EMIT_BUFFER
+  fi
+fi
+```
+
 5. Generate evaluation harness based on eval_mode:
 
    **If eval_mode is `cli`:**
@@ -283,6 +697,279 @@ If at least one completed session exists:
 
    Then generate the project-specific experiment instructions below the sentinel block.
 
+### A.3.6 — Per-seed worktree creation loop (v3.1+)
+
+> **Version gate**: Runs ONLY when `$VERSION == "3.1.0"`. v2.x / v3.0.x sessions
+> have no `virtual_parallel` block in session.yaml; A.3.6 is a no-op for them
+> and the protocol proceeds to Step 7 (results.tsv init) since per-seed
+> worktrees are not created.
+
+A.3.6 turns the analysis from A.1.6 + A.2.6 into N concrete worktrees with
+per-seed program.md (forked from the base program.md generated in Step 6),
+populated `session.yaml.virtual_parallel.seeds[]`, and N per-seed journal
+events (event type defined in Stage 8.2.d below). The existing v3.1 schema
+template at the end of Step 4 above defines the YAML shape; A.3.6 fills it in.
+
+**Stage 8.0.5 — Coordinator dispatches AI for β-direction proposals**
+
+Before T6 can validate / iterate, the coordinator (Claude Code) must dispatch
+a subagent (Task tool) to produce N candidate directions. The exact prompt
+text mirrors spec § 5.1 Step 3 and uses the W-7-locked $VP_ANALYSIS context:
+
+> *"You are proposing $N_CHOSEN diverse research directions for a deep-evolve
+> session. Project context: $VP_ANALYSIS (project_type, eval_parallelizability,
+> reasoning). Goal: <session goal from session.yaml>. For N=1, return
+> {\"directions\": []} (single-seed sessions skip β diversification — § 5.1a).
+> For N>=2, return JSON: {\"directions\": [{\"seed_id\": <int>, \"direction\":
+> \"<short>\", \"hypothesis\": \"<1-2 sentences>\", \"rationale\": \"<short>\"}, ...]}.
+> All directions must be semantically distinct (pairwise similarity < 0.70 by
+> human judgment); T6's iterative gate will validate this and may re-prompt
+> for N>=5."*
+
+The coordinator captures the subagent's stdout into $BETA_DISPATCH_OUTPUT.
+For test fixtures (no live AI), $BETA_DISPATCH_OUTPUT is supplied via env var
+`DEEP_EVOLVE_BETA_FIXTURE` (the same pattern T6's tests use).
+
+```bash
+# Test-fixture path: env var supplies the AI's would-be output
+if [ -n "${DEEP_EVOLVE_BETA_FIXTURE:-}" ]; then
+  BETA_DISPATCH_OUTPUT="$DEEP_EVOLVE_BETA_FIXTURE"
+else
+  # Production: coordinator-LLM has captured the subagent dispatch result
+  # into $BETA_DISPATCH_OUTPUT before re-entering this protocol
+  if [ -z "${BETA_DISPATCH_OUTPUT:-}" ]; then
+    echo "error: A.3.6 Stage 8.0.5: \$BETA_DISPATCH_OUTPUT not set — coordinator must dispatch the AI subagent first" >&2
+    exit 2
+  fi
+fi
+```
+
+**Stage 8.1 — Generate β directions (delegates short-circuit to T6)**
+
+```bash
+# C-2 fix (Opus review 2026-04-25-161635): resolve $HELPER_SCRIPTS_DIR
+# explicitly. $DEEP_EVOLVE_HELPER_PATH is the path to session-helper.sh
+# itself (a file), NOT a directory — the same G9 C-1 fix that synthesis.md
+# (line 34-37), outer-loop.md (line 80), and inner-loop.md (line 542)
+# already carry. Without this, the bare $HELPER_SCRIPTS_DIR aborts with
+# "unbound variable" under set -Eeuo pipefail before T6 runs, and the
+# EXIT trap masks rc to 0 (T14 silent-masking class).
+HELPER_SCRIPTS_DIR="$(dirname "$DEEP_EVOLVE_HELPER_PATH")"
+
+# W-3 fix (same review): redirect T6 stderr to a log file so warnings /
+# retry messages do NOT corrupt the JSON on stdout consumed by Stage 8.2's
+# json.loads. Same shape as synthesis.md:131 (cross-seed-audit.py).
+mkdir -p "$SESSION_ROOT/.deep-evolve"
+INIT_LOG="$SESSION_ROOT/.deep-evolve/init.log"
+
+# T6's β-generator owns the N=1 short-circuit (returns
+# {"skipped": true, "directions": []}). A.3.6 always calls it with --n
+# $N_CHOSEN and consumes the structured output — DRY: the short-circuit
+# logic lives in one place, not two. The --input flag carries the
+# coordinator-dispatched candidate directions from Stage 8.0.5; T6 acts as
+# the validator/iterative-gate, not the dispatcher.
+if ! BETA_OUTPUT=$( \
+    python3 "$HELPER_SCRIPTS_DIR/generate-beta-directions.py" \
+    --n "$N_CHOSEN" \
+    --project-analysis "$VP_ANALYSIS" \
+    --input "$BETA_DISPATCH_OUTPUT" 2>>"$INIT_LOG"); then
+  echo "error: A.3.6 β generation/validation failed (rc=$?). See $INIT_LOG. Aborting init." >&2
+  exit 1
+fi
+# BETA_OUTPUT is JSON: {"skipped": bool, "directions": [...], "retries_used": int}
+```
+
+**Stage 8.2 — Loop over seeds 1..N**
+
+```bash
+# Pre-loop: capture current branch so each create_seed_worktree forks from a
+# known base. Every iteration is rc-guarded individually so a failure in
+# seed-3 of an N=5 init doesn't silently leave seeds 1, 2 valid + seeds 3-5
+# half-created.
+INIT_BASE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+INIT_BASE_HEAD=$(git rev-parse HEAD)
+
+# Track created seeds for rollback on failure
+CREATED_SEEDS=()
+
+# Pre-loop: extract per-seed direction objects from BETA_OUTPUT into bash
+# array. For N=1 (skipped), array is empty.
+SEED_BETAS_FILE=$(mktemp)
+python3 -c '
+import json, sys, os
+out = json.loads(sys.argv[1])
+fname = sys.argv[2]
+with open(fname, "w", encoding="utf-8") as f:
+    if out.get("skipped"):
+        # N=1 short-circuit: emit a single null-β placeholder so the loop
+        # iterates exactly once with null β.
+        f.write(json.dumps({"seed_id": 1, "direction": None,
+                            "hypothesis": None,
+                            "rationale": "single-seed session; no β generated"}) + "\n")
+    else:
+        for d in out["directions"]:
+            f.write(json.dumps(d, ensure_ascii=False) + "\n")
+' "$BETA_OUTPUT" "$SEED_BETAS_FILE"
+
+# Iterate
+SEED_K=1
+while IFS= read -r BETA_LINE; do
+  if [ -z "$BETA_LINE" ]; then continue; fi
+
+  # 8.2.a — Create seed worktree (T2 helper — dispatched via session-helper.sh)
+  if ! WT_INFO=$(bash "$DEEP_EVOLVE_HELPER_PATH" \
+      create_seed_worktree "$SEED_K"); then  # session-helper.sh create_seed_worktree
+    echo "error: A.3.6 create_seed_worktree failed for seed $SEED_K. Rolling back created seeds." >&2
+    # Rollback: remove all previously-created seeds in reverse order
+    for prev in "${CREATED_SEEDS[@]}"; do
+      bash "$DEEP_EVOLVE_HELPER_PATH" remove_seed_worktree "$prev" \
+        || echo "warn: A.3.6 rollback could not remove seed $prev" >&2
+    done
+    exit 1
+  fi
+  # WT_INFO is "seed_id\tworktree_path\tbranch"
+  WT_PATH=$(printf '%s' "$WT_INFO" | awk -F'\t' '{print $2}')
+  WT_BRANCH=$(printf '%s' "$WT_INFO" | awk -F'\t' '{print $3}')
+  CREATED_SEEDS+=("$SEED_K")
+
+  # 8.2.b — Write per-seed program.md (T8 helper). Honors null-β by copying
+  # base program.md verbatim — A.3.6 does NOT branch on N=1 here; the
+  # short-circuit lives in T8 already.
+  if ! python3 "$HELPER_SCRIPTS_DIR/write-seed-program.py" \
+      --base-program "$SESSION_ROOT/program.md" \
+      --worktree "$WT_PATH" \
+      --beta "$BETA_LINE"; then
+    echo "error: A.3.6 write-seed-program.py failed for seed $SEED_K. Rolling back." >&2
+    for prev in "${CREATED_SEEDS[@]}"; do
+      bash "$DEEP_EVOLVE_HELPER_PATH" remove_seed_worktree "$prev" \
+        || echo "warn: A.3.6 rollback could not remove seed $prev" >&2
+    done
+    exit 1
+  fi
+
+  # 8.2.d — Emit seed_initialized journal event BEFORE yaml append (W5 fix,
+  # Opus final review 2026-04-25-174250): reordered from original 8.2.d→8.2.c
+  # so that cmd_append_seed_to_session_yaml (now 8.2.e below) can look up the
+  # event ts as canonical created_at. Wrapped in (unset SEED_ID; ...) so
+  # T16's auto-inject does NOT overwrite the explicit seed_id from the jq
+  # build (T16 is for inner-loop subagent emits; init coordinator is the
+  # source of truth for the explicit field).
+  # W1 fix (Opus final review 2026-04-25-174250): rc-guard this emit so a
+  # failed append causes a clean rollback instead of silently leaving the
+  # journal out of sync with session.yaml.
+  if ! (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+      append_journal_event "$(jq -cn \
+        --argjson sid "$SEED_K" \
+        --argjson beta "$BETA_LINE" \
+        --arg wt "$WT_PATH" \
+        --arg br "$WT_BRANCH" \
+        '{event: "seed_initialized",
+          seed_id: $sid,
+          direction: ($beta.direction // null),
+          hypothesis: ($beta.hypothesis // null),
+          initial_rationale: ($beta.rationale // null),
+          worktree_path: $wt,
+          branch: $br,
+          created_by: "init_batch"}')"); then
+    echo "error: A.3.6 Stage 8.2.d seed_initialized emit failed for seed $SEED_K — rolling back" >&2
+    for prev in "${CREATED_SEEDS[@]}"; do
+      bash "$DEEP_EVOLVE_HELPER_PATH" remove_seed_worktree "$prev" \
+        || echo "warn: rollback could not remove seed $prev" >&2
+    done
+    exit 1
+  fi
+
+  # 8.2.e — Update session.yaml.virtual_parallel.seeds[$SEED_K] with the
+  # populated metadata (id, worktree_path, branch, status="active", direction,
+  # hypothesis, allocated_budget, etc.). Uses session-helper.sh's append-only
+  # update pattern (the helper takes care of YAML round-trip and avoids
+  # accidental drift in unrelated fields).
+  # W5 fix (Opus final review 2026-04-25-174250): this step now runs AFTER
+  # 8.2.d so that cmd_append_seed_to_session_yaml can read the event ts from
+  # journal.jsonl as canonical created_at instead of datetime.now(UTC).
+  if ! bash "$DEEP_EVOLVE_HELPER_PATH" \
+      append_seed_to_session_yaml "$SEED_K" "$WT_PATH" "$WT_BRANCH" "$BETA_LINE"; then
+    echo "error: A.3.6 append_seed_to_session_yaml failed for seed $SEED_K. Rolling back." >&2
+    for prev in "${CREATED_SEEDS[@]}"; do
+      bash "$DEEP_EVOLVE_HELPER_PATH" remove_seed_worktree "$prev" \
+        || echo "warn: A.3.6 rollback could not remove seed $prev" >&2
+    done
+    exit 1
+  fi
+
+  SEED_K=$((SEED_K + 1))
+done < "$SEED_BETAS_FILE"
+
+rm -f "$SEED_BETAS_FILE"
+
+# Post-loop: update session.yaml.virtual_parallel.n_current explicitly so
+# downstream sites (resume.md scenario 5) can detect drift between the
+# yaml-recorded value and the journal snapshot. n_initial was already set
+# by A.1.6 / A.2.6.
+if ! bash "$DEEP_EVOLVE_HELPER_PATH" \
+    set_virtual_parallel_field "n_current" "$N_CHOSEN"; then
+  echo "error: A.3.6 set_virtual_parallel_field n_current failed" >&2
+  exit 1
+fi
+```
+
+**Stage 8.3 — Sanity assertions**
+
+```bash
+# Post-condition checks: count of created worktrees matches $N_CHOSEN, count
+# of session.yaml.seeds[] entries matches $N_CHOSEN, count of seed_initialized
+# events in journal matches $N_CHOSEN. Mismatch is a coordinator-internal
+# bug, not user-facing — abort with rc=2.
+
+# Worktree count check (existing — keep)
+ACTUAL_WT=$(git worktree list --porcelain \
+  | grep -c "^worktree .*/$SESSION_ID/worktrees/seed_" || true)
+EXPECTED_WT="$N_CHOSEN"
+if [ "$ACTUAL_WT" != "$EXPECTED_WT" ]; then
+  echo "error: A.3.6 post-condition: expected $EXPECTED_WT worktrees, got $ACTUAL_WT" >&2
+  exit 2
+fi
+
+# W4 fix (Opus final review 2026-04-25-174250): seeds[] count + seed_initialized
+# event count must also match $N_CHOSEN. Either of these would have caught C2.
+if ! ACTUAL_SEEDS=$(python3 -c '
+import yaml, sys
+with open(sys.argv[1]) as f:
+    sy = yaml.safe_load(f) or {}
+print(len((sy.get("virtual_parallel", {}).get("seeds")) or []))
+' "$SESSION_ROOT/session.yaml"); then
+  echo "error: A.3.6 post-condition: failed to count seeds[] in session.yaml" >&2
+  exit 2
+fi
+if [ "$ACTUAL_SEEDS" != "$N_CHOSEN" ]; then
+  echo "error: A.3.6 post-condition: expected $N_CHOSEN seeds[] entries, got $ACTUAL_SEEDS" >&2
+  exit 2
+fi
+
+if ! ACTUAL_INIT_EVENTS=$(python3 -c '
+import json, sys
+n = 0
+with open(sys.argv[1]) as f:
+    for ln in f:
+        try:
+            ev = json.loads(ln)
+            if ev.get("event") == "seed_initialized":
+                n += 1
+        except json.JSONDecodeError:
+            continue
+print(n)
+' "$SESSION_ROOT/journal.jsonl"); then
+  echo "error: A.3.6 post-condition: failed to count seed_initialized events" >&2
+  exit 2
+fi
+if [ "$ACTUAL_INIT_EVENTS" != "$N_CHOSEN" ]; then
+  echo "error: A.3.6 post-condition: expected $N_CHOSEN seed_initialized events, got $ACTUAL_INIT_EVENTS" >&2
+  exit 2
+fi
+```
+
+→ Proceed to Step 7 (Initialize results.tsv).
+
 7. Initialize `results.tsv`:
 
    IF session.yaml.deep_evolve_version starts with `"3."`:
@@ -296,7 +983,13 @@ If at least one completed session exists:
    column-count auto-detect (see Task 19.5 Step 2) to read whichever layout is
    present.
 
-8. Initialize empty `journal.jsonl`.
+8. **Verify journal.jsonl exists** (created via append_journal_event calls in
+   Steps 4.5 and A.3.6 above; this step is a safety check, NOT a re-init):
+
+```bash
+[ -f "$SESSION_ROOT/journal.jsonl" ] || \
+  { echo "error: A.3 Step 8 — journal.jsonl missing after Step 4.5 + A.3.6" >&2; exit 1; }
+```
 
 9. Generate `$SESSION_ROOT/strategy.yaml` with default parameters:
    ```yaml
@@ -462,6 +1155,41 @@ If at least one completed session exists:
     `session-helper.sh mark_session_status "$SESSION_ID" active`
 
     From this point forward, `protect-readonly.sh` enforces prepare.py/program.md/
-    strategy.yaml protection. The inner loop can proceed.
+    strategy.yaml protection. The execution loop can proceed.
 
-→ Proceed to Inner Loop: Read `protocols/inner-loop.md`
+## Step 12 — Route to execution loop (VERSION_TIER dispatch)
+
+Compute `VERSION_TIER` from `session.yaml.deep_evolve_version` using the 4-arm
+case statement uniform with `inner-loop.md` / `outer-loop.md` / `synthesis.md` /
+`coordinator.md` (single source-of-truth across all 4 v3.1 protocol files):
+
+```bash
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" \
+  | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
+case "$VERSION" in
+  2.*)            VERSION_TIER="pre_v3" ;;
+  3.0|3.0.*)      VERSION_TIER="v3_0" ;;
+  3.*|4.*)        VERSION_TIER="v3_1_plus" ;;
+  *)
+    echo "warn: unrecognized VERSION='${VERSION:-<unset>}' — treating as pre_v3" >&2
+    VERSION_TIER="pre_v3"
+    ;;
+esac
+export VERSION_TIER
+```
+
+Routing:
+
+- **`VERSION_TIER == v3_1_plus`** → **Read `protocols/coordinator.md`** (multi-seed
+  coordination: prose-contract subagent dispatch over N seed worktrees +
+  `scheduler-decide.py` + cross-seed forum + session-end synthesis cascade).
+  Coordinator's own version gate re-validates the tier as defense-in-depth.
+
+- **`VERSION_TIER == v3_0`** → **Read `protocols/inner-loop.md`** (single-seed AAR
+  Inner Loop; v3.0.x behavior preserved unchanged — entropy tracking + legibility
+  gate + shortcut detector + diagnose-retry, but no virtual-parallel coordinator).
+
+- **`VERSION_TIER == pre_v3`** → **Read `protocols/inner-loop.md`** (single-seed
+  legacy v2.x behavior; v2-warning banner already shown via `resume.md` for
+  resume path; init path here is fresh v2 sessions, which are no longer the
+  default but are accepted as legacy).

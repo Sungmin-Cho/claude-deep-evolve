@@ -40,19 +40,41 @@ Options:
 > for any `session-helper.sh` subcommand that takes a session id argument
 > (e.g., `mark_session_status`, `append_sessions_jsonl`).
 
-### v3 Version Gate
+### Version Gate (W-1 4-arm pattern, T37 unified)
 
-Before entering the loop, read the session's deep_evolve_version:
+Read the session's `deep_evolve_version` and route via 4-arm case:
 
 ```bash
-VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" \
+  | head -1 | sed 's/^deep_evolve_version:[[:space:]]*//; s/"//g')
+
+case "$VERSION" in
+  2.*)
+    export VERSION_TIER="pre_v3"
+    echo "inner-loop.md: VERSION=$VERSION — routing as pre-v3 (legacy single-seed, no virtual_parallel)" >&2
+    ;;
+  3.0*)
+    export VERSION_TIER="v3_0"
+    # v3.0 retains all v3 features (shortcut_detection, seal_prepare_read,
+    # 10-cat weights) but lacks virtual_parallel block — sub-steps that
+    # depend on it MUST gate on VERSION_TIER == "v3_1_plus".
+    ;;
+  3.*|4.*)
+    export VERSION_TIER="v3_1_plus"
+    # v3.1+ and forward proceed through the virtual_parallel-aware paths.
+    ;;
+  *)
+    export VERSION_TIER="pre_v3"
+    echo "inner-loop.md: VERSION=$VERSION unrecognized — treating as pre-v3 (legacy)" >&2
+    ;;
+esac
 ```
 
-All v3-gated sub-steps below check `$VERSION`. If `$VERSION` starts with `"3."` (i.e., `3.0.0` or later), execute the v3 sub-step; otherwise skip it (v2 behavior preserved).
+All v3-gated sub-steps below check `$VERSION_TIER`. The legacy `$VERSION starts with "3."` checks have been replaced with explicit tier checks.
 
-### v3 Environment Propagation (only when $VERSION starts with "3.")
+### v3 Environment Propagation (only when $VERSION_TIER != "pre_v3")
 
-IF $VERSION starts with "3.":
+IF $VERSION_TIER != "pre_v3":
 
 ```bash
 seal_flag=$(grep -A 10 "^shortcut_detection:" "$SESSION_ROOT/strategy.yaml" | grep '^\s*seal_prepare_read:' | head -1 | sed 's/.*:[[:space:]]*//; s/\s*$//')
@@ -75,6 +97,13 @@ Read `results.tsv` and `journal.jsonl` for history.
 Set `experiment_count` to 0. Set `max_count` to `session.yaml.experiments.requested` (or infinity if null).
 Set `inner_count` to `session.yaml.outer_loop.inner_count` (0 for new sessions, restored value for resume).
 Set `outer_interval` to `session.yaml.outer_loop.interval` (default 20).
+
+**v3.1 additional contract**: when `$VERSION_TIER == "v3_1_plus"`, every journal
+event appended from within the inner loop MUST carry `"seed_id": <int>`. See
+the Block-Parameters Intake step (Section C, first sub-step below) for the
+`SEED_ID` derivation and the `append_journal_event` invocation pattern.
+`scheduler-signals.py` relies on this tag for per-seed recent_Q_trend and
+forum_activity computation (foundation Gap 4 closure).
 
 ### Branch & Clean-Tree Guard
 
@@ -144,6 +173,76 @@ Before starting, check last entry in `journal.jsonl`:
 
 Repeat until `experiment_count >= max_count` or diminishing returns detected:
 
+**Step 0.5 — v3.1 Block-Parameters Intake** (only when `$VERSION_TIER == "v3_1_plus"`; v2 and v3.0 sessions skip this step entirely):
+
+At the very top of every inner-loop iteration inside a v3.1 session, the
+subagent MUST confirm its block-level parameters before touching code or state.
+This step is the contract enforcement point for § 4.1 worktree isolation and
+§ 5.7 per-seed state separation.
+
+1. **CWD pin check (prose-contract § 4.1)**: run `pwd`. The output MUST equal
+   exactly the `worktree_path` printed in your dispatch prompt. If mismatched:
+   emit a final JSON summary with `"status": "failed"` and `"notes": "CWD
+   mismatch: expected <worktree_path>, got <pwd>"`, and exit without appending
+   any journal events. CWD mismatch is a contract violation — do not attempt
+   self-recovery via `cd`.
+2. **`N_block` readout**: your dispatch prompt contains the sentence "run
+   exactly N experiments" (see T13 subagent prompt builder). Record this N
+   as `N_block`; your block MUST execute exactly N iterations of Steps 1–5
+   unless a `crash_give_up` condition (Step 5.a fallback) or user-initiated
+   kill halts the block early.
+3. **Seed identity**: derive `SEED_ID` from `pwd` (the CWD you just pinned
+   in step 1). This keeps Step 0.5 self-contained — the prose contract
+   never exports `$worktree_path`, so deriving from a pinned `pwd` is the
+   only portable path:
+   ```bash
+   SEED_ID=$(basename "$(pwd)" | sed 's/^seed_//')
+   export SEED_ID
+   ```
+   Because step 1 already verified `pwd == worktree_path` and the path is
+   always `.deep-evolve/<sid>/worktrees/seed_<k>`, `basename` yields
+   `seed_<k>` and the `sed` strips the prefix to yield `<k>`.
+4. **Per-seed program.md**: read `"$worktree_path/program.md"`. This is the
+   SEED-SPECIFIC program.md written by the coordinator at init (see T8
+   `write-seed-program.py`), NOT the base `$SESSION_ROOT/program.md`. It
+   contains this seed's β direction, hypothesis, and initial rationale.
+   For N=1 sessions the seed program.md is a verbatim copy of the base (per
+   § 5.1a short-circuit) — this step reads the same content in both cases, so
+   downstream Steps 1–5 have uniform scaffolding.
+5. **Tagging contract (closes foundation Gap 4)**: EVERY journal event you
+   append during this block — `planned`, `committed`, `evaluated`, `kept`,
+   `discarded`, `rollback_completed`, `diagnose_retry_started`,
+   `diagnose_retry_completed`, `shortcut_flagged`, `rationale_missing`,
+   `borrow_planned` — MUST include `"seed_id": <SEED_ID>`. Enforcement is
+   dual-layer (defense-in-depth):
+   - Layer 1 (this prose contract): pass seed_id explicitly in every event JSON.
+   - Layer 2 (`session-helper.sh` enforcement — T16 Step 6 below): when
+     `$SEED_ID` is exported, `append_journal_event` auto-injects seed_id
+     into the enriched event, **overriding any stale value** in the payload.
+     This is the actual Gap 4 closure — prose alone was insufficient.
+
+   Subagent invocation pattern (explicit layer 1):
+   ```bash
+   bash "$DEEP_EVOLVE_HELPER_PATH" append_journal_event "$(
+     jq -nc --arg sid "$SEED_ID" --argjson rest "$EVENT_JSON" \
+       '$rest + {seed_id: ($sid|tonumber)}'
+   )"
+   ```
+   Note jq merge order: `$rest + {seed_id: ...}`. In jq, object `+` makes
+   the RHS win on key conflict — so the auto-injected seed_id overrides
+   any seed_id that drifted into `$EVENT_JSON`. If the order were reversed
+   (`{seed_id:...} + $rest`), a stale seed_id in the payload would silently
+   defeat the auto-inject.
+
+   `scheduler-signals.py` keys `recent_Q_trend` off of `kept.seed_id`; a
+   missing or wrong tag silently returns neutral trend and the Adaptive
+   Scheduler makes blind decisions. Tag at emission; never post-hoc.
+
+v2 / v3.0.x sessions: skip Step 0.5 entirely. These sessions have no worktree,
+no N_block, and no SEED_ID. The `$VERSION` gate at the top of Section C
+already enforces this separation; Step 0.5 only runs when that gate matches
+`3.1.*`.
+
 **Step 1 — Idea Selection** (uses `strategy.yaml` parameters):
 - Read `results.tsv` to learn from previous keep/discard history
 - Read current state of all target_files
@@ -156,6 +255,27 @@ Repeat until `experiment_count >= max_count` or diminishing returns detected:
 - Generate `candidates_per_step` (from strategy.yaml, default 3) candidate ideas
 - For each candidate, analyze: expected improvement, risk (crash/regression likelihood), novelty vs recent attempts
 - Select the BEST candidate based on this analysis
+- **v3.1 forum consultation (only when `$VERSION_TIER` == "v3_1_plus")**:
+  before the "Append to `journal.jsonl`" step below, run
+  ```bash
+  bash "$DEEP_EVOLVE_HELPER_PATH" tail_forum 20 > /tmp/recent_forum_$$.jsonl
+  ```
+  to read the last 20 forum events across all seeds. For each candidate idea
+  you ranked above, compare against the other seeds' recent non-flagged
+  `seed_keep` descriptions. If a candidate duplicates (semantically or
+  verbatim) another seed's recent keep, demote it unless your direction
+  genuinely differs — the goal is independent exploration (§ 3 AAR Q1),
+  not convergent reinvention. Do NOT block selection outright; this is a
+  soft-filter used to nudge the ranked list. Cleanup: `rm -f /tmp/recent_forum_$$.jsonl`
+  before leaving Step 1.
+
+  This consultation is distinct from the post-keep borrow (see later step
+  5.f): Step 1 is "avoid already kept ideas before exploring"; the post-keep
+  borrow is "after a keep, evaluate adapting others' ideas". Both honor P2
+  (no flagged propagation): Step 1 filters by `flagged=false`; the borrow
+  step is enforced via `borrow-preflight.py`.
+
+  v2 and v3.0.x sessions: `$VERSION_TIER` is not "v3_1_plus" so forum.jsonl does not exist; skip this bullet.
 - Append to `journal.jsonl`: `{"id": <next_id>, "status": "planned", "idea": "<description>", "candidates_considered": <N>, "timestamp": "<now>"}`
 
 **Step 1.5 — Category Tagging (v3 only):**
@@ -362,6 +482,28 @@ IF $VERSION starts with "3.":
       - `experiments.total++`
       - `experiments.kept++`
     - **Code Archive**: record the kept commit in `$SESSION_ROOT/code-archive/keep_<NNN>/` (as per v2 behavior).
+    - **v3.1 forum emission** (only when `$VERSION_TIER == "v3_1_plus"`):
+      emit the `seed_keep` event to the shared forum so other seeds can see
+      it at Step 1 consultation + the cross-seed borrow evaluation below
+      (spec § 7.2). Include `epoch` so Outer Loop Step 6.5.0 can filter by
+      generation.
+      ```bash
+      CURRENT_EPOCH=$(python3 -c "import yaml; \
+        d=yaml.safe_load(open('$SESSION_ROOT/session.yaml')); \
+        print(d.get('evaluation_epoch', {}).get('current', 0))")
+      bash "$DEEP_EVOLVE_HELPER_PATH" append_forum_event "$(jq -nc \
+        --argjson sid "$SEED_ID" --arg commit "$COMMIT" \
+        --arg desc "$IDEA_DESCRIPTION" --arg rat "$RATIONALE" \
+        --argjson sd "$SCORE_DELTA" --argjson flg "$FLAGGED_BOOL" \
+        --argjson lp "$LEGIBILITY_PASSED_BOOL" --argjson ep "$CURRENT_EPOCH" \
+        '{"event":"seed_keep","seed_id":$sid,"commit":$commit,"description":$desc,
+          "rationale":$rat,"score_delta":$sd,"flagged":$flg,
+          "legibility_passed":$lp,"epoch":$ep}')"
+      ```
+      where `$COMMIT`, `$IDEA_DESCRIPTION`, `$RATIONALE`, `$SCORE_DELTA`,
+      `$FLAGGED_BOOL`, `$LEGIBILITY_PASSED_BOOL` are the same values you just
+      wrote to journal and results.tsv — do not recompute them.
+      v2 and v3.0.x sessions: skip this bullet (no forum).
 
   **Discard branch** (from 5.b `reason="regression"`, OR 5.a `reason="crash"`, OR 5.a `reason="diagnosed_gave_up"`):
     - Append journal: `{"id": <id>, "status": "discarded", "reason": "<regression|crash|diagnosed_gave_up>", "timestamp": "<now>"}`
@@ -373,10 +515,154 @@ IF $VERSION starts with "3.":
     - Run **Branch & Clean-Tree Guard**.
     - Run: `git reset --hard HEAD~1`.
     - Append `{"id": <id>, "status": "rollback_completed", "timestamp": "<now>"}`.
+    - **v3.1 forum emission** (only when `$VERSION_TIER == "v3_1_plus"`):
+      emit the `seed_discard` event to the shared forum so other seeds can
+      factor this in during Step 1 consultation (spec § 7.2). Include
+      `epoch` for Outer Loop Step 6.5.0 epoch-filtered aggregation.
+      ```bash
+      CURRENT_EPOCH=$(python3 -c "import yaml; \
+        d=yaml.safe_load(open('$SESSION_ROOT/session.yaml')); \
+        print(d.get('evaluation_epoch', {}).get('current', 0))")
+      bash "$DEEP_EVOLVE_HELPER_PATH" append_forum_event "$(jq -nc \
+        --argjson sid "$SEED_ID" --arg commit "$COMMIT" \
+        --arg desc "$IDEA_DESCRIPTION" --arg reason "$DISCARD_REASON" \
+        --argjson sd "$SCORE_DELTA" --argjson ep "$CURRENT_EPOCH" \
+        '{"event":"seed_discard","seed_id":$sid,"commit":$commit,
+          "description":$desc,"reason":$reason,"score_delta":$sd,"epoch":$ep}')"
+      ```
+      where `$DISCARD_REASON` is the reason already written to journal
+      (one of: `"regression"`, `"crash"`, `"diagnosed_gave_up"`).
+      v2 and v3.0.x sessions: skip this bullet.
 
   **Note**: for 5.d hard-reject, persistence was already performed inside 5.d
   (results.tsv row + journal `discarded` event + reset + `rollback_completed` +
   counter increments) — do NOT duplicate in 5.e.
+
+  **Step 5.f — Cross-Seed Semantic Borrow** (v3.1 only — `$VERSION_TIER` == "v3_1_plus"; keep branch only; runs after Step 5.e Keep finishes persisting):
+
+  Rationale: your seed has just accepted an experiment. Other seeds' recent keeps
+  may contain ideas you can productively adapt. Step 5.f decides (this turn)
+  whether to plan a `semantic_borrow` for your NEXT experiment, enforced by
+  `hooks/scripts/borrow-preflight.py` to prevent § 7.4 P2 flagged propagation and
+  P3 under-exploration borrow cascades.
+
+  1. **Pre-condition gate** (cheap local checks before any subprocess):
+     - `self.experiments_used >= 3` (P3 floor — mirrored in preflight as a
+       defense-in-depth check).
+     - If N=1 (you are the only seed), skip Step 5.f entirely — there is nothing
+       to borrow.
+
+  2. **Collect candidates** (from the shared forum). Derive the preflight
+     script path directly from `$DEEP_EVOLVE_HELPER_PATH` (they share the
+     `hooks/scripts/` directory), avoiding a `DEEP_EVOLVE_REPO` indirection
+     that is easy to get wrong by dirname-count. Guard the `tail_forum`
+     invocation against transient failures (empty/missing forum.jsonl is a
+     valid state):
+     ```bash
+     HELPER_SCRIPTS_DIR="$(dirname "$DEEP_EVOLVE_HELPER_PATH")"  # <repo>/hooks/scripts
+     PREFLIGHT_SCRIPT="$HELPER_SCRIPTS_DIR/borrow-preflight.py"
+     CANDIDATES_JSON=$(bash "$DEEP_EVOLVE_HELPER_PATH" tail_forum 40 2>/dev/null \
+       | jq -s --argjson sid "$SEED_ID" \
+         '[.[] | select(.event=="seed_keep" and .seed_id != $sid)] | .[-10:]' \
+       || echo '[]')
+     ```
+     Take the last 10 non-self seed_keep events from the last 40 forum lines.
+     If `CANDIDATES_JSON` is `[]`, skip Step 5.f.
+
+  3. **Preflight filter** (enforces P2 flagged + P2 legibility + dedup; only runs when `$VERSION_TIER` == "v3_1_plus"). The
+     preflight needs BOTH the journal (for self-keyed `borrow_planned` dedup —
+     phase 1 of the § 7.4 P1 state machine) AND the forum (for self-`to_seed`
+     `cross_seed_borrow` dedup — phase 2; per spec § 7.1 that event lives in
+     forum.jsonl, NOT journal). Guard the subprocess call so operator
+     errors surface as warnings rather than masquerading as "no eligible
+     candidates":
+     ```bash
+     JOURNAL_RELEVANT=$(jq -s --argjson sid "$SEED_ID" \
+       '[.[] | select(.event=="borrow_planned" and .seed_id==$sid)
+             , .[] | select(.event=="borrow_abandoned" and .seed_id==$sid)]' \
+       "$SESSION_ROOT/journal.jsonl" 2>/dev/null || echo '[]')
+     FORUM_RELEVANT=$(jq -s --argjson sid "$SEED_ID" \
+       '[.[] | select(.event=="cross_seed_borrow" and .to_seed==$sid)]' \
+       "$SESSION_ROOT/forum.jsonl" 2>/dev/null || echo '[]')
+     if ! PREFLIGHT=$(python3 "$PREFLIGHT_SCRIPT" \
+         --args "$(jq -nc \
+           --argjson sid "$SEED_ID" \
+           --argjson used "$SELF_EXPERIMENTS_USED" \
+           --argjson cands "$CANDIDATES_JSON" \
+           --argjson journal "$JOURNAL_RELEVANT" \
+           --argjson forum "$FORUM_RELEVANT" \
+           '{self_seed_id:$sid, self_experiments_used:$used, candidates:$cands, journal:$journal, forum:$forum}')"); then
+       echo "warn: borrow-preflight.py exited non-zero — skipping Step 5.f this turn" >&2
+       return 0 2>/dev/null || :
+     fi
+     ```
+     `$SELF_EXPERIMENTS_USED` must be derived before this block from session.yaml
+     (requires `$VERSION_TIER` == "v3_1_plus" — virtual_parallel block exists):
+     ```bash
+     SELF_EXPERIMENTS_USED=$(python3 -c "import yaml,sys; \
+       d=yaml.safe_load(open('$SESSION_ROOT/session.yaml')); \
+       print(next(s['experiments_used'] for s in \
+         d['virtual_parallel']['seeds'] if s['id']==int('$SEED_ID')))")
+     ```
+     Parse `eligible` and `p3_gate_open`. If `p3_gate_open` is `false` or
+     `eligible` is empty, skip Step 5.f (no borrow this turn).
+
+  4. **AI evaluation** (only runs if eligible is non-empty): prompt yourself
+     with the candidate list and decide — for each candidate — whether the idea
+     is semantically relevant to your direction and worth re-implementing. The
+     AI judgement is § 7.3's prompt verbatim (includes "re-implement, do not
+     cherry-pick").
+
+  5. **Phase 1: `borrow_planned`** (journal, § 7.4 P1 state machine). For each
+     candidate you commit to borrow, append:
+     ```json
+     {"event":"borrow_planned","seed_id":<SEED_ID>,"source_commit":"<sha>",
+      "source_seed":<n>,"plan_rationale":"<≤200 chars>",
+      "planned_for_experiment_id":<next_experiment_id>,"block_id":<current_block_id>}
+     ```
+     via `bash "$DEEP_EVOLVE_HELPER_PATH" append_journal_event <json>`.
+     Counters `borrows_given` / `borrows_received` in session.yaml MUST NOT
+     increment yet — this is intent only (P1 Phase 1).
+
+  6. **Phase 2 deferred to next experiment's Step 2 (Code Modification)** (requires `$VERSION_TIER` == "v3_1_plus"): when
+     the next experiment runs, Step 2 re-implements the borrowed idea. The
+     subsequent Step 3 Git Commit MUST include a trailer
+     `inspired_by: <source_commit>`. Immediately after the successful commit
+     (before Step 4 evaluation), recover the planned-event context and append
+     a `cross_seed_borrow` event to `forum.jsonl`:
+     ```bash
+     TARGET_COMMIT=$(git rev-parse HEAD)
+     CURRENT_EXP_ID=<id of the experiment you just committed>
+     PLANNED=$(jq -s --argjson sid "$SEED_ID" --argjson eid "$CURRENT_EXP_ID" \
+       '[.[] | select(.event=="borrow_planned" and .seed_id==$sid
+                      and .planned_for_experiment_id==$eid)] | .[-1]' \
+       "$SESSION_ROOT/journal.jsonl" 2>/dev/null)
+     if [ -z "$PLANNED" ] || [ "$PLANNED" = "null" ]; then
+       echo "warn: no matching borrow_planned found for seed $SEED_ID exp $CURRENT_EXP_ID" >&2
+     else
+       SOURCE_COMMIT=$(printf '%s' "$PLANNED" | jq -r '.source_commit')
+       SOURCE_SEED=$(printf '%s' "$PLANNED"  | jq -r '.source_seed')
+       PLAN_RATIONALE=$(printf '%s' "$PLANNED" | jq -r '.plan_rationale')
+       bash "$DEEP_EVOLVE_HELPER_PATH" append_forum_event "$(jq -nc \
+         --argjson src "$SOURCE_SEED" --argjson tgt "$SEED_ID" \
+         --arg sc "$SOURCE_COMMIT" --arg tc "$TARGET_COMMIT" \
+         --arg mode "semantic_borrow" --arg reason "$PLAN_RATIONALE" \
+         '{event:"cross_seed_borrow",from_seed:$src,to_seed:$tgt,
+           source_commit:$sc,target_commit:$tc,mode:$mode,
+           inspired_by:$sc,reason:$reason}')"
+     fi
+     ```
+     Only on this forum Phase 2 append do the counters
+     `source_seed.borrows_given` / `self.borrows_received` increment (handled
+     by coordinator at epoch boundary from forum scan).
+
+  7. **Abandonment**: if you never execute Phase 2 within 2 blocks of the
+     `borrow_planned`, `borrow-abandoned-scan.py` (T15b) emits a
+     `borrow_abandoned` event at the coordinator's post-dispatch turn. You do
+     not need to emit it yourself.
+
+  v2 and v3.0.x sessions: there is no Step 5.f — the shared forum does not
+  exist in those session types. Skip entirely.
 
 ELSE (v2):
   

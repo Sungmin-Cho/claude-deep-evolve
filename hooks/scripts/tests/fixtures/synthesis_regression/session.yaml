@@ -1,0 +1,37 @@
+deep_evolve_version: "3.1.0"
+session_id: "regr-mock"
+goal: "test synthesis regression scenarios"
+virtual_parallel:
+  enabled: true
+  n_current: 3
+  n_initial: 3
+  budget_total: 30
+  budget_unallocated: 0
+  synthesis:
+    budget_allocated: 6
+    regression_tolerance: 0.05
+  seeds:
+    - id: 1
+      status: active
+      direction: "feature engineering"
+      final_q: 0.42
+      keeps: 3
+      borrows_received: 1
+      experiments_used: 10
+      allocated_budget: 10
+    - id: 2
+      status: active
+      direction: "signal filtering"
+      final_q: 0.28
+      keeps: 1
+      borrows_received: 2
+      experiments_used: 10
+      allocated_budget: 10
+    - id: 3
+      status: active
+      direction: "ensemble weights"
+      final_q: 0.35
+      keeps: 2
+      borrows_received: 0
+      experiments_used: 10
+      allocated_budget: 10

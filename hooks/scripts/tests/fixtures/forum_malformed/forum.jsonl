@@ -1,0 +1,6 @@
+{"event":"seed_keep","ts":"2026-04-23T10:00:00","seed_id":1,"commit":"aaa","description":"valid keep","score_delta":0.05,"flagged":false,"legibility_passed":true}
+{"event":"seed_keep","ts":"2026-04-23T10:01:00","description":"missing seed_id"}
+{"event":"seed_keep","ts":"2026-04-23T10:02:00","seed_id":2,"description":"missing commit","score_delta":0.02}
+{"event":"seed_keep","ts":"2026-04-23T10:02:30","seed_id":3,"commit":"truncated_jso
+{"event":"cross_seed_borrow","ts":"2026-04-23T10:03:00","source_commit":"aaa"}
+{"event":"seed_discard","ts":"2026-04-23T10:04:00","seed_id":1,"commit":"bbb","reason":"regression","score_delta":-0.01}

@@ -1,5 +1,218 @@
 # 변경 이력
 
+## [3.1.0] — 2026-04-26 (Virtual Parallel N-seed)
+
+v3.0 AAR 기반 Inner/Outer Loop에 parallel N-seed 탐색을 추가하는 major
+릴리스. 각 세션이 N=1..9개 독립 seed worktree를 적응형 스케줄러로 조정,
+공유 forum으로 seed 간 관찰, 세션 종료 시 synthesis로 per-seed 결과를
+단일 best 브랜치로 병합. `session.yaml.deep_evolve_version: "3.1.0"`로
+게이팅. v3.0.x 세션은 VERSION_TIER 라우팅 (`pre_v3` / `v3_0` / `v3_1_plus`
+4-arm, 4개 protocol 파일에 통일)으로 완전 지원.
+
+### 추가
+- **Virtual parallel N-seed** (§ 4 Architecture, § 5 Seed Lifecycle):
+  N=1..9 seed worktree (`.deep-evolve/<sid>/seeds/<seed_id>/worktree/`).
+  Coordinator가 prose contract로 subagent 발화; per-seed inner loop는
+  기존 코드 경로 그대로, journal 이벤트에 `seed_id` 주입.
+- **β/γ seed 구분** (§ 5): β (init 시 의도적 모호 방향, A.3에서 1회
+  생성), γ (세션 중 `grow_then_schedule` 결정 시 AI 재생성).
+  `seed_origin ∈ {β, γ}` in seed schema.
+- **적응형 스케줄러** (§ 6): `hooks/scripts/scheduler-decide.py`가
+  `ALLOWED_DECISION = {schedule, kill_then_schedule, grow_then_schedule}`
+  중 하나 반환. `REQUIRED_BY_DECISION` per-decision 필수 필드 스키마 강제
+  (kill_then_schedule: kill_target; grow_then_schedule: new_seed_id).
+  Drift-detector 테스트가 dict-key parity 검증 — 향후 contributor가
+  decision type 추가 시 schema 동기화 누락을 catch. Per-seed signals —
+  Q, in_flight_block, borrows_received MIN-wins, last_keep_age.
+  Session-wide signals — P3 allocation floor (default 3), fairness
+  deficit. Soft fairness floor (§ 6.6).
+- **Forum + borrow 교환** (§ 7): `.deep-evolve/<sid>/forum.jsonl`
+  append-only, flock 보호. 2단계 borrow lifecycle —
+  `borrow_planned` (journal-side, Step 5.f intent marker) →
+  `cross_seed_borrow` (forum-side, 다음 kept commit에서 차용 실행 시 발행),
+  `borrow_abandoned` (journal-side janitor)는 `cross_seed_borrow`로 이어지지
+  않은 채 2 블록 이상 stale 상태인 planned 이벤트를 정리. Forum 필드
+  SOT — `to_seed`/`from_seed` (`_id` 접미사 없음), 코드베이스 8+
+  사이트에 통일. `dedup_planned`는 journal-side `borrow_planned` 키 기반,
+  `dedup_executed`는 forum-side `cross_seed_borrow` 키 기반 (data-source
+  계약 spec § 7.1). `borrows_received` MIN-wins per § 7.4 P1.
+- **Borrow guardrails** (§ 7.4 P2/P3): `hooks/scripts/borrow-preflight.py`가
+  P2 flagged 필터 (shortcut/legibility-failed source 차단) + P3 allocation
+  floor + per-(borrower, source_commit) dedup 강제.
+- **Convergence classifier** (§ 7.5): `hooks/scripts/convergence-detect.py`
+  3-class borrow-ancestry-closure 분류 — `evidence_based`,
+  `borrow_chain_convergence`, `contagion_suspected`. Outer Loop이 각각
+  2× / 1× / 0 stagnation credit 가중.
+- **Kill 관리** (§ 5.5): `hooks/scripts/kill-conditions.py` 5-condition
+  whitelist (§ 5.5a 4-clause `sustained_regression` pseudocode 충실 구현);
+  `hooks/scripts/kill-request-writer.sh`로 `--kill-seed` CLI 처리;
+  `session-helper.sh` `append_kill_queue_entry` / `drain_kill_queue`로
+  W-9 in-flight 지연 + Phase 2/3 snapshot-then-process atomicity.
+  `seed_killed` 이벤트가 `queued_at`/`applied_at`/`final_q`/`experiments_used`
+  carry.
+- **세션 종료 synthesis** (§ 8): `synthesis.md` 7-step orchestration +
+  N=1 short-circuit (§ 8.5). `baseline-select.py` 4-step cascade
+  (5.a preferred → 5.b non-quarantine → 5.c best-effort → 5.d no-baseline)
+  + 4-level tiebreak (final_q → keeps → borrows → seed_id).
+  `cross-seed-audit.py` Step 3 forum 집계 (borrow matrix + convergence
+  tally + per-seed activity). `generate-fallback-note.py`로 § 8.2
+  verbatim 한국어 AskUserQuestion 옵션 포함 구조화 fallback 설명 발행.
+- **Synthesis worktree helper** (§ 4.1, § 8.2 Step 5):
+  `session-helper.sh` `cmd_create_synthesis_worktree` /
+  `cmd_cleanup_failed_synthesis_worktree` (실패 시 branch를
+  `synthesis-failed-<ts>`로 rename, 감사 trail 보존).
+- **Init 흐름** (§ 5, § 13): A.1.6에서 AI가
+  (project_type, eval_parallelizability) 기반 `n_suggested` 분류 (1..9
+  matrix). A.2.6 AskUserQuestion으로 N 확정 (`DEEP_EVOLVE_NO_PARALLEL` /
+  `DEEP_EVOLVE_N_MIN` / `DEEP_EVOLVE_N_MAX` env var 존중).
+  A.3.6 per-seed worktree 생성 + β 생성 + per-seed program.md +
+  session.yaml seeds[] 채움. `init_vp_analysis` / `seed_initialized`
+  journal 이벤트 신설 (coordinator 측 `(unset SEED_ID; ...)` subshell로
+  per-seed SEED_ID 격리).
+- **Resume 재구성** (§ 11): resume.md Step 3.5 v3.1 reconciliation —
+  3.5.a yaml + journal seed-set read; 3.5.b W-3 drift detection +
+  prefer-journal resolution + `resume_drift_detected` 이벤트 +
+  `rebuild_seeds_from_journal` helper; 3.5.c per-seed
+  `validate_seed_worktree` (rc=3 → AskUserQuestion W-11.1 복구,
+  rc=4/5/6 → exit 1); 3.5.d git-log-is-truth replay (§ 11.3,
+  `planned_commit_sha` / `pre_plan_head_sha` 매칭 → synthesized
+  `committed`/`discarded`).
+- **CLI 플래그** (§ 13): `--no-parallel`, `--n-min=<k>`, `--n-max=<k>`,
+  `--kill-seed=<id>`, `--status` 서브커맨드. 교차 불변식 N_MIN ≤ N_MAX
+  강제 (위반 시 rc=2). `--status`는 `hooks/scripts/status-dashboard.py`
+  pure-function helper로 디스패치, § 13.1 per-seed 대시보드 출력.
+- **Meta-archive schema_v4** (§ 10, § 9.4): `transfer.md` 4-arm version
+  gate (`2` / `3` / `4` / `>=5`). v3 entry → `N_prior=1`,
+  v4 entry → A.1.6 classifier에 prior signal로 들어가는 full
+  `virtual_parallel` snapshot. Section F prune candidates에 v3-schema
+  270-day 룰 추가 (v2-schema 180-day 룰과 평행).
+- **VERSION_TIER 라우팅**: `$VERSION_TIER ∈ {pre_v3, v3_0, v3_1_plus}` +
+  `IS_V31` boolean이 4개 protocol 파일 (inner-loop.md, outer-loop.md,
+  synthesis.md, coordinator.md)에 canonical. 4-arm case 패턴 통일 —
+  virtual_parallel-DEPENDENT sub-step은 `v3_1_plus`로 게이팅;
+  virtual_parallel-INDEPENDENT (shortcut_detection, seal_prepare)은
+  `!= pre_v3`로 게이팅.
+- **Pytest 테스트 스위트** (§ 12.1 W-8 per-file enumeration): 40개
+  `test_v31_*.py` 파일이 v3.1 표면 전부를 검증 — borrow lifecycle
+  (`borrow_abandoned`, `borrow_guardrails`, `borrow_preflight`),
+  scheduler (`scheduler_decide`, `scheduler_decision`,
+  `scheduler_signals`, `scheduler_fairness`), kill 관리
+  (`kill_conditions`, `kill_queue`, `kill_request`, `kill_seed_cli`),
+  forum + cross-seed (`forum_io`, `forum_summary`, `cross_seed_audit`,
+  `convergence_detect`, `step_5e_forum_emission`), synthesis
+  (`baseline_select`, `synthesis_protocol`, `synthesis_worktree`,
+  `synthesis_fallback`, `fallback_note`), seed lifecycle (`beta_init`,
+  `beta_growth`, `budget_alloc`, `worktree_manager`, `worktree_helpers`,
+  `write_seed_program`), init + resume (`init_protocol`, `resume_v31`,
+  `session_yaml_schema`, `journal_events`, `transfer_schema_v4`),
+  CLI + status (`cli_flags`, `status_subcommand`, `helper_locator`),
+  protocol fixtures (`coordinator_protocol_exists`, `version_gate`,
+  `inner_loop_updates`, `outer_loop_updates`, `subagent_prompt`).
+  합계 517 passed, 1 xfailed (T22 polling gap intentional surface).
+- **신규 fixtures**: `multi_seed_mock/`, `synthesis_regression/`,
+  `forum_multi_seed/`, `forum_malformed/`, `v3_0_resume_sample/`,
+  `transfer_schema_v3/`, `transfer_schema_v4/`, `kill_scenarios/`
+  (4 sub-fixtures), `borrow_scenario/`.
+
+### 변경
+- `session.yaml` 스키마: `deep_evolve_version: "3.1.0"`; 신규
+  `virtual_parallel` 블록. 최상위 필드: `n_current` (int, 활성 seed 수),
+  `n_initial` (int, 세션 init 시 값), `n_range` (`{min: 1, max: 9}`,
+  AI 허용 N 범위), `budget_total` (int, seed들이 공유하는 총 실험 예산).
+  Per-seed `seeds[]` 항목: `id` (int, seed 식별자), `status ∈ {active,
+  killed, completed}`, `direction` (str, β/γ 방향 요약), `hypothesis`
+  (str, 초기 가설), `initial_rationale` (str), `worktree_path`, `branch`,
+  `created_at` (ISO 8601), `created_by ∈ {init_batch, grow_then_schedule}`
+  (init-time vs 세션 중 γ 대체 — runtime에서 spec의 β/γ 구분 역할),
+  `experiments_used`, `keeps`, `borrows_given`, `borrows_received`
+  (MIN-wins per § 7.4 P1), `current_q` (float, 최신 Q score),
+  `allocated_budget` (int, 이 seed의 `budget_total` 분배몫), `killed_at`
+  (null|ISO), `killed_reason` (null|str). 블록 크기 (`{1, 2, 3, 5, 8}`)는
+  scheduler turn마다 AI Q3 판단으로 결정 — session.yaml 필드가 **아님**;
+  `seed_scheduled` journal 이벤트에 기록.
+- `journal.jsonl` v3.1 확장 이벤트 (journal-side): `seed_initialized`,
+  `seed_block_completed`, `seed_block_failed`, `seed_killed`
+  (`queued_at`/`applied_at`/`final_q`/`experiments_used` 포함),
+  `init_vp_analysis`, `resume_drift_detected`, `synthesis_commit`,
+  `synthesis_failed`, `borrow_planned`, `borrow_abandoned`,
+  `seed_scheduled`. v3.1-specific 이벤트는 coordinator 발행 시
+  `(unset SEED_ID; ...)` subshell로 작성 (per-seed inner-loop subagent는
+  seed-scoped SEED_ID 그대로 사용). Forum-side 이벤트 (`cross_seed_borrow`,
+  `convergence_event`)는 `forum.jsonl`에 별도 기록 (§ 7.1 data-source 계약).
+- `forum.jsonl` (신규) — `.deep-evolve/<sid>/forum.jsonl`, append-only,
+  flock 보호. 필드 SOT: `to_seed`/`from_seed` (`_id` 접미사 없음).
+  malformed 라인은 tail-skip-and-warn (data-flow 방향:
+  consumer-tolerance로 partial-event 견고성).
+- `kill_requests.jsonl` (신규) — pending kill 큐. Coordinator가 다음
+  scheduler turn에서 `drain_kill_queue` + AskUserQuestion 확정;
+  W-9 in-flight 지연; W-1 HELPER_SOURCED 가드.
+- `meta-archive.jsonl` schema_v4 — E.0 recording에
+  `virtual_parallel` snapshot 추가. v3.0.x 세션은 schema_version=3 유지
+  (snapshot 없음); v2/v3/v4 셋이 공존.
+- `protocols/inner-loop.md` Step 0.5 (block params 입수 + seed_id 태깅
+  계약 — Gap 4 close); v3.1 forum 협의 in Step 1; Step 5.f borrow
+  평가 (borrow-preflight.py 호출).
+- `protocols/outer-loop.md` Step 6.5.0 (epoch boundary sync:
+  forum-summary.md 생성, convergence 감지, AI N 재평가) + 6.5.6 v3.1
+  addendum (evidence_based −2 / borrow_chain_convergence −1 /
+  contagion_suspected 0 + WARN + AskUserQuestion 에스컬레이션).
+  Per-substep VERSION_TIER 게이트.
+- `protocols/synthesis.md` (신규) — 7-step orchestration + N=1
+  short-circuit + Step 6 3-branch fallback ladder (§ 8.2 verbatim
+  AskUserQuestion 옵션).
+- `protocols/coordinator.md` (신규) — coordinator dispatch protocol +
+  scheduler-decide invocation 계약 + forward-compat VERSION_TIER 게이트.
+- `commands/deep-evolve.md` Step 0.5 — 4 신규 플래그 (`--no-parallel`,
+  `--n-min`, `--n-max`, `--kill-seed`) + `--status` 서브커맨드. Env-var
+  플래그가 init.md A.2.6으로 전파.
+- `transfer.md` schema_version=4 read path. W-1 forward-compat default
+  `*)` skip + warn; v5+는 rc=2로 명시 거부.
+- `session-helper.sh` HELPER_VERSION 3.0.0 → 3.1.0; 신규 서브커맨드
+  `append_seed_to_session_yaml`, `set_virtual_parallel_field`,
+  `cmd_create_synthesis_worktree`, `cmd_cleanup_failed_synthesis_worktree`,
+  `append_kill_queue_entry`, `drain_kill_queue`,
+  `rebuild_seeds_from_journal`.
+
+### 마이그레이션
+- v3.0.x 세션은 v3.1 코드 하에서 VERSION_TIER 라우팅으로 resume —
+  `v3_0` arm이 single-seed 코드 경로 그대로 보존. 스키마 마이그레이션
+  없음; v3.0 세션은 meta-archive에서 schema_version=3 유지.
+- v3.1 세션은 schema_version=4 entry에 `virtual_parallel` snapshot 기록.
+  v3.0 reader는 알 수 없는 블록 무시 (additive 스키마; § 9.4 R12 완화).
+- N=1 경로: v3.1 세션이 `--no-parallel` 또는 AI 결정으로 N=1로 실행
+  가능 — v3.0 single-seed와 동작 등가지만 v3.1 스키마와 이벤트 이름
+  사용. Resume 시 `session.yaml.virtual_parallel.N == 1`로 short-circuit.
+- Deprecation 로드맵 (변경 없음): 3.0.x v2 full support → 3.1.0 warning
+  → 3.2.0 read-only completion → 4.0.0 v2 스키마 제거. v3.1은 v3.0의
+  v2-warning 배너를 VERSION_TIER `pre_v3` arm으로 유지.
+
+### 알려진 문제 (3.1.x로 연기)
+G12 review iteration 2026-04-26 중 5개 non-blocking polish 항목 연기.
+각 항목은 비-차단으로 경험적 검증 완료, v3.1.x patch backlog로 ticketing.
+
+- **H1**: `--signals` JSON 파싱이 `scheduler-decide.py`의 business
+  rejection 이후 실행 (G3 ordering 패턴을 signals 경로로 확장 필요).
+  Cosmetic — signals는 AI 입력이라 decision JSON보다 malformed 가능성
+  낮음. Patch에서 business rejection 이전으로 이동 예정.
+- **H2**: `nsa < 3` 숫자 가드가 type+business를 단일 rc=1 경로에 통합.
+  Type 에러(non-int)를 below-P3-floor business rejection으로 오분류.
+  Coordinator가 적절히 거부하긴 하나 메시지가 오해 소지. Patch에서
+  type-validation(rc=2)과 business rejection(rc=1) 분리 예정.
+- **I1**: `coordinator.md:134-139` pseudocode가
+  `append_kill_queue_entry(validated.kill_target, reasoning)` (2 args)
+  표시하나 helper는 4 args 요구. Pseudocode-only (직접 실행되는 bash
+  아님) — AI agent가 `session-helper.sh` 읽고 실제 시그니처 추론. Patch에서
+  pseudocode를 helper 시그니처와 정렬 예정.
+- **I2c**: Scheduler decision 필드 (`kill_target`, `new_seed_id`)를
+  `--signals.seeds`와 cross-validation하려면 signals correlation 복잡도
+  필요 — 예: 존재하지 않는 seed에 `kill_target=999`, 기존 seed와
+  `new_seed_id=1` 충돌 감지. 구현 전 design discussion 필요. Patch에서
+  `scheduler-decide.py` cross-field validator 확장 가능.
+- **info-2**: `coordinator.md`의 pseudocode-only 배너 — 문서 명료성
+  polish, 기능적 영향 없음. Patch에서 해당 블록 위에 명시적
+  "PSEUDOCODE — see session-helper.sh for actual signatures" 헤더 추가
+  예정.
+
 ## [3.0.0] — 2026-04-22 (AAR 기반 증거 중심 Hill-Climbing)
 
 AAR 논문(Wen et al. 2026, Anthropic Alignment Science Blog)에서 영감 받은 4개

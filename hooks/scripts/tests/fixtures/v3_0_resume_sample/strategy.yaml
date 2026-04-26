@@ -1,0 +1,28 @@
+version: 2
+idea_selection:
+  method: "weighted"
+  weights:
+    parameter_tune: 0.15
+    refactor_simplify: 0.15
+    add_guard: 0.10
+    algorithm_swap: 0.15
+    data_preprocessing: 0.10
+    caching_memoization: 0.05
+    error_handling: 0.10
+    api_redesign: 0.10
+    test_expansion: 0.05
+    other: 0.05
+  candidates_per_step: 3
+  min_novelty_distance: 2
+judgment:
+  min_delta: 0.001
+  crash_tolerance: 3
+  marginal_policy: "discard"
+convergence:
+  consecutive_discard_limit: 10
+  plateau_window: 15
+  plateau_action: "branch"
+exploration:
+  radical_threshold: 20
+  backtrack_enabled: true
+  backtrack_strategy: "least_explored"

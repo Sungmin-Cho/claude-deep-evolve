@@ -15,39 +15,119 @@ If it exists:
 
 3. **If a similar entry is found** (LLM confirms relevance):
 
-   **Schema compatibility branch (v3.0.0)**:
+   **Schema compatibility branch (v3.0.0 / v3.1.0)**:
 
    Extract `schema_version` safely — v2 entries written before 3.0.0 do NOT
    have this field at all. Treat missing/null as `2`:
 
    ```bash
-   entry_schema=$(echo "$entry" | jq -r '.schema_version // 2')
+   if ! entry_schema=$(echo "$entry" | jq -r '.schema_version // 2'); then
+     echo "warning: A.2.5 entry $entry_id schema_version unreadable (jq failed) — skipping" >&2
+     continue
+   fi
    ```
 
-   IF `entry_schema >= 3`:
-     - Use `entry.final_strategy.weights` verbatim (already 10-category).
-   ELSE (v2 entry — `entry_schema < 3`, which includes the missing-field case
-   handled above):
-     - Translate weights via a **session-scoped temp file** (NOT shared `/tmp`):
-       ```bash
-       tmpfile=$(mktemp "${TMPDIR:-/tmp}/de-v2weights.XXXXXX")
-       trap 'rm -f "$tmpfile"' EXIT
-       printf '%s' "$entry_weights_json" > "$tmpfile"
-       translated=$(bash "$CLAUDE_PLUGIN_ROOT/hooks/scripts/session-helper.sh" \
-         migrate_v2_weights "$tmpfile")
-       rm -f "$tmpfile"
-       trap - EXIT
-       ```
-       Rationale: concurrent v3 session inits would race on a hard-coded path
-       (e.g., `/tmp/v2weights.json`), potentially importing another session's
-       archive weights. `mktemp` guarantees a unique filename per invocation.
-     - Use translated weights as initial values for `strategy.yaml.idea_selection.weights`
-       in the new session's A.3 Step 9 (init.md).
-     - Log the translation reason in `session.yaml.transfer.source_schema_version = 2`.
+   Route via numeric comparison + explicit-arm case (W-1 forward-compat lesson —
+   every condition explicit, default rejects loudly). C3 fix (deep-review
+   2026-04-25 plan-stage): prior implementations used bash GLOB patterns for
+   v5+ detection — bash glob `*` after a character class ambiguously matches
+   arbitrary trailing chars (e.g., `123abc` passing the version gate).
+   Numeric `-ge` comparison eliminates the ambiguity:
 
-   - Inject its `program_versions` diffs into program.md generation (A.3 step 6)
-     under a "검증된 전략 전이" section (existing behavior).
+   ```bash
+   # Step 1: validate entry_schema is a non-negative integer (no leading zeros,
+   # no garbage). Reject malformed at the boundary — never let a glob-ambiguous
+   # input route silently to the v5+ rejection arm.
+   if ! [[ "$entry_schema" =~ ^(0|[1-9][0-9]*)$ ]]; then
+     echo "warning: A.2.5 entry $entry_id has malformed schema_version=$entry_schema — skipping" >&2
+     continue
+   fi
+
+   # Step 2: numeric routing. Each arm explicit; no glob ambiguity.
+   if [ "$entry_schema" -ge 5 ]; then
+     # Forward-incompatible: v3.1.x code MUST NOT silently process a v3.2+/v4
+     # archive entry. Operator error — user is running an older deep-evolve
+     # against a future archive. rc=2 (operator), with actionable message
+     # pointing to the upgrade path.
+     echo "error: A.2.5 schema_version=$entry_schema is from a newer deep-evolve release." >&2
+     echo "       This v3.1.x deep-evolve cannot read it; either upgrade deep-evolve" >&2
+     echo "       or run /deep-evolve --archive-prune to mark this entry pruned." >&2
+     exit 2
+   elif [ "$entry_schema" -le 1 ]; then
+     # Negative or zero — malformed (the regex above already filters; defense-in-depth).
+     echo "warning: A.2.5 entry $entry_id has out-of-range schema_version=$entry_schema — skipping" >&2
+     continue
+   else
+     # entry_schema ∈ {2, 3, 4} — explicit case dispatch
+     case "$entry_schema" in
+       2)
+         # Legacy v2 entry: translate weights via session-scoped mktemp
+         # (concurrent v3 inits would race on a hard-coded /tmp path).
+         if ! tmpfile=$(mktemp "${TMPDIR:-/tmp}/de-v2weights.XXXXXX"); then
+           echo "error: A.2.5 v2 arm mktemp failed (disk full / no /tmp permission)" >&2
+           continue
+         fi
+         trap 'rm -f "$tmpfile"' EXIT
+         printf '%s' "$entry_weights_json" > "$tmpfile"
+         if ! translated=$(bash "$CLAUDE_PLUGIN_ROOT/hooks/scripts/session-helper.sh" \
+             migrate_v2_weights "$tmpfile"); then
+           echo "error: A.2.5 v2-weights migration failed" >&2
+           rm -f "$tmpfile"; trap - EXIT
+           exit 1
+         fi
+         rm -f "$tmpfile"
+         trap - EXIT
+         N_PRIOR=1
+         SOURCE_SCHEMA=2
+         ;;
+       3)
+         # v3.0.x entry: 10-category weights already, no virtual_parallel block.
+         # Read as single-seed (N_prior=1) so transfer-effectiveness comparisons
+         # against v3.1 multi-seed sessions remain meaningful (W-8).
+         if ! USE_WEIGHTS=$(echo "$entry" | jq -c '.final_strategy.weights'); then
+           echo "error: A.2.5 v3 entry $entry_id final_strategy.weights unreadable" >&2
+           continue
+         fi
+         N_PRIOR=1
+         SOURCE_SCHEMA=3
+         ;;
+       4)
+         # schema_version=4 (v3.1.x entry): 10-category weights AND full
+         # virtual_parallel snapshot. The snapshot may hint N_initial /
+         # project_type / eval_parallelizability to A.1.6's classifier as a
+         # prior signal — but A.1.6 still consults the AI freshly.
+         # (Transfer is suggestion-level, not authoritative.)
+         if ! USE_WEIGHTS=$(echo "$entry" | jq -c '.final_strategy.weights'); then
+           echo "error: A.2.5 v4 entry $entry_id final_strategy.weights unreadable" >&2
+           continue
+         fi
+         if ! VP_PRIOR=$(echo "$entry" | jq -c '.virtual_parallel // {}'); then
+           echo "error: A.2.5 v4 entry $entry_id virtual_parallel block unreadable" >&2
+           continue
+         fi
+         if ! N_PRIOR=$(echo "$VP_PRIOR" | jq -r '.n_initial // 1'); then
+           echo "error: A.2.5 v4 entry virtual_parallel.n_initial unreadable" >&2
+           exit 1
+         fi
+         SOURCE_SCHEMA=4
+         ;;
+       *)
+         # Defense-in-depth: outer if-chain should have routed already.
+         # If we reach here, the boundary regex + numeric routing has a bug.
+         echo "error: A.2.5 internal invariant violated — entry_schema=$entry_schema reached inner case despite outer filter" >&2
+         exit 1
+         ;;
+     esac
+   fi
+   ```
+
+   - Inject `program_versions` diffs into program.md generation (A.3 step 6)
+     under a "검증된 전략 전이" section (existing behavior — applies to all
+     non-rejected entries).
    - Record transfer source: `session.yaml.transfer.source_id = <archive_id>`.
+   - Record schema version received: `session.yaml.transfer.source_schema_version = $SOURCE_SCHEMA`.
+   - For schema_v4 entries: `session.yaml.transfer.source_n_prior = $N_PRIOR`
+     (lets E.0 compute transfer effectiveness across N transitions).
 
 4. **If no similar entry found**: proceed with default strategy.yaml.
 
@@ -87,10 +167,15 @@ If either condition is not met, skip recording.
    ```
 
    **New entry format** (append to `~/.claude/deep-evolve/meta-archive.jsonl`):
+
+   **TEMPLATE — fill placeholders before writing** (I6 note: this is the JSON
+   SHAPE only — do NOT copy `<session.yaml.virtual_parallel.*>` literals into
+   the actual JSONL output; use the jq construction snippet below instead):
+
    ```jsonl
    {
      "id": "archive_<timestamp_hash>",
-     "schema_version": 3,
+     "schema_version": 4,
      "timestamp": "<now>",
      "project": {
        "path_hash": "<sha256(project_path)[:8]>",
@@ -123,6 +208,19 @@ If either condition is not met, skip recording.
        "improvement_pct": <v>,
        "crashed_rate": <v>
      },
+     "virtual_parallel": {
+       "n_initial": <session.yaml.virtual_parallel.n_initial>,
+       "n_current": <session.yaml.virtual_parallel.n_current>,
+       "project_type": "<session.yaml.virtual_parallel.project_type>",
+       "eval_parallelizability": "<session.yaml.virtual_parallel.eval_parallelizability>",
+       "selection_reason": "<session.yaml.virtual_parallel.selection_reason>",
+       "budget_total": <session.yaml.virtual_parallel.budget_total>,
+       "budget_unallocated": <session.yaml.virtual_parallel.budget_unallocated>,
+       "synthesis": {
+         "budget_allocated": <session.yaml.virtual_parallel.synthesis.budget_allocated>,
+         "regression_tolerance": <session.yaml.virtual_parallel.synthesis.regression_tolerance>
+       }
+     },
      "transfer": {
        "source_id": "<id or null>",
        "adopted_patterns_kept": <count or null>,
@@ -133,9 +231,59 @@ If either condition is not met, skip recording.
    }
    ```
 
-   **v3.0.0 note**: v3 sessions MUST set `"schema_version": 3` on every new
-   entry written here. v2 sessions (pre-3.0.0) wrote entries without this
-   field; A.2.5 schema compatibility branch treats missing as `2`.
+   **Concrete jq construction** (I3 fix — this is the actual bash that E.0 runs,
+   rc-guarded per aff23c9 contract):
+
+   ```bash
+   # Read virtual_parallel block from session.yaml as JSON via yq, then pass to jq.
+   # Falls back to empty object if virtual_parallel is missing (v3.0 sessions
+   # emitting schema_v3 entries don't have this block — never reaches this branch
+   # because E.0 already routed by version, but defense-in-depth).
+   if ! VP_JSON=$(yq -o json '.virtual_parallel // {}' "$SESSION_ROOT/session.yaml"); then
+     echo "error: E.0 cannot read virtual_parallel from session.yaml" >&2
+     exit 1
+   fi
+
+   # Construct the new entry, substituting schema_version=4 + injecting virtual_parallel.
+   # argv-safe: VP_JSON is interpolated via --argjson (typed), schema_version via --argjson.
+   if ! NEW_ENTRY=$(jq -n -c \
+       --arg id "$ARCHIVE_ID" \
+       --arg ts "$NOW_ISO" \
+       --argjson sv 4 \
+       --argjson project "$PROJECT_JSON" \
+       --argjson strategy "$STRATEGY_EVOLUTION_JSON" \
+       --argjson outcome "$OUTCOME_JSON" \
+       --argjson vp "$VP_JSON" \
+       --argjson transfer "$TRANSFER_JSON" \
+       '{
+          id: $id, schema_version: $sv, timestamp: $ts,
+          project: $project,
+          strategy_evolution: $strategy,
+          outcome: $outcome,
+          virtual_parallel: $vp,
+          transfer: $transfer,
+          usage_count: 0, transfer_success_rate: null
+        }'); then
+     echo "error: E.0 jq construction of v3.1 entry failed" >&2
+     exit 1
+   fi
+
+   # Append to meta-archive under flock (existing pattern from transfer.md).
+   printf '%s\n' "$NEW_ENTRY" >> "$HOME/.claude/deep-evolve/meta-archive.jsonl"
+   ```
+
+   **v3.0.x sessions** continue using their existing E.0 jq construction without
+   the `--argjson vp` arg — they emit `schema_version: 3` and no `virtual_parallel`
+   key. The router in transfer.md selects the correct construction per session
+   version.
+
+   **v3.0.0 / v3.1.0 note**: v3.0.x sessions emit `"schema_version": 3` (no
+   `virtual_parallel` block). v3.1.x sessions emit `"schema_version": 4` AND
+   the `virtual_parallel` snapshot. v2.x sessions wrote entries without
+   `schema_version`; A.2.5's compat branch treats missing as `2`. All three
+   coexist in the same `meta-archive.jsonl` file — A.2.5's case statement
+   routes correctly. Forward versions (5+) MUST be rejected with rc=2 by the
+   reader to prevent silent misinterpretation.
 
 4. **Update source entry** (if transfer was used):
    Within the same flock:
@@ -248,6 +396,9 @@ Manages the global meta-archive at `~/.claude/deep-evolve/meta-archive.jsonl`.
    - `transfer_success_rate == 0` (all transfers from this entry failed)
    - `outcome.total_outer_generations < 2` (insufficient Outer Loop data)
    - **v2 schema + 180+ days old**: `(schema_version < 3 OR schema_version missing) AND timestamp older than 180 days` (v3.0.0 deprecation path)
+   - **v3 schema + 270+ days old**: `schema_version == 3 AND timestamp older than
+     270 days` (v3.1.0 deprecation timeline — 270 days gives v3.0.x users a
+     longer runway than v2's 180-day cliff because v3.0 was a stable release).
 
 5. **Display pruning candidates**:
    ```
