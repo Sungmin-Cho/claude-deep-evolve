@@ -409,6 +409,86 @@ def test_grow_then_schedule_requires_new_seed_id():
     )
 
 
+# ---------- G12 iteration #3 review I2a/I2b fix: chosen_seed_id null/type ----------
+
+def test_chosen_seed_id_rejects_null():
+    """G12 iteration #3 review I2a fix (2026-04-26): chosen_seed_id null
+    must rc=2 (operator error). Pre-fix passed through to coordinator's
+    dispatch_seed(null) — silent downstream failure. Same regression
+    class as G2 REQUIRED_BY_DECISION but for base required field."""
+    decision = {
+        "decision": "schedule",
+        "chosen_seed_id": None,
+        "block_size": 3,
+        "reasoning": "x",
+        "signals_used": [],
+    }
+    out, rc, err = _decide(decision)
+    assert rc == 2, (
+        f"null chosen_seed_id must rc=2 (operator error), got rc={rc} "
+        f"out={out!r} err={err!r}"
+    )
+    assert "chosen_seed_id" in err.lower(), (
+        f"error must mention chosen_seed_id field: {err!r}"
+    )
+
+
+def test_chosen_seed_id_rejects_string():
+    """G12 iteration #3 review I2b fix: chosen_seed_id non-int (string,
+    bool) must rc=2. Pre-fix passed string \"1\" through to coordinator
+    case statement, which would coerce or fail at downstream consumers."""
+    decision = {
+        "decision": "schedule",
+        "chosen_seed_id": "1",  # string, not int
+        "block_size": 3,
+        "reasoning": "x",
+        "signals_used": [],
+    }
+    out, rc, err = _decide(decision)
+    assert rc == 2, f"string chosen_seed_id must rc=2 (got rc={rc}, err={err!r})"
+    assert "chosen_seed_id" in err.lower() or "integer" in err.lower(), (
+        f"error must mention type violation: {err!r}"
+    )
+
+
+def test_chosen_seed_id_rejects_bool():
+    """G12 iteration #3 review I2b fix continuation: bool isinstance(int)
+    is True in Python, so explicit bool check needed (T26 borrows_given
+    lesson preserved for chosen_seed_id base field)."""
+    decision = {
+        "decision": "schedule",
+        "chosen_seed_id": True,  # bool, isinstance(int) is True
+        "block_size": 3,
+        "reasoning": "x",
+        "signals_used": [],
+    }
+    out, rc, err = _decide(decision)
+    assert rc == 2, f"bool chosen_seed_id must rc=2 (got rc={rc}, err={err!r})"
+
+
+def test_required_by_decision_keys_match_allowed_decision():
+    """G12 iteration #3 review info-1 fix: drift detector parallel to
+    ALLOWED_DECISION SOT check. Catches future contributor adding a new
+    decision type to ALLOWED_DECISION without updating REQUIRED_BY_DECISION
+    — would silently fall through `.get(decision, [])` → empty list → no
+    decision-specific schema enforced (regression to pre-G2 state)."""
+    src = (ROOT / "hooks/scripts/scheduler-decide.py").read_text()
+    import re
+    # Extract REQUIRED_BY_DECISION dict from source
+    m = re.search(
+        r'REQUIRED_BY_DECISION\s*=\s*\{([\s\S]*?)\}',
+        src,
+    )
+    assert m, "REQUIRED_BY_DECISION constant not found in scheduler-decide.py"
+    # Parse dict keys via simple regex (avoids eval for safety)
+    keys_in_dict = set(re.findall(r'^\s*"([a-z_]+)"\s*:', m.group(1), re.MULTILINE))
+    assert keys_in_dict == ALLOWED_DECISION, (
+        f"REQUIRED_BY_DECISION keys ({keys_in_dict}) must match "
+        f"ALLOWED_DECISION ({ALLOWED_DECISION}). Add the missing decision "
+        f"type to REQUIRED_BY_DECISION (with [] for no-additional-required-fields)."
+    )
+
+
 # ---------- G12 re-review G1 fix: errexit safety ----------
 
 def test_coordinator_errexit_safe_pattern_documented():

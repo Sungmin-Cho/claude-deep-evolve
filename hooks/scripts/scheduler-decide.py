@@ -96,6 +96,21 @@ def main():
     if d["decision"] not in ALLOWED_DECISION:
         _die(f"invalid decision type: {d['decision']!r} (allowed: {sorted(ALLOWED_DECISION)})")
 
+    # G12 iteration #3 review I2a/I2b fix (2026-04-26): base required-field
+    # null/type validation. Pre-fix `missing = REQUIRED_FIELDS - set(d.keys())`
+    # at line 92 only checked KEY PRESENCE, not value-non-null-int. Decision
+    # with `chosen_seed_id: null` or `chosen_seed_id: "1"` (string) passed
+    # through to coordinator's `dispatch_seed(validated.chosen_seed_id, ...)`
+    # → silent downstream failure. Empirical verification (iteration #3
+    # 2026-04-26-154050): both shapes returned rc=0 + accepted:true.
+    # Same regression class as G2 (per-decision REQUIRED_BY_DECISION) but
+    # for the BASE required field consumed by all 3 decision types.
+    csid = d.get("chosen_seed_id")
+    if csid is None:
+        _die("chosen_seed_id must be non-null integer (got: null/missing)")
+    if not isinstance(csid, int) or isinstance(csid, bool):
+        _die(f"chosen_seed_id must be integer (got: {csid!r})")
+
     # G12 re-review G2 fix (2026-04-26): per-decision required fields.
     # The coordinator case statement consumes these fields directly
     # (apply_kill(validated.kill_target), dispatch_seed(new_seed_id=...)).
