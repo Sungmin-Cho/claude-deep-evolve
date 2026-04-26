@@ -275,3 +275,108 @@ def test_inner_loop_default_arm_descriptive():
     assert re.search(r"echo|warn|treat\s+as|pre[\s-]?v3",
                      body, re.IGNORECASE), \
         "default arm must have descriptive prose"
+
+
+# ---------- T40 (W3 G11 fold-in): per-substep gates in outer-loop.md ----------
+
+def _step_6_5_0_region(content):
+    """Extract the entire Step 6.5.0 region (heading-depth agnostic).
+
+    G12 fold-in W4/W5 fix (Opus 2026-04-26): heading depth and
+    boundary-greediness fixes. The region is from the first
+    `## Step 6.5.0` / `### Step 6.5.0` / `#### Step 6.5.0` heading to
+    the start of the next sibling Step (6.5.1, 6.6, 7, etc.) at the
+    same-or-shallower heading depth — bounded so 6.5.0.3's substep-
+    region cannot bleed into Step 6.6+ and falsely count gates from
+    later sections."""
+    m = re.search(
+        r'^(#{2,4})\s+(?:Step\s+)?6\.5\.0(?:\s|$|[^.\d])',
+        content, re.MULTILINE,
+    )
+    if not m:
+        return ""
+    heading_depth = len(m.group(1))
+    start = m.start()
+    # Find next heading at same depth or shallower (i.e., ≤ depth markers)
+    # OR start of next ## Step or top-level ##
+    after = content[m.end():]
+    # Look for next heading at depth ≤ heading_depth that is NOT a deeper substep
+    next_match = re.search(
+        rf'^#{{1,{heading_depth}}}\s+(?:Step\s+)?(?!6\.5\.0[.\d])',
+        after, re.MULTILINE,
+    )
+    end = m.end() + next_match.start() if next_match else len(content)
+    return content[start:end]
+
+
+def _outer_loop_substep_region(substep):
+    """Extract the markdown region for a Step 6.5.0.X substep, bounded
+    to within Step 6.5.0 (W4 fix prevents bleed into later sections).
+
+    Region is from `### 6.5.0.X` header through the next `### 6.5.0.Y`
+    heading or end of Step 6.5.0 (whichever comes first)."""
+    c = _read("outer-loop.md")
+    step6_5_0 = _step_6_5_0_region(c)
+    if not step6_5_0:
+        return ""
+    pat = rf'(#{{2,4}}\s+(?:Step\s+)?6\.5\.0\.{substep}[\s\S]*?)(?=^#{{2,4}}\s+(?:Step\s+)?6\.5\.0\.\d|\Z)'
+    m = re.search(pat, step6_5_0, re.MULTILINE)
+    return m.group(1) if m else ""
+
+
+def _has_local_v3_1_plus_gate(region):
+    """Region must contain its own `if [ "$VERSION_TIER" = "v3_1_plus" ]; then`
+    (per-substep partial-copy safety per W3 G11 fold-in)."""
+    return bool(re.search(
+        r'if\s+\[\s+"\$VERSION_TIER"\s+=\s+"v3_1_plus"\s+\]\s*;\s*then',
+        region,
+    ))
+
+
+def test_step_6_5_0_1_has_local_gate():
+    """W3 fix: 6.5.0.1 Forum summary generation must gate independently."""
+    r = _outer_loop_substep_region("1")
+    assert r, "Step 6.5.0.1 substep header missing"
+    assert _has_local_v3_1_plus_gate(r), (
+        "Step 6.5.0.1 must contain its own `if [ \"$VERSION_TIER\" = \"v3_1_plus\" ]; then` "
+        "gate (W3 partial-copy safety)"
+    )
+
+
+def test_step_6_5_0_2_has_local_gate():
+    """W3 fix: 6.5.0.2 Convergence detection must gate independently."""
+    r = _outer_loop_substep_region("2")
+    assert r, "Step 6.5.0.2 substep header missing"
+    assert _has_local_v3_1_plus_gate(r)
+
+
+def test_step_6_5_0_3_has_local_gate():
+    """W3 fix: 6.5.0.3 N re-evaluation must gate independently."""
+    r = _outer_loop_substep_region("3")
+    assert r, "Step 6.5.0.3 substep header missing"
+    assert _has_local_v3_1_plus_gate(r)
+
+
+def test_step_6_5_0_no_global_sandwich():
+    """W3 fix: the original sandwich `if [ "$VERSION_TIER" = "v3_1_plus" ]; then`
+    that opens before substeps and `fi  # close ...` that closes after the last
+    substep must be removed. Heuristic: count gates in the Step 6.5.0 region;
+    must be >= 3 (one per substep) post-refactor, vs exactly 1 pre-refactor.
+
+    G12 fold-in W5 fix (Opus 2026-04-26): use heading-depth agnostic
+    region extractor (`_step_6_5_0_region`) instead of pinned `^## Step`
+    pattern that fails if outer-loop.md uses `### Step 6.5.0` (3-hash)."""
+    c = _read("outer-loop.md")
+    region = _step_6_5_0_region(c)
+    assert region, "Step 6.5.0 entry header missing in outer-loop.md"
+    gates = re.findall(
+        r'if\s+\[\s+"\$VERSION_TIER"\s+=\s+"v3_1_plus"\s+\]\s*;\s*then',
+        region,
+    )
+    assert len(gates) >= 3, (
+        f"Step 6.5.0 must contain >= 3 per-substep gates (post-W3 refactor), "
+        f"found {len(gates)}. Pre-W3 sandwich detected — refactor incomplete."
+    )
+    # Also verify the old closing comment is gone
+    assert "close `if [ \"$VERSION_TIER\" = \"v3_1_plus\" ]` opened at Step 6.5.0 entry" not in region, \
+        "Pre-W3 sandwich-closing comment must be removed"

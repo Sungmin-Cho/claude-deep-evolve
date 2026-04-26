@@ -91,10 +91,14 @@ Meta Analysis (Step 6.5.1). It is gated on `$VERSION_TIER` == "v3_1_plus";
 v2 (`pre_v3`) and v3.0.x (`v3_0`) sessions skip to Meta Analysis without
 executing any substeps below.
 
-```bash
-if [ "$VERSION_TIER" = "v3_1_plus" ]; then
-  # Forum summary + convergence detection only meaningful when virtual_parallel exists
-```
+**W3 G11 fold-in (T40)**: each substep below carries its own
+`if [ "$VERSION_TIER" = "v3_1_plus" ]; then ... fi` gate for sub-agent
+partial-copy safety. A subagent dispatched to edit a single substep
+(say, 6.5.0.2) can copy out the substep region with its gate intact —
+the patch lands without dropping the v3_1_plus guard. Bash variables
+persist across `fi`/`if` boundaries within the same coordinator
+process; cross-substep data flow (e.g., `EPOCH_KEEPS` from 6.5.0.1
+read in 6.5.0.2) is preserved without a single global sandwich.
 
 ### 6.5.0.1 Forum summary generation (wires T5)
 
@@ -102,20 +106,22 @@ Emit `$SESSION_ROOT/meta-analyses/gen-<g>/forum-summary.md` capturing this
 epoch's cross-seed activity:
 
 ```bash
-HELPER_SCRIPTS_DIR="$(dirname "$DEEP_EVOLVE_HELPER_PATH")"
-CURRENT_GEN=$(python3 -c "import yaml; \
-  d=yaml.safe_load(open('$SESSION_ROOT/session.yaml')); \
-  print(d['evaluation_epoch']['current'])")
-OUT_DIR="$SESSION_ROOT/meta-analyses/gen-$CURRENT_GEN"
-mkdir -p "$OUT_DIR"
-if ! python3 "$HELPER_SCRIPTS_DIR/generate-forum-summary.py" \
-  --forum "$SESSION_ROOT/forum.jsonl" \
-  --gen "$CURRENT_GEN" \
-  --out "$OUT_DIR/forum-summary.md"; then
-  rc=$?
-  echo "error: generate-forum-summary.py failed (rc=$rc) in epoch $CURRENT_GEN — forum-summary.md NOT written" >&2
-  # Non-fatal: Step 6.5.0.2 and downstream can still proceed. Missing
-  # summary is a user-visible degradation, not a coordinator abort.
+if [ "$VERSION_TIER" = "v3_1_plus" ]; then
+  HELPER_SCRIPTS_DIR="$(dirname "$DEEP_EVOLVE_HELPER_PATH")"
+  CURRENT_GEN=$(python3 -c "import yaml; \
+    d=yaml.safe_load(open('$SESSION_ROOT/session.yaml')); \
+    print(d['evaluation_epoch']['current'])")
+  OUT_DIR="$SESSION_ROOT/meta-analyses/gen-$CURRENT_GEN"
+  mkdir -p "$OUT_DIR"
+  if ! python3 "$HELPER_SCRIPTS_DIR/generate-forum-summary.py" \
+    --forum "$SESSION_ROOT/forum.jsonl" \
+    --gen "$CURRENT_GEN" \
+    --out "$OUT_DIR/forum-summary.md"; then
+    rc=$?
+    echo "error: generate-forum-summary.py failed (rc=$rc) in epoch $CURRENT_GEN — forum-summary.md NOT written" >&2
+    # Non-fatal: Step 6.5.0.2 and downstream can still proceed. Missing
+    # summary is a user-visible degradation, not a coordinator abort.
+  fi
 fi
 ```
 
@@ -133,9 +139,11 @@ events, extract `inspired_by` trailers from the kept commits, then invoke
 1. **Collect this epoch's keeps** (depends on G6.5 `8752ee4` foundation
    patch that added `epoch` field to the seed_keep forum schema):
    ```bash
-   EPOCH_KEEPS=$(jq -s --argjson gen "$CURRENT_GEN" \
-     '[.[] | select(.event=="seed_keep" and (.epoch // null) == $gen)]' \
-     "$SESSION_ROOT/forum.jsonl" 2>/dev/null || echo '[]')
+   if [ "$VERSION_TIER" = "v3_1_plus" ]; then
+     EPOCH_KEEPS=$(jq -s --argjson gen "$CURRENT_GEN" \
+       '[.[] | select(.event=="seed_keep" and (.epoch // null) == $gen)]' \
+       "$SESSION_ROOT/forum.jsonl" 2>/dev/null || echo '[]')
+   fi
    ```
    If `EPOCH_KEEPS` has fewer than 2 entries from distinct seeds, skip
    to 6.5.0.3 (no convergence possible this epoch).
@@ -143,7 +151,8 @@ events, extract `inspired_by` trailers from the kept commits, then invoke
    **T19 expects `experiments_used_before_keep`** per keep for P3 gating.
    Compute it from journal (count prior kept events per seed):
    ```bash
-   EPOCH_KEEPS=$(printf '%s' "$EPOCH_KEEPS" | python3 -c '
+   if [ "$VERSION_TIER" = "v3_1_plus" ]; then
+     EPOCH_KEEPS=$(printf '%s' "$EPOCH_KEEPS" | python3 -c '
    import json, sys
    keeps = json.load(sys.stdin)
    import pathlib
@@ -169,6 +178,7 @@ events, extract `inspired_by` trailers from the kept commits, then invoke
        )
    json.dump(keeps, sys.stdout)
    ')
+   fi
    ```
 
 2. **Compute pair-wise similarity via AI**: for each unordered pair
@@ -189,7 +199,9 @@ events, extract `inspired_by` trailers from the kept commits, then invoke
    JSON array (bind this exact name — step 5 below consumes it). If there
    are zero eligible pairs, bind `SIMILARITIES_JSON='[]'` and skip to step 5:
    ```bash
-   SIMILARITIES_JSON='[{"commit_a":"<sha_a>","commit_b":"<sha_b>","score":<float>}, ...]'
+   if [ "$VERSION_TIER" = "v3_1_plus" ]; then
+     SIMILARITIES_JSON='[{"commit_a":"<sha_a>","commit_b":"<sha_b>","score":<float>}, ...]'
+   fi
    ```
 
 3. **Extract `inspired_by` trailers**: for each keep commit, run
@@ -197,43 +209,49 @@ events, extract `inspired_by` trailers from the kept commits, then invoke
    parent-walk locates the project repo; the session root is always
    `<project>/.deep-evolve/<sid>/`):
    ```bash
-   INSPIRED_BY_MAP='{}'
-   for commit in $(printf '%s' "$EPOCH_KEEPS" | jq -r '.[].commit'); do
-     trailer=$(git -C "$SESSION_ROOT" log -1 --format=%B "$commit" 2>/dev/null \
-               | awk 'BEGIN{IGNORECASE=1} /^inspired[_-]by:/ {print $2; exit}')
-     INSPIRED_BY_MAP=$(printf '%s' "$INSPIRED_BY_MAP" | \
-       jq --arg c "$commit" --arg p "$trailer" \
-       '. + { ($c): ($p | select(. != "") // null) }')
-   done
+   if [ "$VERSION_TIER" = "v3_1_plus" ]; then
+     INSPIRED_BY_MAP='{}'
+     for commit in $(printf '%s' "$EPOCH_KEEPS" | jq -r '.[].commit'); do
+       trailer=$(git -C "$SESSION_ROOT" log -1 --format=%B "$commit" 2>/dev/null \
+                 | awk 'BEGIN{IGNORECASE=1} /^inspired[_-]by:/ {print $2; exit}')
+       INSPIRED_BY_MAP=$(printf '%s' "$INSPIRED_BY_MAP" | \
+         jq --arg c "$commit" --arg p "$trailer" \
+         '. + { ($c): ($p | select(. != "") // null) }')
+     done
+   fi
    ```
 
 4. **Collect this epoch's cross_seed_borrow events** (fallback ancestry path):
    ```bash
-   CROSS_SEED_BORROWS=$(jq -s --argjson gen "$CURRENT_GEN" \
-     '[.[] | select(.event=="cross_seed_borrow" and (.epoch // null) == $gen)]' \
-     "$SESSION_ROOT/forum.jsonl" 2>/dev/null || echo '[]')
+   if [ "$VERSION_TIER" = "v3_1_plus" ]; then
+     CROSS_SEED_BORROWS=$(jq -s --argjson gen "$CURRENT_GEN" \
+       '[.[] | select(.event=="cross_seed_borrow" and (.epoch // null) == $gen)]' \
+       "$SESSION_ROOT/forum.jsonl" 2>/dev/null || echo '[]')
+   fi
    ```
 
 5. **Invoke the classifier**:
    ```bash
-   if ! CLASSIFY=$(python3 "$HELPER_SCRIPTS_DIR/convergence-detect.py" \
-       --args "$(jq -nc \
-         --argjson keeps "$EPOCH_KEEPS" \
-         --argjson sims "$SIMILARITIES_JSON" \
-         --argjson ibm "$INSPIRED_BY_MAP" \
-         --argjson csb "$CROSS_SEED_BORROWS" \
-         --argjson epoch "$CURRENT_GEN" \
-         '{keeps:$keeps, similarities:$sims, inspired_by_map:$ibm,
-           cross_seed_borrow_events:$csb, threshold:0.85, p3_floor:3,
-           epoch:$epoch}')"); then
-     rc=$?
-     echo "error: convergence-detect.py failed (rc=$rc) in epoch $CURRENT_GEN — skipping 6.5.0.2 this epoch" >&2
-     # rc=2 operator/schema error or rc=1 business failure: do NOT emit
-     # any convergence_event this epoch. Coordinator proceeds to 6.5.0.3
-     # (N re-eval) with empty convergence signal. This preserves progress
-     # without masking the fact that classification failed — the stderr
-     # line is load-bearing for operator debugging.
-     CLASSIFY='{"convergence_events": []}'
+   if [ "$VERSION_TIER" = "v3_1_plus" ]; then
+     if ! CLASSIFY=$(python3 "$HELPER_SCRIPTS_DIR/convergence-detect.py" \
+         --args "$(jq -nc \
+           --argjson keeps "$EPOCH_KEEPS" \
+           --argjson sims "$SIMILARITIES_JSON" \
+           --argjson ibm "$INSPIRED_BY_MAP" \
+           --argjson csb "$CROSS_SEED_BORROWS" \
+           --argjson epoch "$CURRENT_GEN" \
+           '{keeps:$keeps, similarities:$sims, inspired_by_map:$ibm,
+             cross_seed_borrow_events:$csb, threshold:0.85, p3_floor:3,
+             epoch:$epoch}')"); then
+       rc=$?
+       echo "error: convergence-detect.py failed (rc=$rc) in epoch $CURRENT_GEN — skipping 6.5.0.2 this epoch" >&2
+       # rc=2 operator/schema error or rc=1 business failure: do NOT emit
+       # any convergence_event this epoch. Coordinator proceeds to 6.5.0.3
+       # (N re-eval) with empty convergence signal. This preserves progress
+       # without masking the fact that classification failed — the stderr
+       # line is load-bearing for operator debugging.
+       CLASSIFY='{"convergence_events": []}'
+     fi
    fi
    ```
 
@@ -245,10 +263,12 @@ events, extract `inspired_by` trailers from the kept commits, then invoke
    `convergence_event` payload (plural `seed_ids: [...]` array schema +
    a spurious scalar `seed_id` field):
    ```bash
-   printf '%s' "$CLASSIFY" | jq -c '.convergence_events[]' | while read -r ev; do
-     (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" append_journal_event "$ev")
-     (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" append_forum_event "$ev")
-   done
+   if [ "$VERSION_TIER" = "v3_1_plus" ]; then
+     printf '%s' "$CLASSIFY" | jq -c '.convergence_events[]' | while read -r ev; do
+       (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" append_journal_event "$ev")
+       (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" append_forum_event "$ev")
+     done
+   fi
    ```
 
    The events are also automatically surfaced inside `forum-summary.md`:
@@ -284,10 +304,12 @@ Return JSON: {"decision": "keep|grow|shrink", "new_n": <int>, "reasoning": "..."
 If decision is `keep`, continue to Step 6.5.1. Otherwise append (wrap in
 `(unset SEED_ID; ...)` — same coordinator-context reasoning as 6.5.0.2 step 6):
 ```bash
-(unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" append_journal_event '{
-  "event":"n_adjusted","from_n":<old>,"to_n":<new>,
-  "reason":"<AI reasoning>","new_seed_ids":[...]
-}')
+if [ "$VERSION_TIER" = "v3_1_plus" ]; then
+  (unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" append_journal_event '{
+    "event":"n_adjusted","from_n":<old>,"to_n":<new>,
+    "reason":"<AI reasoning>","new_seed_ids":[...]
+  }')
+fi
 ```
 then execute the seed creation (grow — invoke `session-helper.sh
 create_seed_worktree` plus β generator from T7) or kill (shrink — emit
@@ -310,10 +332,6 @@ After 6.5.0.1, 6.5.0.2, and 6.5.0.3 complete, proceed to Step 6.5.1. Note
 that 6.5.1–6.5.6 continue to operate on the SESSION's Q metric (not per-seed),
 so the existing Outer Loop logic still applies; G6/G7 additions only WIDEN
 the signal set, they do not replace it.
-
-```bash
-fi  # close `if [ "$VERSION_TIER" = "v3_1_plus" ]` opened at Step 6.5.0 entry
-```
 
 **v2 (`pre_v3`) and v3.0.x (`v3_0`) sessions: skip Step 6.5.0 entirely.** The
 version gate at the top of this protocol (`$VERSION_TIER` classification) routes
