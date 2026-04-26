@@ -196,15 +196,32 @@ Run `session-helper.sh resolve_current` to get the active session.
 ## Protocol Routing Summary
 
 ```
-Init           → protocols/init.md
-Inner Loop     → protocols/inner-loop.md  (includes Resume + Section D: Prepare Expansion)
-Outer Loop     → protocols/outer-loop.md  (매 outer_loop_interval 회)
-Archive        → protocols/archive.md     (분기/복원 필요 시)
-Transfer       → protocols/transfer.md    (A.2.5 lookup + E.0 recording + Section F prune)
-Completion     → protocols/completion.md  (세션 완료)
-Resume         → protocols/resume.md      (중단된 세션 재개)
-History        → protocols/history.md     (세션 목록/lineage/통계)
+Init           → protocols/init.md          (Step 12 dispatches by VERSION_TIER ↓)
+Coordinator    → protocols/coordinator.md   (v3_1_plus only — multi-seed dispatch
+                                             via prose-contract subagent + scheduler-decide
+                                             + cross-seed forum + synthesis cascade)
+Inner Loop     → protocols/inner-loop.md    (v3_0 / pre_v3 — single-seed AAR Inner Loop;
+                                             also entered as per-seed subagent under coordinator.
+                                             Includes Resume + Section D: Prepare Expansion)
+Outer Loop     → protocols/outer-loop.md    (매 outer_loop_interval 회;
+                                             v3_1_plus paused-session resume re-enters
+                                             coordinator on next epoch boundary)
+Archive        → protocols/archive.md       (분기/복원 필요 시)
+Transfer       → protocols/transfer.md      (A.2.5 lookup + E.0 recording + Section F prune)
+Synthesis      → protocols/synthesis.md     (v3_1_plus session-end — cascade fallback baseline)
+Completion     → protocols/completion.md    (세션 완료)
+Resume         → protocols/resume.md        (중단된 세션 재개; Step 5 dispatches by
+                                             status ⨯ VERSION_TIER)
+History        → protocols/history.md       (세션 목록/lineage/통계)
 ```
+
+VERSION_TIER computation (4-arm uniform across init.md / resume.md / inner-loop.md /
+outer-loop.md / synthesis.md / coordinator.md):
+
+- `2.*` → `pre_v3` → inner-loop.md (legacy single-seed)
+- `3.0|3.0.*` → `v3_0` → inner-loop.md (v3.0 AAR single-seed)
+- `3.*|4.*` → `v3_1_plus` → coordinator.md (v3.1+ multi-seed)
+- otherwise → warn + `pre_v3` (defense-in-depth)
 
 ## 상태 관리
 

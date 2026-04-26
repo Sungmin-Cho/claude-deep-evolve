@@ -1155,6 +1155,40 @@ fi
     `session-helper.sh mark_session_status "$SESSION_ID" active`
 
     From this point forward, `protect-readonly.sh` enforces prepare.py/program.md/
-    strategy.yaml protection. The inner loop can proceed.
+    strategy.yaml protection. The execution loop can proceed.
 
-→ Proceed to Inner Loop: Read `protocols/inner-loop.md`
+## Step 12 — Route to execution loop (VERSION_TIER dispatch)
+
+Compute `VERSION_TIER` from `session.yaml.deep_evolve_version` using the 4-arm
+case statement uniform with `inner-loop.md` / `outer-loop.md` / `synthesis.md` /
+`coordinator.md` (single source-of-truth across all 4 v3.1 protocol files):
+
+```bash
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | sed 's/.*"\(.*\)".*/\1/')
+case "$VERSION" in
+  2.*)            VERSION_TIER="pre_v3" ;;
+  3.0|3.0.*)      VERSION_TIER="v3_0" ;;
+  3.*|4.*)        VERSION_TIER="v3_1_plus" ;;
+  *)
+    echo "warn: unrecognized VERSION='${VERSION:-<unset>}' — treating as pre_v3" >&2
+    VERSION_TIER="pre_v3"
+    ;;
+esac
+export VERSION_TIER
+```
+
+Routing:
+
+- **`VERSION_TIER == v3_1_plus`** → **Read `protocols/coordinator.md`** (multi-seed
+  coordination: prose-contract subagent dispatch over N seed worktrees +
+  `scheduler-decide.py` + cross-seed forum + session-end synthesis cascade).
+  Coordinator's own version gate re-validates the tier as defense-in-depth.
+
+- **`VERSION_TIER == v3_0`** → **Read `protocols/inner-loop.md`** (single-seed AAR
+  Inner Loop; v3.0.x behavior preserved unchanged — entropy tracking + legibility
+  gate + shortcut detector + diagnose-retry, but no virtual-parallel coordinator).
+
+- **`VERSION_TIER == pre_v3`** → **Read `protocols/inner-loop.md`** (single-seed
+  legacy v2.x behavior; v2-warning banner already shown via `resume.md` for
+  resume path; init path here is fresh v2 sessions, which are no longer the
+  default but are accepted as legacy).

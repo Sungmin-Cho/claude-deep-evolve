@@ -562,14 +562,47 @@ Q(v) 추이: <q_history values>
 다음: 실험 <n+1> 준비
 ```
 
-## Step 5 — Re-enter experiment loop
+## Step 5 — Re-enter experiment loop (VERSION_TIER dispatch)
+
+Compute `VERSION_TIER` from `session.yaml.deep_evolve_version` (4-arm pattern
+uniform with `init.md` Step 12 / `inner-loop.md` / `outer-loop.md` /
+`synthesis.md` / `coordinator.md` — single source-of-truth):
+
+```bash
+VERSION=$(grep '^deep_evolve_version:' "$SESSION_ROOT/session.yaml" | sed 's/.*"\(.*\)".*/\1/')
+case "$VERSION" in
+  2.*)            VERSION_TIER="pre_v3" ;;
+  3.0|3.0.*)      VERSION_TIER="v3_0" ;;
+  3.*|4.*)        VERSION_TIER="v3_1_plus" ;;
+  *)
+    echo "warn: unrecognized VERSION='${VERSION:-<unset>}' — treating as pre_v3" >&2
+    VERSION_TIER="pre_v3"
+    ;;
+esac
+export VERSION_TIER
+```
+
+Then route based on `session.yaml.status` ⨯ `VERSION_TIER`:
 
 If `session.yaml.status == paused`:
   → A crash occurred during an Outer Loop run (see `inner-loop.md` Step 6.5, which wraps
     Outer Loop in `mark_session_status paused/active`). Read `protocols/outer-loop.md`
     and execute from the beginning. Outer Loop's **Resume safety** section inspects
     `journal.jsonl` for each sub-step's completion event and skips already-completed
-    phases, so restart is idempotent — no additional work required here.
+    phases, so restart is idempotent — no additional work required here. (Outer Loop
+    branches internally on `VERSION_TIER`; v3.1+ paused sessions still resume their
+    coordinator state via outer-loop.md → coordinator.md re-entry on next epoch
+    boundary.)
 
 If `session.yaml.status == active`:
-  → Read `protocols/inner-loop.md`, enter Section C with restored `inner_count`.
+
+- **`VERSION_TIER == v3_1_plus`** → **Read `protocols/coordinator.md`** (resume the
+  multi-seed coordinator. Coordinator's main loop is journal-event idempotent;
+  `scheduler-signals.py` synthesizes `in_flight_block` from journal so resume
+  detects partially-dispatched seeds and skips already-completed blocks. Step 3.5
+  reconciliation above has already validated yaml/journal seed-set drift via
+  prefer-journal SOT.)
+
+- **`VERSION_TIER ∈ {v3_0, pre_v3}`** → **Read `protocols/inner-loop.md`**, enter
+  Section C with restored `inner_count`. Single-seed code path preserved unchanged
+  for v3.0.x and v2.x sessions.
