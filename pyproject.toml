@@ -1,5 +1,5 @@
 [tool.pytest.ini_options]
-# v3.0.0 — exclude fixture directories from test collection.
+# v3.1.0 — exclude fixture directories from test collection.
 # Fixtures under hooks/scripts/tests/fixtures/ ship intentionally-broken code
 # (target.py with bugs the agent is supposed to fix) and their test_*.py files
 # are executed only by deep-evolve sessions targeting the fixture, NEVER by the
