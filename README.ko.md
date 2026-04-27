@@ -18,6 +18,43 @@ deep-evolve는 표준 [Harness Engineering](https://martinfowler.com/articles/ha
 
 v2.0의 Outer Loop로 deep-evolve는 한 단계 더 나아갑니다: 대상 코드뿐 아니라 실험을 이끄는 **전략** 자체를 진화시키고, 수렴이 감지되면 **평가 harness** 자체를 확장할 수도 있습니다. 이 3계층 자기 진화(파라미터 → 전략 텍스트 → 평가 확장)는 시스템을 자체 개선 프로세스를 개선하는 진정한 메타 옵티마이저로 만듭니다.
 
+## 3.1.1 신규 기능
+
+v3.1.0 런타임 가드를 강화한 패치 릴리스. 프로토콜·세션 스키마 변경 없음
+— `session.yaml.deep_evolve_version`은 `"3.1.0"` 그대로이고 기존 세션은
+변경 없이 resume. 주요 변경:
+
+- **강화된 `seal_prepare_read` 가드** — `protect-readonly.sh`가 Bash 측
+  `prepare.py` / `prepare-protocol.md` read (`cat`, `less`, `tee -a`,
+  `perl -i` 등)도 deny-by-default 매칭으로 차단. `python prepare.py`
+  실행만 예외 허용. Per-seed `program.md`
+  (`worktrees/seed_*/program.md`)도 세션 루트 `program.md`와 동일한
+  META_MODE 게이트 적용.
+- **견고해진 scheduler signals** — `scheduler-signals.py`가 이전 헬퍼의
+  legacy `status`-key journal 이벤트를 인식, inline `q`가 없는 `kept`
+  이벤트는 `evaluated`-event score lookup으로 fallback, boolean의
+  numeric 강제 변환 차단, fairness reset 후 kill/grow 결정용
+  `experiments_used_this_epoch` per-seed 신호 추가.
+- **타이트해진 baseline + status 집계** — `baseline-select.py`의
+  § 8.2 5.b non-quarantine 필터가 `status == "killed_shortcut_quarantine"`
+  도 거부. `status-dashboard.py`는 terminal `kept`/`discarded` 이벤트만
+  `(seed_id, experiment_id)`로 dedup하여 카운팅 — `evaluated`와 후속
+  terminal 이벤트가 공존할 때의 중복 카운팅 제거.
+- **견고해진 kill 이벤트 필드** — `session-helper.sh`가 `seed_killed`
+  이벤트를 null / 비-string `condition` 허용으로 파싱, `killed_reason`
+  (raw condition)과 `killed_reasoning`(자유 텍스트) 분리, 옵션
+  `final_q` / `experiments_used` 보존.
+- **Partial-parse 안전성** — `templates/prepare-stdout-parse.py`가
+  stdout에 선언된 메트릭이 누락되면 score를 `0.0`으로 collapse — 이전엔
+  `score <= 0` ceiling 분기에서 `2.0` (무한 개선)을 부여하던 partial-parse
+  실패를 수정.
+- **매니페스트 drift 테스트** — 신규 `test_package_manifest.py`가
+  `package.json` / `plugin.json` / `SKILL.md` / `HELPER_VERSION`
+  동기화 단언; 신규 `test_v31_protect_readonly.py` (119줄)가 강화된
+  가드를 광범위하게 커버.
+
+전체 목록은 [CHANGELOG.ko.md](./CHANGELOG.ko.md) 참고.
+
 ## 3.1.0 신규 기능
 
 Virtual parallel N-seed 탐색. 각 세션이 N=1..9개의 독립 seed worktree에서

@@ -18,6 +18,45 @@ deep-evolve operates **outside** the standard [Harness Engineering](https://mart
 
 With v2.0's Outer Loop, deep-evolve goes further: it not only improves the target code but also evolves the **strategy** that drives experiments — and can even expand the **evaluation harness** itself when convergence is detected. This 3-layer self-evolution (parameters → strategy text → evaluation expansion) makes the system a true meta-optimizer that improves its own improvement process.
 
+## What's New in 3.1.1
+
+Patch release hardening v3.1.0 runtime guards. No protocol or session
+schema changes — `session.yaml.deep_evolve_version` stays `"3.1.0"` and
+existing sessions resume unchanged. Highlights:
+
+- **Hardened `seal_prepare_read` guard** — `protect-readonly.sh` now
+  blocks Bash-side reads of `prepare.py` / `prepare-protocol.md`
+  (`cat`, `less`, `tee -a`, `perl -i`, etc.) with deny-by-default
+  matching, while keeping `python prepare.py` execution allowed.
+  Per-seed `program.md` (`worktrees/seed_*/program.md`) now shares the
+  session-root `program.md` META_MODE gate.
+- **Resilient scheduler signals** — `scheduler-signals.py` accepts
+  legacy `status`-keyed journal events from older helpers, falls back
+  to `evaluated`-event score lookup when `kept` rows lack inline `q`,
+  rejects boolean-as-numeric coercion, and exposes a new
+  `experiments_used_this_epoch` per-seed signal for kill/grow decisions
+  after fairness resets.
+- **Tighter baseline + status accounting** — `baseline-select.py`'s
+  § 8.2 5.b non-quarantine filter now also rejects
+  `status == "killed_shortcut_quarantine"`. `status-dashboard.py`
+  counts only terminal `kept`/`discarded` events deduped by
+  `(seed_id, experiment_id)`, eliminating double-counts when
+  `evaluated` and a follow-up terminal event coexist.
+- **Robust kill-event fields** — `session-helper.sh` parses
+  `seed_killed` events with null/non-string `condition` tolerance,
+  splits `killed_reason` (raw condition) from `killed_reasoning` (free
+  text), and preserves optional `final_q` / `experiments_used`.
+- **Partial-parse safety** — `templates/prepare-stdout-parse.py` now
+  collapses score to `0.0` when stdout omits declared metrics, instead
+  of awarding the `2.0` ceiling that previously masked partial-parse
+  failures as infinite improvements.
+- **Manifest drift tests** — new `test_package_manifest.py` asserts
+  `package.json` / `plugin.json` / `SKILL.md` / `HELPER_VERSION` stay
+  in sync; new `test_v31_protect_readonly.py` (119 lines) covers the
+  hardened guard exhaustively.
+
+See [CHANGELOG.md](./CHANGELOG.md) for the full list.
+
 ## What's New in 3.1.0
 
 Virtual parallel N-seed exploration. Each session runs N=1..9 independent

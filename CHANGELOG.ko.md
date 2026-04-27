@@ -1,5 +1,97 @@
 # 변경 이력
 
+## [3.1.1] — 2026-04-26 (런타임 가드 강화)
+
+v3.1.0 런타임 가드를 강화하는 패치 릴리스. 프로토콜·세션 스키마 변경 없음;
+`session.yaml.deep_evolve_version`은 `"3.1.0"` 그대로 유지하며 모든 v3.1.0
+세션은 v3.1.1에서 그대로 resume 가능 (forward-compatible). 패키지·헬퍼
+버전만 상승 (`HELPER_VERSION` 3.1.0 → 3.1.1; `package.json` /
+`plugin.json` / `SKILL.md` 3.1.0 → 3.1.1).
+
+### 수정
+- **`protect-readonly.sh` — Bash 측 seal_prepare_read 커버리지**
+  (hooks/scripts/protect-readonly.sh): `seal_prepare_read=1` 세션에서
+  Read 도구로 `prepare.py` / `prepare-protocol.md` 접근은 차단됐으나
+  Bash 우회(`cat prepare.py`, `less prepare.py` 등)는 허용되던 문제 해결.
+  새 헬퍼 `command_references` / `is_direct_prepare_execution`로 Bash
+  참조도 동일 가드 경유. `python prepare.py` 직접 실행만 예외 허용.
+- **`protect-readonly.sh` — 보호 파일 매칭**
+  (hooks/scripts/protect-readonly.sh): write 감지용 정규식 화이트리스트를
+  deny-by-default 매칭으로 교체 — 보호 파일에 대한 Bash 참조는 직접 실행
+  예외가 아니면 모두 차단. 기존 정규식이 잡지 못한 엣지 케이스
+  (`tee -a`, `perl -i`, 보호 경로로의 셸 치환) 해결.
+- **`protect-readonly.sh` — per-seed `program.md` 보호**
+  (hooks/scripts/protect-readonly.sh): worktree 경로
+  `$SESSION_ROOT/worktrees/seed_*/program.md`도 세션 루트의 `program.md`와
+  동일한 `program_update` / `outer_loop` META_MODE 게이트 적용. Inner-loop
+  서브에이전트가 meta-mode 밖에서 per-seed `program.md`를 쓸 수 있던
+  virtual-parallel 구멍 차단.
+- **`scheduler-signals.py` — legacy `status` 키 허용**
+  (hooks/scripts/scheduler-signals.py): 이전 헬퍼가 발행한 journal 이벤트는
+  `event` 대신 `status`를 사용했음. 새 `event_type()` canonicalizer로
+  두 키 모두 인식 — resume 시 pre-3.1 이벤트가 조용히 누락되던 문제 해결.
+- **`scheduler-signals.py` — score lookup fallback**
+  (hooks/scripts/scheduler-signals.py): inline `q`/`score` 필드가 없는
+  `kept` 이벤트는 `(seed_id, id)` 키로 `evaluated` 이벤트에서 lookup.
+  새 `numeric_q()`가 `isinstance(x, (int, float)) and not isinstance(x, bool)`
+  강제하여 boolean의 numeric 강제 변환 차단.
+- **`scheduler-signals.py` — `experiments_used_this_epoch` 신호**
+  (hooks/scripts/scheduler-signals.py): per-seed 신호 추가 — 누적 experiment
+  카운트와 현재 epoch 카운트를 분리. Fairness reset 이후 kill/grow
+  의사결정에 필요.
+- **`baseline-select.py` — killed-shortcut-quarantine 인식**
+  (hooks/scripts/baseline-select.py): § 8.2 5.b non-quarantine 필터가
+  `status == "killed_shortcut_quarantine"`도 거부하도록 확장 (기존
+  `killed_reason == "shortcut_quarantine"` 검사 유지). status만 기록된
+  세션에서 격리된 seed가 baseline에 누출되던 구멍 차단.
+- **`status-dashboard.py` — terminal experiment dedup**
+  (hooks/scripts/status-dashboard.py): per-seed experiment 카운터가
+  `kept`/`discarded` 이벤트만 집계 (`evaluated` 제외)하고
+  `(seed_id, experiment_id)` 키로 dedup — journal에 동일 experiment의
+  `evaluated`와 후속 `kept`/`discarded`가 모두 기록되어 발생하던
+  중복 카운팅 차단.
+- **`session-helper.sh` — kill 이벤트 필드 견고성**
+  (hooks/scripts/session-helper.sh): `seed_killed` 파싱이 null 또는
+  비-string `condition` 허용, `killed_reason`(raw condition,
+  `killed_` 접두 제거)과 `killed_reasoning`(자유 텍스트 사유)을 분리,
+  이벤트의 옵션 `final_q` / `experiments_used` 보존.
+- **`templates/prepare-stdout-parse.py` — missing-metric scoring**
+  (templates/prepare-stdout-parse.py): stdout에서 `METRICS` 선언보다 적은
+  메트릭이 파싱되면 score를 `0.0`으로 collapse — 이전엔 `score <= 0`
+  ceiling 분기에 들어가 `2.0`(무한 개선)으로 잘못 분류되던 partial-parse
+  실패를 수정.
+
+### 추가
+- **`hooks/scripts/tests/test_v31_protect_readonly.py`** (119줄):
+  강화된 가드의 광범위한 커버리지 — Bash 우회 시도, 직접 실행 허용,
+  per-seed `program.md` 보호, META_MODE 상호작용.
+- **`hooks/scripts/tests/test_v31_scheduler_fairness.py`** (57줄):
+  scheduler-signals fairness 동작 (`experiments_used_this_epoch` 의미).
+- **`hooks/scripts/tests/test_v31_scheduler_signals.py`** (43줄):
+  legacy `status` 키 허용, `numeric_q` fallback, `evaluated` 이벤트
+  대상 score lookup.
+- **`hooks/scripts/tests/test_package_manifest.py`** (18줄):
+  `package.json` / `plugin.json` / `SKILL.md` / `HELPER_VERSION` 동기화
+  단언 — 이번 릴리스가 패치하는 종류의 버전 drift 방지.
+- **`hooks/scripts/tests/test_prepare_stdout_parse_template.py`**
+  (61줄): partial-parse → `score = 0.0` 불변식 + 기존 scoring 경로 검증.
+- **`hooks/scripts/tests/test_v31_baseline_select.py`** (14줄):
+  `killed_shortcut_quarantine` status 경로 커버리지.
+- **`hooks/scripts/tests/test_v31_status_subcommand.py`** (+38줄):
+  per-seed terminal-experiment dedup 검증.
+
+### 변경
+- `session-helper.sh` `HELPER_VERSION` 3.1.0 → 3.1.1.
+- `package.json` / `.claude-plugin/plugin.json` /
+  `skills/deep-evolve-workflow/SKILL.md` version 3.1.0 → 3.1.1.
+- `session-helper.sh` C-2 / C-3-A / C-3-B "Known limitations" 주석이
+  이제 "future release"를 가리킴 (v3.1.1 자기 자신을 지칭하지 않도록;
+  해당 구조적 수정은 backlog 유지).
+
+### 마이그레이션
+없음. v3.1.0 세션은 v3.1.1에서 변경 없이 resume. 새 가드는 다음
+protect-readonly hook 발화 시 in-flight 세션에 자동 적용.
+
 ## [3.1.0] — 2026-04-26 (Virtual Parallel N-seed)
 
 v3.0 AAR 기반 Inner/Outer Loop에 parallel N-seed 탐색을 추가하는 major

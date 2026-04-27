@@ -1,5 +1,106 @@
 # Changelog
 
+## [3.1.1] — 2026-04-26 (Runtime Hardening)
+
+Patch release hardening v3.1.0 runtime guards. No protocol or session
+schema changes; `session.yaml.deep_evolve_version` remains `"3.1.0"` and
+all v3.1.0 sessions resume cleanly under v3.1.1 (forward-compatible).
+This release bumps only the package and helper version
+(`HELPER_VERSION` 3.1.0 → 3.1.1; `package.json` / `plugin.json` /
+`SKILL.md` 3.1.0 → 3.1.1).
+
+### Fixed
+- **`protect-readonly.sh` — Bash-side seal_prepare_read coverage**
+  (hooks/scripts/protect-readonly.sh): `seal_prepare_read=1` sessions
+  previously blocked Read-tool access to `prepare.py` /
+  `prepare-protocol.md` but allowed Bash bypasses
+  (`cat prepare.py`, `less prepare.py`, etc.). Bash references now route
+  through the same guard via new `command_references` /
+  `is_direct_prepare_execution` helpers. Direct execution
+  (`python prepare.py`) remains the single allowed exception.
+- **`protect-readonly.sh` — protected-file matching**
+  (hooks/scripts/protect-readonly.sh): replaced the fragile
+  write-detection regex with a deny-by-default match — every Bash
+  reference to a protected file blocks unless the direct-execution
+  exception applies. Fixes edge cases (`tee -a`, `perl -i`, shell
+  substitutions into protected paths) the old regex did not catch.
+- **`protect-readonly.sh` — per-seed `program.md` protection**
+  (hooks/scripts/protect-readonly.sh): worktree paths
+  `$SESSION_ROOT/worktrees/seed_*/program.md` now share the same
+  `program_update` / `outer_loop` META_MODE gate as the session-root
+  `program.md`. Closes a virtual-parallel hole where inner-loop
+  subagents could write per-seed `program.md` outside meta-mode.
+- **`scheduler-signals.py` — legacy `status`-key tolerance**
+  (hooks/scripts/scheduler-signals.py): journal events authored by
+  older helpers used `status` rather than `event`; signals now read
+  both via a new `event_type()` canonicalizer, preventing the scheduler
+  from silently dropping pre-3.1 events on resume.
+- **`scheduler-signals.py` — score lookup fallback**
+  (hooks/scripts/scheduler-signals.py): `kept` events without an inline
+  `q`/`score` field now fall back to a `(seed_id, id)` lookup against
+  `evaluated` events. New `numeric_q()` enforces
+  `isinstance(x, (int, float)) and not isinstance(x, bool)` to prevent
+  boolean-as-numeric coercion.
+- **`scheduler-signals.py` — `experiments_used_this_epoch` signal**
+  (hooks/scripts/scheduler-signals.py): per-seed signal added so the
+  scheduler can distinguish lifetime experiments from current-epoch
+  experiments — relevant for kill/grow decisions after a fairness reset.
+- **`baseline-select.py` — killed-shortcut-quarantine recognition**
+  (hooks/scripts/baseline-select.py): § 8.2 5.b non-quarantine filter
+  now also rejects seeds whose `status == "killed_shortcut_quarantine"`,
+  in addition to the existing `killed_reason == "shortcut_quarantine"`
+  check. Closes a hole where status-only sessions could leak
+  quarantined seeds into baseline selection.
+- **`status-dashboard.py` — terminal-experiment dedup**
+  (hooks/scripts/status-dashboard.py): per-seed experiment counter now
+  counts only `kept` / `discarded` events (not `evaluated`) and dedups
+  by `(seed_id, experiment_id)` to prevent double-counting when the
+  journal contains both `evaluated` and a subsequent `kept` / `discarded`
+  for the same experiment.
+- **`session-helper.sh` — kill-event field robustness**
+  (hooks/scripts/session-helper.sh): `seed_killed` parsing tolerates
+  null / non-string `condition`, splits `killed_reason` (raw condition,
+  `killed_` prefix stripped) from `killed_reasoning` (free-text
+  rationale), and preserves optional `final_q` / `experiments_used`
+  from the event.
+- **`templates/prepare-stdout-parse.py` — missing-metric scoring**
+  (templates/prepare-stdout-parse.py): when fewer metrics than declared
+  in `METRICS` are parsed from stdout, score now collapses to `0.0`
+  instead of falling into the `score <= 0` ceiling branch (which would
+  award `2.0`, treating a partial-parse failure as an infinite improvement).
+
+### Added
+- **`hooks/scripts/tests/test_v31_protect_readonly.py`** (119 lines):
+  exhaustive coverage of the hardened guard — Bash bypass attempts,
+  direct-execution allowance, per-seed `program.md` protection,
+  META_MODE interaction.
+- **`hooks/scripts/tests/test_v31_scheduler_fairness.py`** (57 lines):
+  scheduler-signals fairness including `experiments_used_this_epoch`.
+- **`hooks/scripts/tests/test_v31_scheduler_signals.py`** (43 lines):
+  legacy `status`-key tolerance, `numeric_q` fallback, score lookup
+  against `evaluated` events.
+- **`hooks/scripts/tests/test_package_manifest.py`** (18 lines):
+  asserts `package.json` / `plugin.json` / `SKILL.md` / `HELPER_VERSION`
+  stay in sync — prevents the version drift this release patches.
+- **`hooks/scripts/tests/test_prepare_stdout_parse_template.py`**
+  (61 lines): partial-parse → `score = 0.0` invariant + existing scoring paths.
+- **`hooks/scripts/tests/test_v31_baseline_select.py`** (14 lines):
+  `killed_shortcut_quarantine` status-path coverage.
+- **`hooks/scripts/tests/test_v31_status_subcommand.py`** (+38 lines):
+  per-seed terminal-experiment dedup verification.
+
+### Changed
+- `session-helper.sh` `HELPER_VERSION` 3.1.0 → 3.1.1.
+- `package.json` / `.claude-plugin/plugin.json` /
+  `skills/deep-evolve-workflow/SKILL.md` version 3.1.0 → 3.1.1.
+- `session-helper.sh` C-2 / C-3-A / C-3-B "Known limitations" comments
+  now reference "future release" rather than "v3.1.1" (since this IS
+  v3.1.1; those structural fixes remain on the backlog).
+
+### Migration
+None. v3.1.0 sessions resume under v3.1.1 unchanged. New guards apply
+automatically to in-flight sessions on next protect-readonly hook fire.
+
 ## [3.1.0] — 2026-04-26 (Virtual Parallel N-seed)
 
 Major release adding parallel N-seed exploration to the v3.0 AAR-Inspired
