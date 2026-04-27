@@ -329,8 +329,9 @@ the prompt level via explicit constraints. If budget reality differs from
 the AI's judgment, the grow path's existing `compute_grow_allocation`
 helper (T3) returns rc=1 "insufficient pool" and the coordinator logs
 `grow_rejected_insufficient_pool` without creating a seed — the hard guard
-sits downstream. Defer a dedicated preflight to v3.1.1 if this proves
-insufficient in practice.
+sits downstream. Defer a dedicated preflight to a future release if the
+existing downstream guard (retained through v3.1.1) proves insufficient
+in practice.
 
 ### 6.5.0 Summary / Gate
 
