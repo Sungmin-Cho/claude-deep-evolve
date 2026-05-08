@@ -593,6 +593,13 @@ cmd_append_meta_archive_local() {
   # Extract summary fields from receipt — envelope-aware: $r resolves to
   # .payload for M3-wrapped emits, . for legacy (handoff §4 round-4 identity
   # guard via _RECEIPT_QUERY_BASE).
+  #
+  # Round-2 deep-review R2-1 (Codex adversarial high): q_trajectory entries
+  # are documented as `array of numbers` in completion.md, but the legacy
+  # form was `array of {Q: number}` objects. Be tolerant of both shapes:
+  # objects → extract .Q, numbers → pass through. Without this guard, a
+  # v3.2.0 receipt (numeric q_trajectory matching the fixture) raised
+  # `Cannot index number with string "Q"` and aborted the completion hook.
   jq -c "${_RECEIPT_QUERY_BASE} as \$r | {
     session_id: \$r.session_id,
     goal: \$r.goal,
@@ -603,7 +610,7 @@ cmd_append_meta_archive_local() {
     parent_session_id: (\$r.parent_session.id // null),
     experiments: { total: \$r.experiments.total, kept: \$r.experiments.kept, keep_rate: (\$r.experiments.kept / (\$r.experiments.total | if . == 0 then 1 else . end)) },
     score: { baseline: \$r.score.baseline, best: \$r.score.best, improvement_pct: \$r.score.improvement_pct },
-    q_trajectory: [\$r.strategy_evolution.q_trajectory[]?.Q],
+    q_trajectory: [\$r.strategy_evolution.q_trajectory[]? | if type == \"object\" then .Q else . end],
     generations: \$r.strategy_evolution.outer_loop_generations
   }" "$receipt" >> "$EVOLVE_DIR/meta-archive-local.jsonl"
 }

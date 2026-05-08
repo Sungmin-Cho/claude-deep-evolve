@@ -719,6 +719,54 @@ describe('envelope-chain — Round-1 W4 --source-artifact auto-harvest with self
   });
 });
 
+describe('envelope-chain — Round-2 R2-1 q_trajectory shape tolerance (session-helper.sh)', () => {
+  // session-helper.sh's cmd_append_meta_archive_local uses the same
+  // _RECEIPT_QUERY_BASE jq expression. The q_trajectory extractor must be
+  // tolerant of both the legacy {Q: number} object form AND the new bare
+  // number form. Without the fix, jq aborts with
+  // `Cannot index number with string "Q"` on the new fixture, breaking
+  // the completion hook entirely.
+  const Q_EXTRACTOR =
+    '[.strategy_evolution.q_trajectory[]? | if type == "object" then .Q else . end]';
+
+  function runJq(input, expr) {
+    const f = path.join(tmpDir(), 'in.json');
+    fs.writeFileSync(f, JSON.stringify(input));
+    return execFileSync('jq', ['-c', expr, f], { encoding: 'utf8' }).trim();
+  }
+
+  it('handles bare-number q_trajectory (v3.2.0+ schema)', () => {
+    const out = runJq(
+      { strategy_evolution: { q_trajectory: [0.45, 0.62, 0.78] } },
+      Q_EXTRACTOR,
+    );
+    assert.equal(out, '[0.45,0.62,0.78]');
+  });
+
+  it('handles legacy {Q: number} q_trajectory (pre-3.2.0 receipts)', () => {
+    const out = runJq(
+      { strategy_evolution: { q_trajectory: [{ Q: 0.45 }, { Q: 0.62 }] } },
+      Q_EXTRACTOR,
+    );
+    assert.equal(out, '[0.45,0.62]');
+  });
+
+  it('handles missing q_trajectory (returns empty)', () => {
+    const out = runJq({ strategy_evolution: {} }, Q_EXTRACTOR);
+    assert.equal(out, '[]');
+  });
+
+  it('handles mixed shapes gracefully (defense in depth)', () => {
+    // Real-world drift: a session that started under legacy and was
+    // migrated mid-flight could conceivably have mixed entries.
+    const out = runJq(
+      { strategy_evolution: { q_trajectory: [{ Q: 0.45 }, 0.62] } },
+      Q_EXTRACTOR,
+    );
+    assert.equal(out, '[0.45,0.62]');
+  });
+});
+
 describe('envelope-chain — atomic write (C1)', () => {
   it('does not leave a .tmp file after successful write', () => {
     const dir = tmpDir();

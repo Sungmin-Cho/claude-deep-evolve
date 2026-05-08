@@ -251,10 +251,22 @@ The helper:
 ### Outcome update (post user-selection)
 
 After the user chooses the apply path, update `payload.outcome` **in place**
-to preserve the envelope wrapper:
+to preserve the envelope wrapper. **Each apply-path branch below sets its
+own `OUTCOME_VALUE`** before invoking this snippet. The snippet is
+**self-contained** — it re-resolves `$SESSION_ROOT`-relative paths locally
+and asserts `$OUTCOME_VALUE` was set by the caller.
 
 ```bash
 set -euo pipefail
+
+# Round-2 deep-review R2-3 (Codex adversarial medium): make the snippet
+# stateless-safe. Bash-tool invocations don't preserve env vars between
+# calls (handoff §4 W2), so re-resolve locally rather than relying on
+# variables from earlier blocks in this protocol.
+SESSION_ROOT="${SESSION_ROOT:?SESSION_ROOT must be set by caller — derive from session.yaml or env}"
+OUT_PATH="$SESSION_ROOT/evolve-receipt.json"
+: "${OUTCOME_VALUE:?OUTCOME_VALUE must be set by the apply-path branch (e.g., OUTCOME_VALUE=merged)}"
+
 # Distinct prefix from wrap helper's `<output>.tmp.<pid>.<ts>` so a future
 # residue scanner can attribute lingering temps correctly.
 TMP_OUT="$OUT_PATH.tmp.outcome.$$.$(date +%s)"
@@ -272,7 +284,22 @@ fi
 > **Why**: the envelope's `run_id` and `generated_at` should NOT change once
 > emitted — only the payload mutates. `jq` + atomic rename achieves this
 > without re-running the wrap helper. Explicit `rm -f` on jq failure
-> prevents `.tmp.outcome.*` residue accumulating across retries.
+> prevents `.tmp.outcome.*` residue accumulating across retries. The
+> `${VAR:?msg}` guards make the snippet fail-fast when the caller forgot
+> to set `OUTCOME_VALUE` (Round-2 R2-3 fix — previously the block opened
+> with `set -u` referencing undefined OUT_PATH and OUTCOME_VALUE).
+
+> **Round-2 deep-review R2-2 (Codex adversarial — design-level)**: the wrap
+> step above re-detects `.deep-review/recurring-findings.json` at finish
+> time. If deep-review regenerates that file mid-session, the chained
+> `parent_run_id` reflects the **most-recent upstream state** at finish,
+> not necessarily the version Stage 3.5 consumed for harness biasing. This
+> matches the suite spec wording (`parent_run_id = recurring-findings.run_id`,
+> no temporal binding specified) and is consistent with deep-work's pattern
+> for evolve-insights re-detection in `gather-signals.sh`. A consumption-
+> bound snapshot (writing the consumed run_id at A.3 Step 4 to a session-
+> local file and using that here) would tighten the contract; tracked as
+> a follow-up since it requires init.md A.3 restructuring.
 
 **Completion hooks**:
 - `session-helper.sh append_sessions_jsonl finished <id> --status=completed --outcome=<outcome> ...`
