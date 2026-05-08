@@ -18,6 +18,43 @@ deep-evolve operates **outside** the standard [Harness Engineering](https://mart
 
 With v2.0's Outer Loop, deep-evolve goes further: it not only improves the target code but also evolves the **strategy** that drives experiments — and can even expand the **evaluation harness** itself when convergence is detected. This 3-layer self-evolution (parameters → strategy text → evaluation expansion) makes the system a true meta-optimizer that improves its own improvement process.
 
+## What's New in 3.2.0
+
+Minor release adopting the M3 cross-plugin envelope contract for both
+`evolve-receipt.json` and `evolve-insights.json`. New emits are wrapped
+in the suite-wide envelope (`schema_version: "1.0"` + `envelope` +
+`payload`); legacy (pre-3.2.0) receipts read transparently via fall-through.
+No `session.yaml` schema bump; v3.1.x sessions resume unchanged. Highlights:
+
+- **M3 envelope wrap** — `evolve-receipt` and `evolve-insights` now emit
+  with `producer`, `producer_version`, `artifact_kind`, ULID `run_id`,
+  RFC 3339 `generated_at`, `git.{head,branch,dirty}`, and
+  `provenance.{source_artifacts,tool_versions}`. Schema and helper modules
+  match the suite-side spec at
+  [`claude-deep-suite/docs/envelope-migration.md`](https://github.com/Sungmin-Cho/claude-deep-suite/blob/main/docs/envelope-migration.md).
+- **deep-review → deep-evolve chain** — `evolve-receipt.envelope.parent_run_id`
+  auto-chains to the consumed `recurring-findings.envelope.run_id`,
+  enabling cross-plugin trace reconstruction in M4 telemetry.
+  `evolve-insights` (multi-source aggregator) omits `parent_run_id` and
+  records each consumed source path in `provenance.source_artifacts[]`.
+- **Atomic write** — wrap helper writes to a unique temp path then
+  `rename`s to the canonical output. Concurrent finishers / mid-write
+  interruption no longer leave truncated JSON for downstream parsers.
+- **Reader-side envelope awareness** — `init.md` Stage 3.5 detects the
+  recurring-findings envelope (bash-only fast path + jq identity guard),
+  unwraps `payload.findings`, and persists the run_id reference into
+  `session.yaml.cross_plugin` for completion's chain. `session-helper.sh`'s
+  receipt readers (`cmd_append_meta_archive_local`,
+  `cmd_render_inherited_context`) use a shared `_RECEIPT_QUERY_BASE` jq
+  expression with 3-way identity check.
+- **Self-test validator** — zero-dep `scripts/validate-envelope-emit.js`
+  mirrors the suite-side schema (additionalProperties strict, ULID/SemVer
+  2.0.0/RFC 3339/kebab-case enforced, identity check on
+  `schema.name === artifact_kind`). 70 tests across `envelope-emit.test.js`
+  and `envelope-chain.test.js`.
+
+See [CHANGELOG.md](./CHANGELOG.md) for the full list.
+
 ## What's New in 3.1.1
 
 Patch release hardening v3.1.0 runtime guards. No protocol or session

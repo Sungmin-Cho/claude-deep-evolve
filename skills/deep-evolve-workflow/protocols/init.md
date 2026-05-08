@@ -43,7 +43,69 @@ Perform a 5-stage analysis of the current project. Every judgment must be ground
 Check if `.deep-review/recurring-findings.json` exists. If not, skip this stage.
 
 If it exists:
-1. Read the file and parse the `findings` array
+
+**Envelope-aware read (v3.2.0+, handoff §4)**: deep-review v1.4.0+ wraps
+`recurring-findings.json` in the M3 cross-plugin envelope. This stage detects
+the envelope, validates identity, and unwraps the `findings` array. Pre-M3
+legacy emits (top-level `findings` key) continue to work via fall-through.
+
+```bash
+REC_PATH="$PROJECT_ROOT/.deep-review/recurring-findings.json"
+
+# Bash-only fast path detection (no per-file `node -e` — handoff §4 round-1 W6).
+# Two anchors: schema_version === "1.0" + envelope key present.
+if grep -q '"schema_version"[[:space:]]*:[[:space:]]*"1\.0"' "$REC_PATH" \
+   && grep -q '"envelope"[[:space:]]*:' "$REC_PATH"; then
+  IS_ENVELOPE=1
+else
+  IS_ENVELOPE=0
+fi
+
+if [ "$IS_ENVELOPE" = "1" ]; then
+  # Identity guard (3-way check, handoff §4 round-4 lesson):
+  #   envelope.producer === "deep-review"
+  #   envelope.artifact_kind === "recurring-findings"
+  #   envelope.schema.name === envelope.artifact_kind
+  if ! jq -e '
+    .schema_version == "1.0"
+    and (.envelope|type) == "object"
+    and (.payload|type) == "object"
+    and .envelope.producer == "deep-review"
+    and .envelope.artifact_kind == "recurring-findings"
+    and .envelope.schema.name == .envelope.artifact_kind
+  ' "$REC_PATH" >/dev/null 2>&1; then
+    echo "warning: recurring-findings.json envelope identity mismatch — skipping Stage 3.5" >&2
+    # Skip stage rather than risk consuming a foreign-plugin artifact.
+    REC_USABLE=0
+  else
+    REC_USABLE=1
+    REC_RUN_ID=$(jq -r '.envelope.run_id // empty' "$REC_PATH")
+    # Extract findings from envelope.payload.findings
+    FINDINGS_JSON=$(jq -c '.payload.findings // []' "$REC_PATH")
+  fi
+else
+  # Legacy fall-through: top-level findings array.
+  REC_USABLE=1
+  REC_RUN_ID=""
+  FINDINGS_JSON=$(jq -c '.findings // []' "$REC_PATH")
+fi
+
+# Persist the cross-plugin reference into session.yaml so completion.md's
+# wrap helper can chain `parent_run_id` later. Keep the path even when
+# envelope is absent — provenance.source_artifacts[] still records it.
+if [ "${REC_USABLE:-0}" = "1" ]; then
+  cat >> "$SESSION_ROOT/session.yaml" <<YAML
+cross_plugin:
+  recurring_findings_path: "$REC_PATH"
+  recurring_findings_run_id: "$REC_RUN_ID"
+YAML
+fi
+```
+
+If `REC_USABLE=1`:
+1. Read the file and parse the `findings` array (already extracted as
+   `$FINDINGS_JSON` above — top-level for legacy, `payload.findings` for
+   envelope-wrapped emits).
 2. For each recurring finding, bias the evaluation harness generation:
    - `error-handling` category → strengthen error handling test scenarios in prepare.py
    - `test-coverage` category → add boundary value test scenarios

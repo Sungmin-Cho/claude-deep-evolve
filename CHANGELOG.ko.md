@@ -1,5 +1,105 @@
 # 변경 이력
 
+## [3.2.0] — 2026-05-08 (M3 공통 아티팩트 envelope)
+
+`evolve-receipt.json`과 `evolve-insights.json` 두 산출물을 모두 M3 cross-plugin
+envelope 컨트랙트로 emit하도록 전환한 minor 릴리스. 새 emit은 suite 전역
+envelope (`schema_version: "1.0"` + `envelope` + `payload`,
+[`claude-deep-suite/docs/envelope-migration.md`](https://github.com/Sungmin-Cho/claude-deep-suite/blob/main/docs/envelope-migration.md)
+참조)로 wrap된다. 3.2.0 이전 receipt는 legacy fall-through로 그대로 읽히며,
+`session.yaml` 스키마 변경 없음 — 기존 세션은 변경 없이 resume된다. M3 Phase 2
+#4번째 plugin 작업.
+
+### 추가
+- **`hooks/scripts/envelope.js`** — zero-dep helper 모듈.
+  `generateUlid` (MSB-first Crockford Base32 26자), `detectGit`,
+  `loadProducerVersion` (모듈 `__dirname` 기준 literal-cwd-resolve),
+  `wrapEnvelope`, `isEnvelope` (loose), `isValidEnvelope` (strict W4 gate),
+  `unwrapEnvelope` (3-way identity check: producer/artifact_kind/schema.name).
+- **`hooks/scripts/wrap-evolve-envelope.js`** — `completion.md` /
+  `transfer.md`에서 호출하는 CLI wrapper.
+  `--artifact-kind {evolve-receipt|evolve-insights}`, `--payload-file`,
+  `--output`, 옵션 `--source-recurring-findings <path>` (evolve-receipt의
+  `parent_run_id` chain), 반복 가능한 `--source-artifact` (evolve-insights
+  multi-source aggregator) 지원. **Atomic write**: temp+rename
+  (`<output>.tmp.<pid>.<ts>`) 패턴으로 동시 finisher · mid-write 중단 시에도
+  truncated JSON이 남지 않는다.
+- **`scripts/validate-envelope-emit.js`** — suite spec mirror self-test
+  validator (`additionalProperties: false` on root / envelope / git /
+  schema / provenance / source_artifacts items; `^x-`는 root + envelope
+  에만 허용). `schema.name === artifact_kind` identity check, ULID
+  Crockford Base32 26자, SemVer 2.0.0 (prerelease + build metadata 포함),
+  RFC 3339, git head 7-40 hex, kebab-case kind. 두 신규 테스트 스위트가
+  사용.
+- **`tests/envelope-emit.test.js`** + **`tests/envelope-chain.test.js`** —
+  70개 테스트. ULID lex-monotonicity, identity guard, corrupt-payload
+  defense, `payload: null/false/array` 거부, fixture 검증,
+  `additionalProperties` strict-mirror failure, parent_run_id chain
+  (envelope-wrapped recurring-findings에서 자동 추출; 명시적 override
+  보존; legacy recurring-findings는 path만 contribute), atomic-write
+  no-residue 확인.
+- **`tests/fixtures/sample-evolve-receipt.json`** +
+  **`tests/fixtures/sample-evolve-insights.json`** — Phase 3 suite-side
+  payload-registry placeholder 교체 input.
+
+### 변경
+- **`skills/deep-evolve-workflow/protocols/completion.md` § Evolve Receipt
+  Generation** — payload 구성은 동일, 최종 write를 `wrap-evolve-envelope.js`
+  경유로 변경. atomic temp+rename + gated cleanup (`set -euo pipefail` +
+  `if helper; then rm tmp; else exit 1; fi` — helper 실패 시 payload temp
+  보존하여 retry 가능). 사용자 선택 후 outcome 갱신은
+  `jq --arg o ... '.payload.outcome = $o'` + atomic rename으로 in-place
+  갱신해 `envelope.run_id`를 보존 (재 wrap 금지).
+- **`skills/deep-evolve-workflow/protocols/transfer.md` § E.1 step 5** —
+  `evolve-insights.json`을 M3 envelope으로 wrap. Multi-source aggregator
+  semantics: `parent_run_id` **omit**;
+  `~/.claude/deep-evolve/meta-archive.jsonl`,
+  `.deep-review/recurring-findings.json` (존재 시) 같은 consumed source는
+  `envelope.provenance.source_artifacts[]`에 들어간다.
+- **`skills/deep-evolve-workflow/protocols/init.md` § Stage 3.5** —
+  `.deep-review/recurring-findings.json` envelope-aware 읽기. Bash-only
+  fast path 감지 (두 grep anchor — `"schema_version": "1.0"` /
+  `"envelope":`), 그 후 `jq -e` 3-way identity guard 통과 시
+  `.payload.findings` unwrap. `envelope.run_id`를 `session.yaml`의
+  `cross_plugin.recurring_findings_run_id`에 기록하여 completion 단계의
+  wrap helper가 `parent_run_id` chain 가능. 1.4.0 이전 deep-review emit
+  (top-level `findings` 배열)은 fall-through로 동작.
+- **`hooks/scripts/session-helper.sh` —
+  `cmd_append_meta_archive_local` + `cmd_render_inherited_context`** —
+  공유 `_RECEIPT_QUERY_BASE` jq 식으로 envelope-aware receipt read.
+  Identity-checked unwrap (producer/artifact_kind/schema.name 3-way).
+  같은 경로의 foreign-producer envelope은 root로 fall-through하여 legacy
+  shape jq query가 null을 반환 (다른 plugin payload 누출 방지).
+- **`skills/deep-evolve-workflow/protocols/history.md` § Step 1 detail
+  mode** — envelope-aware receipt query 패턴 명시 (동일
+  `_RECEIPT_QUERY_BASE` jq 식).
+- **`package.json` `files` 배열** — `hooks/scripts/*.js`, `scripts/`,
+  `tests/`를 포함하도록 확장하여 envelope helper / validator / fixture가
+  플러그인 패키지에 함께 배포된다.
+- **버전 bump** — `plugin.json.version` / `package.json.version`
+  3.1.1 → 3.2.0 (minor — envelope adoption = 새 contract). 기존 v3.1
+  세션은 그대로 `session.yaml.deep_evolve_version: "3.1.0"`을 emit하고
+  변경 없이 resume; receipt **payload**의 version literal은 플러그인
+  버전이 아닌 세션 기록 버전을 그대로 유지한다.
+
+### Cross-plugin chain
+- **deep-review → deep-evolve**: `evolve-receipt.envelope.parent_run_id`가
+  `recurring-findings.envelope.run_id`로 chain (consumed file이 envelope일
+  때 자동; helper는 `isValidEnvelope` strict gate를 사용해 corrupt envelope
+  의 trace data 오염을 차단 — handoff §4 W4).
+- **deep-evolve → deep-work**: deep-work v6.5.0+가 이미
+  `gather-signals.sh`의 identity-guarded `read_json_safe`를 통해
+  `.deep-evolve/<sid>/evolve-insights.json` envelope을 감지 — 소비자 측
+  추가 변경 불필요.
+
+### 호환성
+- 3.2.0 이전 legacy receipt는 그대로 읽힘 — `isEnvelope`이 false 반환,
+  `unwrapEnvelope`이 pass-through, jq base는 root로 fall-through.
+- 같은 경로의 foreign-producer envelope → identity guard가 silent reject
+  (`unwrapEnvelope`은 stderr warn, jq는 root로 fall-through).
+- worktree 마이그레이션 불필요; 3.1.x에서 시작된 세션은 3.2.0에서 정상
+  완료된다.
+
 ## [3.1.1] — 2026-04-26 (런타임 가드 강화)
 
 v3.1.0 런타임 가드를 강화하는 패치 릴리스. 프로토콜·세션 스키마 변경 없음;

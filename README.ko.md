@@ -18,6 +18,45 @@ deep-evolve는 표준 [Harness Engineering](https://martinfowler.com/articles/ha
 
 v2.0의 Outer Loop로 deep-evolve는 한 단계 더 나아갑니다: 대상 코드뿐 아니라 실험을 이끄는 **전략** 자체를 진화시키고, 수렴이 감지되면 **평가 harness** 자체를 확장할 수도 있습니다. 이 3계층 자기 진화(파라미터 → 전략 텍스트 → 평가 확장)는 시스템을 자체 개선 프로세스를 개선하는 진정한 메타 옵티마이저로 만듭니다.
 
+## 3.2.0 신규 기능
+
+`evolve-receipt.json`과 `evolve-insights.json` 두 산출물을 모두 M3
+cross-plugin envelope 컨트랙트로 emit하도록 전환한 minor 릴리스. 새 emit은
+suite 전역 envelope(`schema_version: "1.0"` + `envelope` + `payload`)으로
+wrap되며 3.2.0 이전 receipt는 fall-through로 그대로 읽힌다.
+`session.yaml` 스키마 변경 없음 — v3.1.x 세션은 그대로 resume된다. 주요 변경:
+
+- **M3 envelope wrap** — `evolve-receipt`과 `evolve-insights`에 `producer`,
+  `producer_version`, `artifact_kind`, ULID `run_id`, RFC 3339
+  `generated_at`, `git.{head,branch,dirty}`,
+  `provenance.{source_artifacts,tool_versions}` 필드 추가. Schema와 helper
+  모듈은 suite spec
+  ([`claude-deep-suite/docs/envelope-migration.md`](https://github.com/Sungmin-Cho/claude-deep-suite/blob/main/docs/envelope-migration.md))
+  과 1:1 mirror.
+- **deep-review → deep-evolve chain** —
+  `evolve-receipt.envelope.parent_run_id`가 소비된
+  `recurring-findings.envelope.run_id`로 자동 chain 되어 M4 telemetry의
+  cross-plugin trace 재구성을 가능하게 한다. `evolve-insights`(multi-source
+  aggregator)는 `parent_run_id`를 omit하고 각 source 경로를
+  `provenance.source_artifacts[]`에 기록한다.
+- **Atomic write** — wrap helper가 unique temp 경로에 쓴 뒤 canonical
+  output으로 `rename`. 동시 finisher · mid-write 중단 시에도 downstream
+  parser가 truncated JSON을 만나지 않는다.
+- **Reader 측 envelope 인식** — `init.md` Stage 3.5가 recurring-findings
+  envelope을 감지(bash-only fast path + jq identity guard)하고
+  `payload.findings`를 unwrap, `envelope.run_id`를
+  `session.yaml.cross_plugin`에 기록하여 completion 단계의 chain에
+  사용한다. `session-helper.sh`의 receipt reader
+  (`cmd_append_meta_archive_local`, `cmd_render_inherited_context`)는
+  3-way identity check가 포함된 공유 `_RECEIPT_QUERY_BASE` jq 식을 사용.
+- **Self-test validator** — zero-dep `scripts/validate-envelope-emit.js`가
+  suite-side schema를 mirror (additionalProperties strict, ULID/SemVer
+  2.0.0/RFC 3339/kebab-case 정규식,
+  `schema.name === artifact_kind` identity check). `envelope-emit.test.js`
+  와 `envelope-chain.test.js`에 70개 테스트 포함.
+
+전체 목록은 [CHANGELOG.ko.md](./CHANGELOG.ko.md) 참고.
+
 ## 3.1.1 신규 기능
 
 v3.1.0 런타임 가드를 강화한 패치 릴리스. 프로토콜·세션 스키마 변경 없음

@@ -324,32 +324,97 @@ Analyze the meta-archive for patterns that could benefit other plugins:
    - Strategies with high keep_rate (> 0.3)
    - Program.md changes that correlated with Q(v) improvement
    - Idea selection weight distributions that worked well
-5. Generate `$SESSION_ROOT/evolve-insights.json`:
+5. Generate `$SESSION_ROOT/evolve-insights.json` as an **M3 envelope-wrapped
+   artifact** (cf. `claude-deep-suite/docs/envelope-migration.md` §1). The
+   payload below — preserved verbatim from v3.1.x — becomes the `payload` of
+   the wrapped envelope.
 
-```json
-{
-  "updated_at": "<ISO 8601 now>",
-  "insights_for_deep_work": [
-    {
-      "pattern": "<pattern name extracted from effective strategies>",
-      "evidence": "<keep_rate X.XX across N projects, Q(v) +X.XX improvement>",
-      "source_archive_ids": ["<archive entry id>"],
-      "suggestion": "<actionable suggestion for Phase 3 implement>"
-    }
-  ],
-  "insights_for_deep_review": [
-    {
-      "pattern": "<pattern name>",
-      "evidence": "<experiment outcome data>",
-      "source_archive_ids": ["<archive entry id>"],
-      "suggestion": "<review criteria enhancement suggestion>"
-    }
-  ]
-}
-```
+   > **Multi-source aggregator (handoff §3.3)**: evolve-insights aggregates
+   > the local meta-archive plus optional cross-plugin signals. There is no
+   > single dominant parent, so `envelope.parent_run_id` is **omitted**;
+   > consumed sources land in `envelope.provenance.source_artifacts[]`
+   > instead. (Same pattern as deep-dashboard's `harnessability-report`.)
 
-6. Each insight's `source_archive_ids` must reference actual archive entry IDs for traceability.
-7. This file is "suggestion-level" — consuming plugins decide independently whether to use it.
+   **Payload shape** (legacy v3.1.x body, kept identical):
+
+   ```json
+   {
+     "updated_at": "<ISO 8601 now>",
+     "insights_for_deep_work": [
+       {
+         "pattern": "<pattern name extracted from effective strategies>",
+         "evidence": "<keep_rate X.XX across N projects, Q(v) +X.XX improvement>",
+         "source_archive_ids": ["<archive entry id>"],
+         "suggestion": "<actionable suggestion for Phase 3 implement>"
+       }
+     ],
+     "insights_for_deep_review": [
+       {
+         "pattern": "<pattern name>",
+         "evidence": "<experiment outcome data>",
+         "source_archive_ids": ["<archive entry id>"],
+         "suggestion": "<review criteria enhancement suggestion>"
+       }
+     ]
+   }
+   ```
+
+   ### Envelope wrap (atomic)
+
+   Write the payload to a temp file and invoke the wrap helper (atomic
+   temp+rename internally; cleanup gated on success — handoff §4 round-1
+   C1+C2 lessons).
+
+   ```bash
+   set -euo pipefail
+
+   PAYLOAD_TMP="$SESSION_ROOT/.evolve-insights.payload.json"
+   OUT_PATH="$SESSION_ROOT/evolve-insights.json"
+
+   # Write the payload JSON shape above to PAYLOAD_TMP.
+
+   META_ARCHIVE="$HOME/.claude/deep-evolve/meta-archive.jsonl"
+
+   WRAP_ARGS=(
+     --artifact-kind evolve-insights
+     --payload-file "$PAYLOAD_TMP"
+     --output "$OUT_PATH"
+   )
+   SESSION_ID=$(grep '^session_id:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^session_id:[[:space:]]*//; s/"//g')
+   [ -n "$SESSION_ID" ] && WRAP_ARGS+=(--session-id "$SESSION_ID")
+   [ -f "$META_ARCHIVE" ] && WRAP_ARGS+=(--source-artifact "$META_ARCHIVE")
+
+   # Optional: deep-review recurring-findings as an additional cross-plugin
+   # source signal (path-only — evolve-insights does NOT chain via
+   # parent_run_id; the run_id is recorded in source_artifacts when the file
+   # is envelope-wrapped, via the helper's loose detection).
+   REC_PATH="$PROJECT_ROOT/.deep-review/recurring-findings.json"
+   [ -f "$REC_PATH" ] && WRAP_ARGS+=(--source-artifact "$REC_PATH")
+
+   if node "$CLAUDE_PLUGIN_ROOT/hooks/scripts/wrap-evolve-envelope.js" "${WRAP_ARGS[@]}"; then
+     rm -f "$PAYLOAD_TMP"
+   else
+     echo "wrap-evolve-envelope failed — preserving $PAYLOAD_TMP for retry; re-run this step to retry." >&2
+     exit 1
+   fi
+   ```
+
+   The helper:
+   - Generates `envelope.run_id` (ULID), sets `producer = "deep-evolve"`,
+     `artifact_kind = "evolve-insights"`, `schema.name = "evolve-insights"`.
+   - **Omits** `envelope.parent_run_id` (multi-source aggregator semantics).
+   - Adds each `--source-artifact <path>` to
+     `envelope.provenance.source_artifacts[]`. Local meta-archive (jsonl, not
+     envelope) contributes path-only; envelope-wrapped sources contribute
+     `path + run_id`.
+
+6. Each insight's `source_archive_ids` must reference actual archive entry IDs
+   for traceability.
+7. This file is "suggestion-level" — consuming plugins decide independently
+   whether to use it. Consumers (deep-work `gather-signals.sh` since v6.5.0)
+   detect the M3 envelope, validate identity (`producer == "deep-evolve"`,
+   `artifact_kind == "evolve-insights"`), unwrap the payload, and fall back to
+   legacy pass-through for pre-v3.2.0 emits.
 
 ---
 

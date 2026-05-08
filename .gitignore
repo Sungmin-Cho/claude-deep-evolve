@@ -6,3 +6,6 @@ __pycache__/
 docs/
 .v3-venv/
 .pytest_cache/
+.deep-review/
+.deep-docs/
+.serena/

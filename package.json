@@ -1,6 +1,6 @@
 {
   "name": "@deep-evolve/deep-evolve",
-  "version": "3.1.1",
+  "version": "3.2.0",
   "description": "Autonomous Experimentation Plugin for Claude Code — goal-driven experiment loops with autoresearch methodology",
   "author": "sungmin",
   "license": "MIT",
@@ -22,7 +22,13 @@
     "hooks/hooks.json",
     "hooks/scripts/*.py",
     "hooks/scripts/*.sh",
+    "hooks/scripts/*.js",
+    "scripts/",
     "skills/",
-    "templates/"
-  ]
+    "templates/",
+    "tests/"
+  ],
+  "scripts": {
+    "test": "node --test tests/envelope-emit.test.js tests/envelope-chain.test.js"
+  }
 }

@@ -3,7 +3,7 @@
 # Usage: session-helper.sh <subcommand> [args...]
 set -Eeuo pipefail
 
-HELPER_VERSION="3.1.1"
+HELPER_VERSION="3.2.0"
 export DEEP_EVOLVE_HELPER=1
 
 # === Dependencies ===
@@ -558,6 +558,24 @@ cmd_list_sessions() {
   printf '%s\n' "$result" | jq .
 }
 
+# M3 envelope-aware receipt query base (v3.2.0+).
+#
+# Identity-checked unwrap: returns .payload when the file is an M3 envelope
+# emitted by deep-evolve for evolve-receipt; falls through to . for legacy
+# (pre-3.2.0) receipts. Other-producer envelopes at the same path are also
+# rejected (returns . — the legacy-shape jq queries below will then come up
+# empty, which is the correct safe behavior). Mirrors the identity guard
+# pattern from envelope.js / handoff §4 round-4 lesson.
+_RECEIPT_QUERY_BASE='
+  (if (.schema_version == "1.0")
+      and ((.envelope|type) == "object")
+      and ((.payload|type) == "object")
+      and (.envelope.producer == "deep-evolve")
+      and (.envelope.artifact_kind == "evolve-receipt")
+      and (.envelope.schema.name == .envelope.artifact_kind)
+   then .payload else . end)
+'
+
 cmd_append_meta_archive_local() {
   local session_id="$1"
   local session_root="$EVOLVE_DIR/$session_id"
@@ -572,20 +590,22 @@ cmd_append_meta_archive_local() {
     return 0
   fi
 
-  # Extract summary fields from receipt
-  jq -c '{
-    session_id: .session_id,
-    goal: .goal,
-    started_at: .timestamp,
+  # Extract summary fields from receipt — envelope-aware: $r resolves to
+  # .payload for M3-wrapped emits, . for legacy (handoff §4 round-4 identity
+  # guard via _RECEIPT_QUERY_BASE).
+  jq -c "${_RECEIPT_QUERY_BASE} as \$r | {
+    session_id: \$r.session_id,
+    goal: \$r.goal,
+    started_at: \$r.timestamp,
     finished_at: (now | todate),
-    status: .outcome,
-    outcome: .outcome,
-    parent_session_id: (.parent_session.id // null),
-    experiments: { total: .experiments.total, kept: .experiments.kept, keep_rate: (.experiments.kept / (.experiments.total | if . == 0 then 1 else . end)) },
-    score: { baseline: .score.baseline, best: .score.best, improvement_pct: .score.improvement_pct },
-    q_trajectory: [.strategy_evolution.q_trajectory[]?.Q],
-    generations: .strategy_evolution.outer_loop_generations
-  }' "$receipt" >> "$EVOLVE_DIR/meta-archive-local.jsonl"
+    status: \$r.outcome,
+    outcome: \$r.outcome,
+    parent_session_id: (\$r.parent_session.id // null),
+    experiments: { total: \$r.experiments.total, kept: \$r.experiments.kept, keep_rate: (\$r.experiments.kept / (\$r.experiments.total | if . == 0 then 1 else . end)) },
+    score: { baseline: \$r.score.baseline, best: \$r.score.best, improvement_pct: \$r.score.improvement_pct },
+    q_trajectory: [\$r.strategy_evolution.q_trajectory[]?.Q],
+    generations: \$r.strategy_evolution.outer_loop_generations
+  }" "$receipt" >> "$EVOLVE_DIR/meta-archive-local.jsonl"
 }
 
 cmd_render_inherited_context() {
@@ -599,7 +619,9 @@ cmd_render_inherited_context() {
   fi
 
   local parent_schema_ver
-  parent_schema_ver=$(jq -r '.receipt_schema_version // 1' "$receipt")
+  # Envelope-aware: read receipt_schema_version from .payload when wrapped,
+  # from root for legacy. _RECEIPT_QUERY_BASE applies identity guard.
+  parent_schema_ver=$(jq -r "${_RECEIPT_QUERY_BASE} as \$r | \$r.receipt_schema_version // 1" "$receipt")
 
   cat <<HEREDOC
 <!-- inherited-context-v1 -->
@@ -608,27 +630,24 @@ cmd_render_inherited_context() {
 이 세션은 선행 세션 \`$parent_id\`의 결과를 이어받는다.
 
 ### 이어받은 전략 패턴
-$(jq -r '
-  .generation_snapshots[-1] // {} |
+$(jq -r "${_RECEIPT_QUERY_BASE} as \$r | \$r.generation_snapshots[-1] // {} |
   if .strategy_yaml_content then
-    .strategy_yaml_content | split("\n") | map(select(test("^[a-z].*:"))) | .[0:5] | map("- " + .) | join("\n")
+    .strategy_yaml_content | split(\"\n\") | map(select(test(\"^[a-z].*:\"))) | .[0:5] | map(\"- \" + .) | join(\"\n\")
   else
-    "(전략 스냅샷 없음)"
+    \"(전략 스냅샷 없음)\"
   end
-' "$receipt")
+" "$receipt")
 
 ### 선행 세션에서 참조할 만한 개선 (informational only, NOT replayed)
-$(jq -r '
-  .notable_keeps // [] | map(
-    "- commit " + .commit + " (Δ+" + (.score_delta | tostring) + ", source=" + .source + "): " + .description
-  ) | join("\n") | if . == "" then "(notable keeps 없음)" else . end
-' "$receipt")
+$(jq -r "${_RECEIPT_QUERY_BASE} as \$r | \$r.notable_keeps // [] | map(
+    \"- commit \" + .commit + \" (Δ+\" + (.score_delta | tostring) + \", source=\" + .source + \"): \" + .description
+  ) | join(\"\n\") | if . == \"\" then \"(notable keeps 없음)\" else . end
+" "$receipt")
 
 ### 선행 세션의 최종 교훈
-$(jq -r '
-  .generation_snapshots[-1].meta_analysis_content // "(meta-analysis 없음)" |
-  split("\n\n")[0]
-' "$receipt")
+$(jq -r "${_RECEIPT_QUERY_BASE} as \$r | \$r.generation_snapshots[-1].meta_analysis_content // \"(meta-analysis 없음)\" |
+  split(\"\n\n\")[0]
+" "$receipt")
 
 ---
 
