@@ -373,6 +373,9 @@ Analyze the meta-archive for patterns that could benefit other plugins:
 
    # Write the payload JSON shape above to PAYLOAD_TMP.
 
+   # Resolve PROJECT_ROOT locally — Bash-tool calls are stateless across
+   # invocations (Round-1 review C1 + handoff §4 W2).
+   PROJECT_ROOT="${PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
    META_ARCHIVE="$HOME/.claude/deep-evolve/meta-archive.jsonl"
 
    WRAP_ARGS=(
@@ -385,9 +388,12 @@ Analyze the meta-archive for patterns that could benefit other plugins:
    [ -f "$META_ARCHIVE" ] && WRAP_ARGS+=(--source-artifact "$META_ARCHIVE")
 
    # Optional: deep-review recurring-findings as an additional cross-plugin
-   # source signal (path-only — evolve-insights does NOT chain via
-   # parent_run_id; the run_id is recorded in source_artifacts when the file
-   # is envelope-wrapped, via the helper's loose detection).
+   # source signal. evolve-insights does NOT chain via parent_run_id
+   # (multi-source aggregator), but Round-1 W4 fix gives the helper an
+   # auto-harvest path: when the file at this path is a self-consistent
+   # envelope (producer === schema.name === artifact_kind, valid ULID), its
+   # `envelope.run_id` lands in `provenance.source_artifacts[].run_id`. If
+   # the file is legacy or foreign, only the path is recorded (no run_id).
    REC_PATH="$PROJECT_ROOT/.deep-review/recurring-findings.json"
    [ -f "$REC_PATH" ] && WRAP_ARGS+=(--source-artifact "$REC_PATH")
 
@@ -404,9 +410,10 @@ Analyze the meta-archive for patterns that could benefit other plugins:
      `artifact_kind = "evolve-insights"`, `schema.name = "evolve-insights"`.
    - **Omits** `envelope.parent_run_id` (multi-source aggregator semantics).
    - Adds each `--source-artifact <path>` to
-     `envelope.provenance.source_artifacts[]`. Local meta-archive (jsonl, not
-     envelope) contributes path-only; envelope-wrapped sources contribute
-     `path + run_id`.
+     `envelope.provenance.source_artifacts[]`. Path-only entries get
+     **auto-harvested run_id** when the file is a self-consistent envelope
+     (Round-1 W4 fix); legacy / foreign / inconsistent files contribute
+     path-only.
 
 6. Each insight's `source_archive_ids` must reference actual archive entry IDs
    for traceability.

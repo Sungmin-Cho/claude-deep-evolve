@@ -206,14 +206,17 @@ OUT_PATH="$SESSION_ROOT/evolve-receipt.json"
 # Write the legacy payload JSON (composed from session.yaml + results.tsv per
 # the schema above) to PAYLOAD_TMP. Outcome is null at this stage.
 
-# Resolve recurring-findings path captured by init.md Stage 3.5 (if any). The
-# value lives under session.yaml's cross_plugin block when an envelope-wrapped
-# recurring-findings.json was detected at init time. Omit the flag entirely
-# (rather than passing an empty string) when absent — handoff §4 W2.
-REC_PATH=""
-if grep -q '^cross_plugin:' "$SESSION_ROOT/session.yaml" 2>/dev/null; then
-  REC_PATH=$(awk '/^cross_plugin:/{cp=1; next} cp && /^[^ ]/{cp=0} cp && /recurring_findings_path:/{print $2; exit}' "$SESSION_ROOT/session.yaml" | tr -d '"')
-fi
+# Resolve PROJECT_ROOT locally — Bash-tool calls are stateless across
+# invocations (handoff §4 round-1 W2 + Round-1 C1 lesson).
+PROJECT_ROOT="${PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+
+# Re-detect `.deep-review/recurring-findings.json` at finish time (Round-1
+# C1 fix — Stage 3.5 in init.md does NOT persist this state to session.yaml,
+# because session.yaml does not exist at A.1 time). The wrap helper applies
+# its own identity gate (producer=deep-review, artifact_kind=
+# recurring-findings, schema.name match, ULID format), so passing a path
+# that is foreign-producer or legacy is safe — chain just skips.
+REC_PATH="$PROJECT_ROOT/.deep-review/recurring-findings.json"
 
 WRAP_ARGS=(
   --artifact-kind evolve-receipt
@@ -222,7 +225,7 @@ WRAP_ARGS=(
 )
 SESSION_ID=$(grep '^session_id:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^session_id:[[:space:]]*//; s/"//g')
 [ -n "$SESSION_ID" ] && WRAP_ARGS+=(--session-id "$SESSION_ID")
-[ -n "$REC_PATH" ] && [ -f "$REC_PATH" ] && WRAP_ARGS+=(--source-recurring-findings "$REC_PATH")
+[ -f "$REC_PATH" ] && WRAP_ARGS+=(--source-recurring-findings "$REC_PATH")
 
 if node "$CLAUDE_PLUGIN_ROOT/hooks/scripts/wrap-evolve-envelope.js" "${WRAP_ARGS[@]}"; then
   rm -f "$PAYLOAD_TMP"
@@ -251,13 +254,25 @@ After the user chooses the apply path, update `payload.outcome` **in place**
 to preserve the envelope wrapper:
 
 ```bash
-TMP_OUT="$OUT_PATH.tmp.$$.$(date +%s)"
-jq --arg o "$OUTCOME_VALUE" '.payload.outcome = $o' "$OUT_PATH" > "$TMP_OUT" && mv "$TMP_OUT" "$OUT_PATH"
+set -euo pipefail
+# Distinct prefix from wrap helper's `<output>.tmp.<pid>.<ts>` so a future
+# residue scanner can attribute lingering temps correctly.
+TMP_OUT="$OUT_PATH.tmp.outcome.$$.$(date +%s)"
+if jq --arg o "$OUTCOME_VALUE" '.payload.outcome = $o' "$OUT_PATH" > "$TMP_OUT"; then
+  mv "$TMP_OUT" "$OUT_PATH"
+else
+  # Round-1 deep-review W2 (Opus): jq failure left $TMP_OUT residue
+  # because `&&` short-circuited mv but never unlinked the partial output.
+  rm -f "$TMP_OUT"
+  echo "outcome update failed; receipt unchanged at $OUT_PATH" >&2
+  exit 1
+fi
 ```
 
 > **Why**: the envelope's `run_id` and `generated_at` should NOT change once
 > emitted — only the payload mutates. `jq` + atomic rename achieves this
-> without re-running the wrap helper.
+> without re-running the wrap helper. Explicit `rm -f` on jq failure
+> prevents `.tmp.outcome.*` residue accumulating across retries.
 
 **Completion hooks**:
 - `session-helper.sh append_sessions_jsonl finished <id> --status=completed --outcome=<outcome> ...`

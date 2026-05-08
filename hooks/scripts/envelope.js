@@ -179,6 +179,15 @@ function wrapEnvelope(opts) {
     envelope.session_id = opts.sessionId;
   }
   if (typeof opts.parentRunId === 'string' && opts.parentRunId.length > 0) {
+    // Round-1 deep-review C3 (Codex adversarial): wrapEnvelope must reject
+    // non-ULID parentRunId at the boundary, not defer to downstream
+    // validation. A typo on --parent-run-id would otherwise mint an
+    // envelope that fails strict consumers but succeeds the helper.
+    if (!ULID_RE.test(opts.parentRunId)) {
+      throw new Error(
+        `wrapEnvelope: parentRunId must be 26-char Crockford Base32 ULID, got ${JSON.stringify(opts.parentRunId)}`,
+      );
+    }
     envelope.parent_run_id = opts.parentRunId;
   }
 

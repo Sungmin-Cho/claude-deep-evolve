@@ -94,6 +94,25 @@ function parseArgs(argv) {
     if (!KNOWN_FLAGS.has(key)) {
       usage(`unknown flag --${key}`);
     }
+
+    // Round-1 deep-review W3 (Opus): boundary validation. Reject malformed
+    // values at the CLI layer rather than deferring to downstream consumers.
+    if (key === 'parent-run-id' && !env.ULID_RE.test(value)) {
+      usage(
+        `--parent-run-id must be 26-char Crockford Base32 ULID, got "${value}"`,
+      );
+    }
+    if (
+      (key === 'session-id' ||
+        key === 'source-recurring-findings' ||
+        key === 'payload-file' ||
+        key === 'output' ||
+        key === 'artifact-kind') &&
+      value.length === 0
+    ) {
+      usage(`--${key} value must be non-empty`);
+    }
+
     if (REPEATABLE_FLAGS.has(key)) {
       repeats[key].push(value);
     } else {
@@ -123,24 +142,67 @@ function readJson(p) {
 }
 
 /**
- * Strict-gated extraction of envelope.run_id (handoff §4 W4 lesson).
+ * Strict-gated extraction of envelope.run_id with identity verification.
  *
- * Uses isValidEnvelope (loose detection + payload non-null/non-array object)
- * to reject corrupt envelopes from contributing chain trace data. A loose
- * isEnvelope check would let `payload: null` pass and downstream readers
- * would chase a broken chain.
+ * Round-1 deep-review C2 (Codex adversarial high): the prior loose form
+ * accepted any envelope-shaped file's run_id, so a foreign-producer
+ * envelope at e.g. `.deep-review/recurring-findings.json` would silently
+ * chain into evolve-receipt's parent_run_id, corrupting M4 telemetry.
+ *
+ * Identity contract:
+ *   - With { producer, artifactKind } → strict 3-way check + ULID format.
+ *   - With { selfConsistent: true } → producer === schema.name ===
+ *     artifact_kind self-consistency + ULID format. Used for generic
+ *     auto-harvest from --source-artifact path-only entries: we don't
+ *     know which producer to expect, but we require the file to be
+ *     internally consistent (no half-formed envelopes contributing
+ *     trace data).
+ *
+ * Returns the envelope.run_id when all gates pass, null otherwise.
+ * Builds atop env.isValidEnvelope (loose envelope detection + payload
+ * non-null/non-array object — handoff §4 W4 lesson).
  */
-function tryReadEnvelopeRunId(filePath) {
+function tryReadEnvelopeRunId(filePath, opts) {
   if (!filePath || !fs.existsSync(filePath)) return null;
+  let obj;
   try {
-    const obj = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    if (env.isValidEnvelope(obj) && typeof obj.envelope.run_id === 'string') {
-      return obj.envelope.run_id;
-    }
-    return null;
+    obj = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch (_err) {
     return null;
   }
+  if (!env.isValidEnvelope(obj)) return null;
+  const e = obj.envelope;
+  if (typeof e.run_id !== 'string' || !env.ULID_RE.test(e.run_id)) return null;
+  if (!e.schema || typeof e.schema !== 'object' || Array.isArray(e.schema)) return null;
+
+  if (opts && opts.producer !== undefined) {
+    if (
+      e.producer !== opts.producer ||
+      e.artifact_kind !== opts.artifactKind ||
+      e.schema.name !== opts.artifactKind
+    ) {
+      return null;
+    }
+  } else if (opts && opts.selfConsistent === true) {
+    // Self-consistency: producer/artifact_kind/schema.name must agree.
+    // Doesn't bind to a specific producer (unknown for generic
+    // --source-artifact auto-harvest), but requires the envelope to be
+    // internally well-formed.
+    if (
+      typeof e.producer !== 'string' ||
+      typeof e.artifact_kind !== 'string' ||
+      e.artifact_kind !== e.schema.name
+    ) {
+      return null;
+    }
+  } else {
+    // No identity gate provided — refuse to extract. Forces caller
+    // intent. Defense against future regression where a new code path
+    // forgets the identity gate.
+    return null;
+  }
+
+  return e.run_id;
 }
 
 /**
@@ -191,30 +253,53 @@ function main() {
   const sourceArtifacts = [];
   let parentRunId = args['parent-run-id'] || undefined;
 
-  // evolve-receipt: deep-review recurring-findings → parent_run_id chain.
+  // deep-review recurring-findings → identity-checked extraction.
+  // Round-1 deep-review C2 (Codex adversarial): tryReadEnvelopeRunId now
+  // requires identity gate. Pass {producer, artifactKind} so a foreign
+  // envelope at the recurring-findings path is rejected (returns null →
+  // path-only source_artifact, no parent_run_id chain).
+  //
+  // Round-1 deep-review I3 (Opus): symmetric for evolve-insights — record
+  // path + run_id without setting parent_run_id (multi-source aggregator
+  // semantics).
   if (args['source-recurring-findings']) {
-    if (artifactKind !== 'evolve-receipt') {
-      process.stderr.write(
-        `warning: --source-recurring-findings is only meaningful for evolve-receipt; ignoring for ${artifactKind}\n`,
-      );
-    } else {
-      const recPath = path.resolve(process.cwd(), args['source-recurring-findings']);
-      const recRunId = tryReadEnvelopeRunId(recPath);
-      sourceArtifacts.push({
-        path: args['source-recurring-findings'],
-        ...(recRunId ? { run_id: recRunId } : {}),
-      });
-      if (!parentRunId && recRunId) {
-        parentRunId = recRunId;
-      }
+    const recPath = path.resolve(process.cwd(), args['source-recurring-findings']);
+    const recRunId = tryReadEnvelopeRunId(recPath, {
+      producer: 'deep-review',
+      artifactKind: 'recurring-findings',
+    });
+    sourceArtifacts.push({
+      path: args['source-recurring-findings'],
+      ...(recRunId ? { run_id: recRunId } : {}),
+    });
+    if (artifactKind === 'evolve-receipt' && !parentRunId && recRunId) {
+      parentRunId = recRunId;
     }
   }
 
   // Generic --source-artifact entries (repeatable).
+  // Round-1 deep-review W4 (Codex adversarial medium): for path-only
+  // entries (no `:run_id` suffix), auto-harvest the envelope's run_id IF
+  // the file at path is a self-consistent envelope (producer ===
+  // schema.name === artifact_kind, valid ULID). This restores the
+  // multi-source trace that transfer.md's `--source-artifact $REC_PATH`
+  // was silently losing. Caller can override by passing `path:run_id`
+  // explicitly.
   if (Array.isArray(args['source-artifact'])) {
     for (const spec of args['source-artifact']) {
       const parsed = parseSourceArtifactSpec(spec);
-      if (parsed) sourceArtifacts.push(parsed);
+      if (!parsed) continue;
+      if (!parsed.run_id) {
+        // Auto-harvest with self-consistency check.
+        const abs = path.isAbsolute(parsed.path)
+          ? parsed.path
+          : path.resolve(process.cwd(), parsed.path);
+        const harvested = tryReadEnvelopeRunId(abs, { selfConsistent: true });
+        if (harvested) {
+          parsed.run_id = harvested;
+        }
+      }
+      sourceArtifacts.push(parsed);
     }
   }
 
