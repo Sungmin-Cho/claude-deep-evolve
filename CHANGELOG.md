@@ -1,5 +1,106 @@
 # Changelog
 
+## [3.2.0] — 2026-05-08 (M3 Common Artifact Envelope)
+
+Minor release adopting the M3 cross-plugin envelope contract for both
+`evolve-receipt.json` and `evolve-insights.json`. New emits are wrapped in
+the suite-wide envelope (`schema_version: "1.0"` + `envelope` + `payload`)
+defined in [`claude-deep-suite/docs/envelope-migration.md`](https://github.com/Sungmin-Cho/claude-deep-suite/blob/main/docs/envelope-migration.md).
+Pre-3.2.0 receipts continue to read transparently via legacy fall-through —
+no session-yaml schema bump, no resume break. Phase 2 #4 in the M3 rollout.
+
+### Added
+- **`hooks/scripts/envelope.js`** — zero-dep helper module exposing
+  `generateUlid` (MSB-first Crockford Base32 26-char), `detectGit`,
+  `loadProducerVersion` (literal-cwd-resolve via module `__dirname`),
+  `wrapEnvelope`, `isEnvelope` (loose), `isValidEnvelope` (strict W4 gate),
+  `unwrapEnvelope` (3-way identity check: producer/artifact_kind/schema.name).
+- **`hooks/scripts/wrap-evolve-envelope.js`** — CLI wrapper invoked from
+  `completion.md` and `transfer.md`. Accepts
+  `--artifact-kind {evolve-receipt|evolve-insights}`, `--payload-file`,
+  `--output`, plus optional `--source-recurring-findings <path>` (chains
+  `parent_run_id` for evolve-receipt) and repeatable `--source-artifact`
+  (multi-source aggregator semantics for evolve-insights). **Atomic write**
+  via temp+rename (`<output>.tmp.<pid>.<ts>`) so concurrent finishers and
+  mid-write interruption cannot leave a truncated JSON.
+- **`scripts/validate-envelope-emit.js`** — self-test validator mirroring
+  the suite-side schema (`additionalProperties: false` on root / envelope /
+  git / schema / provenance / source_artifacts items; `^x-` allowed at root
+  + envelope only). Strict identity check on `schema.name === artifact_kind`,
+  ULID Crockford Base32 26-char regex, SemVer 2.0.0 (with prerelease + build
+  metadata), RFC 3339, git head 7-40 hex, kebab-case kind. Used by both new
+  test suites.
+- **`tests/envelope-emit.test.js`** + **`tests/envelope-chain.test.js`** —
+  70 tests covering ULID lex-monotonicity, identity guards, corrupt-payload
+  defense, `payload: null/false/array` rejection, fixture validation,
+  `additionalProperties` strict-mirror failures, parent_run_id chain (auto-
+  detected from envelope-wrapped recurring-findings; explicit override
+  preserved; legacy recurring-findings contributes path only), atomic-write
+  no-residue check.
+- **`tests/fixtures/sample-evolve-receipt.json`** +
+  **`tests/fixtures/sample-evolve-insights.json`** — Phase 3 input for the
+  suite-side payload-registry replacement (currently placeholder).
+
+### Changed
+- **`skills/deep-evolve-workflow/protocols/completion.md` § Evolve Receipt
+  Generation** — payload composition unchanged, but the final write now
+  goes through `wrap-evolve-envelope.js` with atomic temp+rename and a
+  gated cleanup snippet (`set -euo pipefail` + `if helper; then rm tmp;
+  else exit 1; fi` so payload temp survives on failure for retry). Outcome
+  update post user-selection now uses `jq --arg o ... '.payload.outcome =
+  $o'` + atomic rename to preserve `envelope.run_id` (do NOT re-wrap).
+- **`skills/deep-evolve-workflow/protocols/transfer.md` § E.1 step 5** —
+  `evolve-insights.json` now M3-envelope-wrapped. Multi-source aggregator
+  semantics: `parent_run_id` is **omitted**; consumed sources
+  (`~/.claude/deep-evolve/meta-archive.jsonl`,
+  `.deep-review/recurring-findings.json` when present) land in
+  `envelope.provenance.source_artifacts[]`.
+- **`skills/deep-evolve-workflow/protocols/init.md` § Stage 3.5** —
+  envelope-aware read of `.deep-review/recurring-findings.json`. Bash-only
+  fast path detection (two grep anchors — `"schema_version": "1.0"` and
+  `"envelope":`), then `jq -e` 3-way identity guard before unwrapping
+  `.payload.findings`. Captures `envelope.run_id` to `session.yaml`
+  `cross_plugin.recurring_findings_run_id` so completion's wrap helper can
+  chain `parent_run_id` later. Pre-1.4.0 deep-review emits (top-level
+  `findings` array) continue to work via fall-through.
+- **`hooks/scripts/session-helper.sh` —
+  `cmd_append_meta_archive_local` + `cmd_render_inherited_context`** —
+  envelope-aware receipt reads via shared `_RECEIPT_QUERY_BASE` jq
+  expression. Identity-checked unwrap (producer/artifact_kind/schema.name
+  three-way). Foreign-producer envelopes at the same path fall through to
+  root, so legacy-shape queries return null rather than leaking another
+  plugin's payload.
+- **`skills/deep-evolve-workflow/protocols/history.md` § Step 1 detail
+  mode** — documented envelope-aware receipt query pattern (same
+  `_RECEIPT_QUERY_BASE` jq expression).
+- **`package.json` `files` array** — now includes `hooks/scripts/*.js`,
+  `scripts/`, and `tests/` so envelope helpers + validator + fixtures ship
+  with the plugin.
+- **Version bump** — `plugin.json.version` and `package.json.version`
+  3.1.1 → 3.2.0 (minor — envelope adoption = new contract). Existing v3.1
+  sessions continue to emit `session.yaml.deep_evolve_version: "3.1.0"` and
+  resume unchanged; the version literal recorded in the receipt **payload**
+  still reflects the session's recorded version, not the plugin version.
+
+### Cross-plugin chain
+- **deep-review → deep-evolve**: `evolve-receipt.envelope.parent_run_id`
+  chains to `recurring-findings.envelope.run_id` (automatic when the
+  consumed file is itself an envelope; helper uses `isValidEnvelope`
+  strict gate to reject corrupt envelopes from contributing trace data —
+  handoff §4 W4 lesson).
+- **deep-evolve → deep-work**: deep-work v6.5.0+ already detects the
+  envelope at `.deep-evolve/<sid>/evolve-insights.json` via
+  `gather-signals.sh`'s identity-guarded `read_json_safe` — no consumer
+  change required.
+
+### Compatibility
+- Legacy receipts (pre-3.2.0) read transparently — `isEnvelope` returns
+  false, `unwrapEnvelope` passes through, jq base falls through to root.
+- Foreign-producer envelopes at receipt path → identity guard rejects
+  silently (warns on stderr in `unwrapEnvelope`, jq falls through to root).
+- No worktree migration required; sessions started under 3.1.x complete
+  cleanly under 3.2.0.
+
 ## [3.1.1] — 2026-04-26 (Runtime Hardening)
 
 Patch release hardening v3.1.0 runtime guards. No protocol or session

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Sungmin-Cho/claude-deep-suite/main/schemas/artifact-envelope.schema.json",
+  "schema_version": "1.0",
+  "envelope": {
+    "producer": "deep-evolve",
+    "producer_version": "3.2.0",
+    "artifact_kind": "evolve-insights",
+    "run_id": "01JTKR9CD3EFGHJKMNPQRSTVWX",
+    "session_id": "2026-05-07T11-30-00",
+    "generated_at": "2026-05-08T03:43:12.987Z",
+    "schema": { "name": "evolve-insights", "version": "1.0" },
+    "git": {
+      "head": "abc1234",
+      "branch": "evolve/2026-05-07T11-30-00",
+      "dirty": false
+    },
+    "provenance": {
+      "source_artifacts": [
+        { "path": "~/.claude/deep-evolve/meta-archive.jsonl" }
+      ],
+      "tool_versions": { "node": "v20.11.0" }
+    }
+  },
+  "payload": {
+    "updated_at": "2026-05-08T03:43:12.987Z",
+    "insights_for_deep_work": [
+      {
+        "pattern": "early_termination_on_diverging_loss",
+        "evidence": "keep_rate 0.45 across 3 sessions; Q(v) +0.32 improvement",
+        "source_archive_ids": ["arch-2026-05-01-A", "arch-2026-05-04-B"],
+        "suggestion": "Add early termination guard in Phase 3 implement when loss diverges > 2σ within 3 epochs"
+      }
+    ],
+    "insights_for_deep_review": [
+      {
+        "pattern": "missing_boundary_checks_in_loop_init",
+        "evidence": "experiments crashed at boundary indices in 2/12 sessions",
+        "source_archive_ids": ["arch-2026-05-04-B"],
+        "suggestion": "Add boundary-init review criterion to deep-review checklist"
+      }
+    ]
+  }
+}

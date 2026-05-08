@@ -87,9 +87,20 @@ ELSE (v2): skip (existing report format unchanged).
 
 Display the report to the user.
 
-## Evolve Receipt Generation
+## Evolve Receipt Generation (M3 envelope-wrapped — v3.2.0+)
 
-Generate `$SESSION_ROOT/evolve-receipt.json` from `session.yaml` and `results.tsv`:
+Generate `$SESSION_ROOT/evolve-receipt.json` as an **M3 envelope-wrapped artifact**
+(cf. `claude-deep-suite/docs/envelope-migration.md` §1) from `session.yaml` and
+`results.tsv`. The payload below — preserved verbatim from v3.1.x — becomes the
+`payload` of the wrapped envelope.
+
+> **Cross-plugin chain (handoff §3.3)**: when `.deep-review/recurring-findings.json`
+> was consumed by Stage 3.5 (init.md), the wrap helper sets
+> `envelope.parent_run_id = <recurring-findings envelope.run_id>` and adds the
+> path to `envelope.provenance.source_artifacts[]`. This makes deep-review →
+> deep-evolve traceable via `run_id` chain in M4 telemetry.
+
+**Payload shape** (legacy v3.1.x receipt body, kept identical):
 
 ```json
 {
@@ -169,7 +180,126 @@ Notes:
 - `"runtime_warnings"`: journal.jsonl에서 branch_mismatch_accepted, branch_rebound 등 수집
 - `"parent_session"`: session.yaml.parent_session 복사
 
-**Receipt write sequence**: write with outcome=null → user selection → outcome update → freeze.
+**Receipt write sequence**: write payload temp → envelope wrap → user selection →
+outcome update via in-place `payload.outcome` edit → freeze.
+
+### Envelope wrap (atomic)
+
+Write the payload above to a temp file and invoke the wrap helper. The helper
+generates `envelope.run_id` (ULID), sets `producer = "deep-evolve"`,
+`artifact_kind = "evolve-receipt"`, `schema.name = "evolve-receipt"`, and
+performs an **atomic** temp-then-rename write to the canonical path.
+
+> **Important — failure semantics**: the snippet uses `set -euo pipefail` so
+> that any sub-command failure aborts before `rm -f` runs. The cleanup is
+> gated with an `if/then/else` block so that on helper failure the payload
+> temp file is **preserved** for retry. To re-attempt a failed wrap, simply
+> re-execute this section (the upstream payload composition does not re-run;
+> the same payload temp file is used). (handoff §4 round-1 C2 lesson.)
+
+```bash
+set -euo pipefail
+
+PAYLOAD_TMP="$SESSION_ROOT/.evolve-receipt.payload.json"
+OUT_PATH="$SESSION_ROOT/evolve-receipt.json"
+
+# Write the legacy payload JSON (composed from session.yaml + results.tsv per
+# the schema above) to PAYLOAD_TMP. Outcome is null at this stage.
+
+# Resolve PROJECT_ROOT locally — Bash-tool calls are stateless across
+# invocations (handoff §4 round-1 W2 + Round-1 C1 lesson).
+PROJECT_ROOT="${PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+
+# Re-detect `.deep-review/recurring-findings.json` at finish time (Round-1
+# C1 fix — Stage 3.5 in init.md does NOT persist this state to session.yaml,
+# because session.yaml does not exist at A.1 time). The wrap helper applies
+# its own identity gate (producer=deep-review, artifact_kind=
+# recurring-findings, schema.name match, ULID format), so passing a path
+# that is foreign-producer or legacy is safe — chain just skips.
+REC_PATH="$PROJECT_ROOT/.deep-review/recurring-findings.json"
+
+WRAP_ARGS=(
+  --artifact-kind evolve-receipt
+  --payload-file "$PAYLOAD_TMP"
+  --output "$OUT_PATH"
+)
+SESSION_ID=$(grep '^session_id:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^session_id:[[:space:]]*//; s/"//g')
+[ -n "$SESSION_ID" ] && WRAP_ARGS+=(--session-id "$SESSION_ID")
+[ -f "$REC_PATH" ] && WRAP_ARGS+=(--source-recurring-findings "$REC_PATH")
+
+if node "$CLAUDE_PLUGIN_ROOT/hooks/scripts/wrap-evolve-envelope.js" "${WRAP_ARGS[@]}"; then
+  rm -f "$PAYLOAD_TMP"
+else
+  echo "wrap-evolve-envelope failed — preserving $PAYLOAD_TMP for retry; re-run this section to retry." >&2
+  exit 1
+fi
+```
+
+The helper:
+- Generates `envelope.run_id` (ULID), sets `producer = "deep-evolve"`,
+  `artifact_kind = "evolve-receipt"`, `schema.name = "evolve-receipt"`.
+- Sets `envelope.parent_run_id` from the consumed recurring-findings envelope's
+  `run_id` (handoff §3.3 cross-plugin chain) when `--source-recurring-findings`
+  is passed and the file is itself an envelope (loose+strict gate via
+  `isValidEnvelope`).
+- Adds `recurring-findings.json` path to `envelope.provenance.source_artifacts[]`
+  (with its `run_id` when envelope-wrapped, path-only when legacy).
+- **Atomic write**: writes to `<output>.tmp.<pid>.<ts>` then `fs.renameSync` to
+  the final path so concurrent finishers / mid-write interruption never leave
+  a truncated JSON. (handoff §4 round-1 C1 lesson.)
+
+### Outcome update (post user-selection)
+
+After the user chooses the apply path, update `payload.outcome` **in place**
+to preserve the envelope wrapper. **Each apply-path branch below sets its
+own `OUTCOME_VALUE`** before invoking this snippet. The snippet is
+**self-contained** — it re-resolves `$SESSION_ROOT`-relative paths locally
+and asserts `$OUTCOME_VALUE` was set by the caller.
+
+```bash
+set -euo pipefail
+
+# Round-2 deep-review R2-3 (Codex adversarial medium): make the snippet
+# stateless-safe. Bash-tool invocations don't preserve env vars between
+# calls (handoff §4 W2), so re-resolve locally rather than relying on
+# variables from earlier blocks in this protocol.
+SESSION_ROOT="${SESSION_ROOT:?SESSION_ROOT must be set by caller — derive from session.yaml or env}"
+OUT_PATH="$SESSION_ROOT/evolve-receipt.json"
+: "${OUTCOME_VALUE:?OUTCOME_VALUE must be set by the apply-path branch (e.g., OUTCOME_VALUE=merged)}"
+
+# Distinct prefix from wrap helper's `<output>.tmp.<pid>.<ts>` so a future
+# residue scanner can attribute lingering temps correctly.
+TMP_OUT="$OUT_PATH.tmp.outcome.$$.$(date +%s)"
+if jq --arg o "$OUTCOME_VALUE" '.payload.outcome = $o' "$OUT_PATH" > "$TMP_OUT"; then
+  mv "$TMP_OUT" "$OUT_PATH"
+else
+  # Round-1 deep-review W2 (Opus): jq failure left $TMP_OUT residue
+  # because `&&` short-circuited mv but never unlinked the partial output.
+  rm -f "$TMP_OUT"
+  echo "outcome update failed; receipt unchanged at $OUT_PATH" >&2
+  exit 1
+fi
+```
+
+> **Why**: the envelope's `run_id` and `generated_at` should NOT change once
+> emitted — only the payload mutates. `jq` + atomic rename achieves this
+> without re-running the wrap helper. Explicit `rm -f` on jq failure
+> prevents `.tmp.outcome.*` residue accumulating across retries. The
+> `${VAR:?msg}` guards make the snippet fail-fast when the caller forgot
+> to set `OUTCOME_VALUE` (Round-2 R2-3 fix — previously the block opened
+> with `set -u` referencing undefined OUT_PATH and OUTCOME_VALUE).
+
+> **Round-2 deep-review R2-2 (Codex adversarial — design-level)**: the wrap
+> step above re-detects `.deep-review/recurring-findings.json` at finish
+> time. If deep-review regenerates that file mid-session, the chained
+> `parent_run_id` reflects the **most-recent upstream state** at finish,
+> not necessarily the version Stage 3.5 consumed for harness biasing. This
+> matches the suite spec wording (`parent_run_id = recurring-findings.run_id`,
+> no temporal binding specified) and is consistent with deep-work's pattern
+> for evolve-insights re-detection in `gather-signals.sh`. A consumption-
+> bound snapshot (writing the consumed run_id at A.3 Step 4 to a session-
+> local file and using that here) would tighten the contract; tracked as
+> a follow-up since it requires init.md A.3 restructuring.
 
 **Completion hooks**:
 - `session-helper.sh append_sessions_jsonl finished <id> --status=completed --outcome=<outcome> ...`
@@ -194,7 +324,11 @@ Execute the chosen option using `session.yaml.lineage.current_branch` for the br
 - **branch 유지 (나중에 결정)**: Set `outcome = "kept"` in receipt. No action; inform user of branch name (`session.yaml.lineage.current_branch`).
 - **폐기 (변경사항 삭제)**: Set `outcome = "discarded"` in receipt. `git checkout main && git branch -D <session.yaml.lineage.current_branch>`
 
-After executing, write the updated `outcome` value back to `$SESSION_ROOT/evolve-receipt.json`.
+After executing, write the updated `outcome` value back to
+`$SESSION_ROOT/evolve-receipt.json` using the **in-place `payload.outcome`
+edit** snippet shown above ("Outcome update (post user-selection)") — do NOT
+re-run the wrap helper, as that would mint a fresh `envelope.run_id` and break
+trace continuity for any consumer that already harvested the original.
 
 ## Deep-Review Integration
 
