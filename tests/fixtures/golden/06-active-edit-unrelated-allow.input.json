@@ -1,0 +1,9 @@
+{
+  "description": "active experiment + Edit on unrelated file (not in protected list) → allow",
+  "state": {
+    "session_id": "s-active",
+    "status": "active"
+  },
+  "tool_name": "Edit",
+  "tool_input": { "file_path": "{{PROJECT_ROOT}}/src/feature.py" }
+}

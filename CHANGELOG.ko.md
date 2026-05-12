@@ -1,5 +1,58 @@
 # 변경 이력
 
+## [3.3.1] — 2026-05-12 (M5.5 #3 protect-readonly hook golden test)
+
+`hooks/scripts/protect-readonly.sh`에 대한 회귀 보호를 추가하는 패치 릴리스.
+claude-deep-work PR #29 (`tests/phase-guard-golden.test.js`)가 정립한
+M5.5 #3 golden-fixture 패턴을 차용하여, PreToolUse 훅의 계약
+(exit code + decision JSON + reason 정규식)을 도구 × 세션 상태 × 메타 모드
+조합에 대해 고정한다. 향후 훅 수정 시 allow/block 판정이 조용히 뒤집히는
+회귀를 방지한다. 훅 자체의 동작 변경은 없음.
+
+Suite plan 참고:
+`claude-deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-tests-handoff.md` §2 #3.
+
+### Added
+
+- **`hooks/scripts/test-helpers/run-protect-readonly.js`** — node:test 도우미.
+  훅을 spawn하기 전에 호스트 누출 위험이 있는 env 변수
+  (`CLAUDE_TOOL_USE_TOOL_NAME`, `CLAUDE_TOOL_NAME`, `DEEP_EVOLVE_HELPER`,
+  `DEEP_EVOLVE_META_MODE`, `DEEP_EVOLVE_SEAL_PREPARE`)를 스크럽한 뒤,
+  fixture의 `tool_input` JSON을 stdin으로 인코딩한다. `scrubHostEnv()`,
+  `runProtectReadonly()`, `parseGuardOutput()` export. deep-work의
+  `run-phase-guard.js`와 형제 패턴.
+- **`tests/protect-readonly-golden.test.js`** — node:test 드라이버.
+  `tests/fixtures/golden/` 하위의 `<name>.{input,expected}.json` 페어를
+  basename으로 발견하고, `fs.mkdtempSync()` 안에 `.deep-evolve/<session_id>/`
+  네임스페이스를 머터리얼라이즈한 뒤 훅을 spawn하여 exit code + decision
+  + reason 정규식을 fixture별로 검증한다. 페어 한쪽이 누락되면 로드 시점에
+  큰 소리로 실패한다.
+- **`tests/fixtures/golden/`** — 8 시나리오 코퍼스:
+  - 01 — `.deep-evolve/` 디렉토리 없음 → allow (walk-up early exit)
+  - 02 — `status: initializing` → allow (`status: active`만 보호 트리거)
+  - 03 — active + `prepare.py` Edit → block (harness 봉인)
+  - 04 — active + `program.md` Edit → block
+  - 05 — active + `strategy.yaml` Edit → block
+  - 06 — active + 무관한 파일 Edit → allow
+  - 07 — `DEEP_EVOLVE_META_MODE=prepare_update` + `prepare.py` Edit → allow
+    (Section D 확장 우회)
+  - 08 — `DEEP_EVOLVE_SEAL_PREPARE=1` + Bash `cat prepare.py` → block
+    (shortcut-detection read seal)
+  - 그리고 fixture 스키마와 템플릿 변수
+    (`{{SESSION_ROOT}}`, `{{PROJECT_ROOT}}`)를 문서화한 `README.md`.
+- **`package.json` test 스크립트** — 기존 glob에
+  `tests/protect-readonly-golden.test.js`를 추가 (현재 컨벤션에 맞게
+  파일별 명시 형태 유지).
+
+### Notes
+
+- 각 테스트는 자체 `fs.mkdtempSync()` tmpdir를 생성하고 정리한다.
+  tmpdir 외부에 state 파일이 쓰이지 않는다.
+- 테스트 수: 112 → 120 (+8). 기존 112개 테스트는 변경 없음.
+- Suite handoff 문서는 deep-evolve의 Stop / SessionStart 훅을 추측성으로
+  언급했지만, v3.3.x에는 존재하지 않는다. protect-readonly가 유일한
+  PreToolUse 훅이며, 이 PR의 범위도 정확히 그 훅으로 한정되어 있다.
+
 ## [3.3.0] — 2026-05-12 (M5.7.B Reverse Handoff + Compaction Telemetry)
 
 Cross-plugin handoff + dashboard compaction telemetry milestone의 M5.7.B

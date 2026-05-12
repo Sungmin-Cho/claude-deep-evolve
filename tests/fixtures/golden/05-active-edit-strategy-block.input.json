@@ -1,0 +1,9 @@
+{
+  "description": "active experiment + Edit on strategy.yaml → block",
+  "state": {
+    "session_id": "s-active",
+    "status": "active"
+  },
+  "tool_name": "Edit",
+  "tool_input": { "file_path": "{{SESSION_ROOT}}/strategy.yaml" }
+}

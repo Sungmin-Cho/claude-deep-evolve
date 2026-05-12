@@ -1,6 +1,6 @@
 {
   "name": "@deep-evolve/deep-evolve",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "description": "Autonomous Experimentation Plugin for Claude Code — goal-driven experiment loops with autoresearch methodology",
   "author": "sungmin",
   "license": "MIT",
@@ -29,6 +29,6 @@
     "tests/"
   ],
   "scripts": {
-    "test": "node --test tests/envelope-emit.test.js tests/envelope-chain.test.js tests/handoff-roundtrip.test.js"
+    "test": "node --test tests/envelope-emit.test.js tests/envelope-chain.test.js tests/handoff-roundtrip.test.js tests/protect-readonly-golden.test.js"
   }
 }
