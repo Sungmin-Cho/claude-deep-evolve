@@ -1,5 +1,39 @@
 # 변경 이력
 
+## [3.3.2] — 2026-05-12 (M5.5 #5 interrupted-session 복구 테스트)
+
+### 추가 — M5.5 #5 deep-evolve session-recovery 테스트 (테스트 전용 patch)
+
+신규 `tests/session-recovery.test.js` (9 node:test 케이스) — 인위적으로 손상된 state 에 대해 `session-helper.sh` 의 `resolve_current` 와 `detect_orphan_experiment` 의 dangling-state 계약을 핀한다. M5.5 #5 deep-evolve 수락 갭을 종결.
+
+`resolve_current` 오류 경로 (Tests A–D) + happy path (E):
+
+- A: `.deep-evolve/current.json` 없음 → exit 1 + stderr `current.json missing`.
+- B: `current.json` 의 `session_id: null` (mid-write 크래시) → exit 1 + stderr `session_id null`.
+- C: `current.json` 이 존재하지 않는 session dir 를 참조 (orphan pointer) → exit 1 + stderr `orphan pointer ... session dir missing`.
+- D: session dir 는 존재하지만 `session.yaml` 누락 (atomic-write 계약 위반) → exit 1 + stderr `session.yaml missing`.
+- E: 정상 session → exit 0 + stdout `<sid>\t<root>` (sanity 가드).
+
+`detect_orphan_experiment` 복구 경로 (Tests F–I):
+
+- F: `journal.jsonl` 없음 (신규 session) → exit 0 + empty stdout (no-op).
+- G: resolution 이 없는 orphan committed event → exit 0 + stdout = JSON-quoted commit hash. **기존 계약 quirk 명시** (helper 가 `jq -s` 를 `-r` 없이 사용 → stdout 이 JSON-quoted; consumer `/deep-resume` Step 3.d 가 quoted 형태로 표시). 테스트는 quoted form AND `tr -d '"'`-friendly 단언 모두 핀해서 향후 `-r` 수정이 의도적으로 이루어지도록 한다.
+- H: 모든 committed event 가 매칭 resolution (kept/discarded/evaluated/rollback_completed) 보유 → exit 0 + empty.
+- I: 가장 최근 (last) committed event 만 검사 — 오래된 resolved committed event 가 orphan 으로 오인되지 않음.
+
+테스트 수: 120 → 129 (+9). 프로덕션 코드 변경 없음.
+
+### 변경
+
+- `.claude-plugin/plugin.json` + `package.json` version: 3.3.1 → 3.3.2.
+- `package.json` `scripts.test` glob: `tests/session-recovery.test.js` 추가.
+
+### 노트
+
+- PR #14 (v3.3.1) 위에 stack. 기존 pytest 테스트 (`hooks/scripts/tests/test_session_helper_v3.py`) 는 다른 v3.1 subcommands 를 테스트하지만 `resolve_current` / `detect_orphan_experiment` 의 dangling-state 오류 경로를 다루지 않는다. 본 PR 이 그 갭을 메우고 `npm test` 로 CI 연결.
+
+Spec: `claude-deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-tests-handoff.md` §2 #5 (deep-evolve 행).
+
 ## [3.3.1] — 2026-05-12 (M5.5 #3 protect-readonly hook golden test)
 
 `hooks/scripts/protect-readonly.sh`에 대한 회귀 보호를 추가하는 패치 릴리스.

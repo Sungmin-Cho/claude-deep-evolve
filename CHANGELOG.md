@@ -1,5 +1,39 @@
 # Changelog
 
+## [3.3.2] — 2026-05-12 (M5.5 #5 interrupted-session recovery test)
+
+### Added — M5.5 #5 deep-evolve session-recovery test (test-only patch)
+
+New `tests/session-recovery.test.js` (9 node:test cases) pins the dangling-state contract of `session-helper.sh resolve_current` and `detect_orphan_experiment` against artificially-corrupted state. Closes the M5.5 #5 acceptance gap for deep-evolve.
+
+`resolve_current` error paths (Tests A–D) + happy path (E):
+
+- A: `.deep-evolve/current.json` missing → exit 1 with `current.json missing` stderr.
+- B: `current.json` with `session_id: null` (mid-write crash) → exit 1 with `session_id null` stderr.
+- C: `current.json` references a non-existent session dir (orphan pointer) → exit 1 with `orphan pointer ... session dir missing` stderr.
+- D: session dir exists but `session.yaml` missing (atomic-write contract violated) → exit 1 with `session.yaml missing` stderr.
+- E: valid session → exit 0 + stdout `<sid>\t<root>` (sanity guard).
+
+`detect_orphan_experiment` recovery paths (Tests F–I):
+
+- F: `journal.jsonl` missing (fresh session) → exit 0 + empty stdout (no-op).
+- G: orphan committed event without resolution → exit 0 + stdout = JSON-quoted commit hash. **Documents a pre-existing contract quirk** (helper runs `jq -s` without `-r` → stdout is JSON-quoted; consumer `/deep-resume` Step 3.d displays the quoted form). Test pins both quoted form AND a `tr -d '"'`-friendly assertion so a future `-r` fix is intentional, not silent.
+- H: every committed event has a matching resolution (kept/discarded/evaluated/rollback_completed) → exit 0 + empty.
+- I: only the LAST committed event matters (older resolved committed events are not mistaken for the orphan).
+
+Test count: 120 → 129 (+9). Production code unchanged.
+
+### Changed
+
+- `.claude-plugin/plugin.json` + `package.json` version: 3.3.1 → 3.3.2.
+- `package.json` `scripts.test` glob: added `tests/session-recovery.test.js`.
+
+### Notes
+
+- Stacked on PR #14 (v3.3.1). Existing pytest tests (`hooks/scripts/tests/test_session_helper_v3.py`) test other v3.1 subcommands but do not exercise the dangling-state error paths for `resolve_current` / `detect_orphan_experiment`. This PR fills that gap and CI-wires it via `npm test`.
+
+Spec: `claude-deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-tests-handoff.md` §2 #5 (deep-evolve row).
+
 ## [3.3.1] — 2026-05-12 (M5.5 #3 protect-readonly hook golden test)
 
 Patch release adding regression coverage for `hooks/scripts/protect-readonly.sh`
