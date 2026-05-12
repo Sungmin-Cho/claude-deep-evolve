@@ -148,18 +148,36 @@ function readJson(p) {
   }
 }
 
-function tryReadEnvelopeRunId(filePath) {
+// R2 review fix (Codex adversarial MEDIUM): identity-triplet check before
+// using source's run_id as parent_run_id. Same parent-identity set as
+// emit-handoff.js (handoff or evolve-receipt accepted).
+function tryReadEnvelopeRunId(filePath, expectedIdentities) {
   if (!filePath || !fs.existsSync(filePath)) return null;
   try {
     const obj = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    if (env.isValidEnvelope(obj) && typeof obj.envelope.run_id === 'string') {
-      return obj.envelope.run_id;
+    if (!env.isValidEnvelope(obj)) return null;
+    if (typeof obj.envelope.run_id !== 'string') return null;
+    if (Array.isArray(expectedIdentities) && expectedIdentities.length > 0) {
+      const matches = expectedIdentities.some(
+        (id) =>
+          obj.envelope.producer === id.producer &&
+          obj.envelope.artifact_kind === id.kind &&
+          obj.envelope.schema &&
+          obj.envelope.schema.name === id.kind,
+      );
+      if (!matches) return null;
     }
-    return null;
+    return obj.envelope.run_id;
   } catch (_err) {
     return null;
   }
 }
+
+const DE_PARENT_IDENTITIES = [
+  { producer: 'deep-work', kind: 'handoff' },
+  { producer: 'deep-evolve', kind: 'evolve-receipt' },
+  { producer: 'deep-evolve', kind: 'handoff' },  // reverse handoff chaining back
+];
 
 function splitCsv(s) {
   if (typeof s !== 'string' || s.length === 0) return [];
@@ -266,6 +284,18 @@ function main() {
     payload = buildPayloadFromFlags(args);
   }
 
+  // R2 review fix (Codex review P2): propagate --session-id to payload.session_id
+  // for --payload-file mode (CLI mode already sets via buildPayloadFromFlags).
+  if (
+    args['session-id'] &&
+    payload &&
+    typeof payload === 'object' &&
+    !Array.isArray(payload) &&
+    !payload.session_id
+  ) {
+    payload.session_id = args['session-id'];
+  }
+
   const errors = validateCompactionPayload(payload);
   if (errors.length > 0) {
     process.stderr.write('compaction-state payload validation failed:\n');
@@ -285,7 +315,8 @@ function main() {
   const parentFlag = args['source-parent'] || args['source-evolve-receipt'];
   if (parentFlag) {
     const srPath = path.resolve(process.cwd(), parentFlag);
-    const srRunId = tryReadEnvelopeRunId(srPath);
+    // R2 review fix: identity-strict parent check.
+    const srRunId = tryReadEnvelopeRunId(srPath, DE_PARENT_IDENTITIES);
     sourceArtifacts.push({
       path: parentFlag,
       ...(srRunId ? { run_id: srRunId } : {}),

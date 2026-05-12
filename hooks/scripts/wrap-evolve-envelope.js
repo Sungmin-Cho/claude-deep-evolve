@@ -232,9 +232,18 @@ function main() {
   }
 
   const artifactKind = args['artifact-kind'];
-  if (!env.ALLOWED_ARTIFACT_KINDS.has(artifactKind)) {
+  // R2 review fix (Codex adversarial HIGH): restrict this legacy wrapper to its
+  // original 2 artifact kinds. envelope.js#ALLOWED_ARTIFACT_KINDS was extended
+  // in v3.3.0 to also include 'handoff' and 'compaction-state'; without this
+  // guard, wrap-evolve-envelope.js could mint envelope-valid but domain-invalid
+  // handoff/compaction-state artifacts (it lacks payload-required-field
+  // validation for those kinds). Force callers to use the dedicated
+  // emit-handoff.js / emit-compaction-state.js helpers.
+  const LEGACY_EVOLVE_KINDS = new Set(['evolve-receipt', 'evolve-insights']);
+  if (!LEGACY_EVOLVE_KINDS.has(artifactKind)) {
     usage(
-      `--artifact-kind must be one of ${[...env.ALLOWED_ARTIFACT_KINDS].join(', ')}, got "${artifactKind}"`,
+      `--artifact-kind must be one of ${[...LEGACY_EVOLVE_KINDS].join(', ')}, got "${artifactKind}" ` +
+        '(use emit-handoff.js / emit-compaction-state.js for handoff/compaction-state)',
     );
   }
 

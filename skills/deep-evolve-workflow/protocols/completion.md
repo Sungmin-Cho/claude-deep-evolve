@@ -313,8 +313,14 @@ trace files are discarded.
 ```bash
 set -euo pipefail
 
-# Re-resolve PROJECT_ROOT (handoff §4 W2 — Bash-tool calls are stateless).
+# Re-resolve PROJECT_ROOT + SESSION_ID locally (handoff §4 W2 — Bash-tool calls
+# are stateless across invocations; vars set in earlier blocks do not persist
+# into this block when the LLM runs it as a fresh Bash invocation).
+# R2 review C1 fix (UNANIMOUS — Opus + Codex review × 2 + Codex adversarial):
+# previously SESSION_ID relied on the receipt-wrap block's local var, which
+# does not persist. The fallback `${SESSION_ID:-loop-end}` masked the bug.
 PROJECT_ROOT="${PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+SESSION_ID="${SESSION_ID:-$(grep '^session_id:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^session_id:[[:space:]]*//; s/"//g')}"
 EVOLVE_RECEIPT="$SESSION_ROOT/evolve-receipt.json"
 
 # Flat-dir layout matches dashboard SOURCE_SPECS (.deep-evolve/compaction-states/*.json).
@@ -373,6 +379,11 @@ the evolve-receipt itself.
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+# R2 review C1 fix: re-resolve SESSION_ID locally (Bash-tool calls are stateless).
+# This is required for Tier 2 correlation (current SESSION_ID → forward handoff
+# payload.from.session_id) to work — without it Tier 2 always misses, degrading
+# silently to Tier 3 mtime fallback.
+SESSION_ID="${SESSION_ID:-$(grep '^session_id:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^session_id:[[:space:]]*//; s/"//g')}"
 EVOLVE_RECEIPT="$SESSION_ROOT/evolve-receipt.json"
 HANDOFF_DIR="$PROJECT_ROOT/.deep-evolve/handoffs"
 mkdir -p "$HANDOFF_DIR"

@@ -73,6 +73,13 @@ const VALID_HANDOFF_KINDS = new Set([
   'custom',
 ]);
 
+// R2 review fix (Codex adversarial MEDIUM): direction enforcement for kinds
+// with canonical producer↔producer pairs. Symmetric to deep-work side.
+const KIND_DIRECTIONS = {
+  'phase-5-to-evolve': { from: 'deep-work', to: 'deep-evolve' },
+  'evolve-to-deep-work': { from: 'deep-evolve', to: 'deep-work' },
+};
+
 function usage(extra) {
   if (extra) process.stderr.write(`error: ${extra}\n`);
   process.stderr.write(
@@ -124,18 +131,39 @@ function readJson(p) {
   }
 }
 
-function tryReadEnvelopeRunId(filePath) {
+// R2 review fix (Codex adversarial MEDIUM): identity-triplet check before
+// using source's run_id as parent_run_id. Accept the legitimate upstream
+// envelopes for a deep-evolve reverse handoff: (a) deep-work forward handoff
+// — closes the round-trip; (b) deep-evolve evolve-receipt — fallback chain.
+function tryReadEnvelopeRunId(filePath, expectedIdentities) {
   if (!filePath || !fs.existsSync(filePath)) return null;
   try {
     const obj = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    if (env.isValidEnvelope(obj) && typeof obj.envelope.run_id === 'string') {
-      return obj.envelope.run_id;
+    if (!env.isValidEnvelope(obj)) return null;
+    if (typeof obj.envelope.run_id !== 'string') return null;
+    if (Array.isArray(expectedIdentities) && expectedIdentities.length > 0) {
+      const matches = expectedIdentities.some(
+        (id) =>
+          obj.envelope.producer === id.producer &&
+          obj.envelope.artifact_kind === id.kind &&
+          obj.envelope.schema &&
+          obj.envelope.schema.name === id.kind,
+      );
+      if (!matches) return null;
     }
-    return null;
+    return obj.envelope.run_id;
   } catch (_err) {
     return null;
   }
 }
+
+// Acceptable parent identities for a deep-evolve emit. Forward handoff from
+// deep-work (canonical round-trip closer) + deep-evolve's own evolve-receipt
+// (fallback when no forward handoff exists per completion.md M5.7.B).
+const DE_PARENT_IDENTITIES = [
+  { producer: 'deep-work', kind: 'handoff' },
+  { producer: 'deep-evolve', kind: 'evolve-receipt' },
+];
 
 function validateHandoffPayload(payload) {
   const errors = [];
@@ -157,6 +185,31 @@ function validateHandoffPayload(payload) {
       `payload.handoff_kind must be one of ${[...VALID_HANDOFF_KINDS].join(', ')}, ` +
         `got ${JSON.stringify(payload.handoff_kind)}`,
     );
+  }
+  // R2 review fix: direction enforcement (symmetric to deep-work side).
+  if (
+    typeof payload.handoff_kind === 'string' &&
+    KIND_DIRECTIONS[payload.handoff_kind] &&
+    payload.from &&
+    typeof payload.from === 'object' &&
+    !Array.isArray(payload.from) &&
+    payload.to &&
+    typeof payload.to === 'object' &&
+    !Array.isArray(payload.to)
+  ) {
+    const expected = KIND_DIRECTIONS[payload.handoff_kind];
+    if (payload.from.producer && payload.from.producer !== expected.from) {
+      errors.push(
+        `payload.from.producer for handoff_kind="${payload.handoff_kind}" must be ` +
+          `"${expected.from}", got ${JSON.stringify(payload.from.producer)}`,
+      );
+    }
+    if (payload.to.producer && payload.to.producer !== expected.to) {
+      errors.push(
+        `payload.to.producer for handoff_kind="${payload.handoff_kind}" must be ` +
+          `"${expected.to}", got ${JSON.stringify(payload.to.producer)}`,
+      );
+    }
   }
   if (
     'from' in payload &&
@@ -201,6 +254,19 @@ function main() {
   const outputPath = path.resolve(process.cwd(), args['output']);
   const payload = readJson(payloadPath);
 
+  // R2 review fix (Codex review P2): propagate --session-id to payload.session_id
+  // when payload doesn't define it. Dashboard drill-down counts unique sessions
+  // from this payload field.
+  if (
+    args['session-id'] &&
+    payload &&
+    typeof payload === 'object' &&
+    !Array.isArray(payload) &&
+    !payload.session_id
+  ) {
+    payload.session_id = args['session-id'];
+  }
+
   const errors = validateHandoffPayload(payload);
   if (errors.length > 0) {
     process.stderr.write('handoff payload validation failed:\n');
@@ -226,7 +292,8 @@ function main() {
   const parentFlag = args['source-parent'] || args['source-evolve-receipt'];
   if (parentFlag) {
     const srPath = path.resolve(process.cwd(), parentFlag);
-    const srRunId = tryReadEnvelopeRunId(srPath);
+    // R2 review fix: require parent to be a recognized envelope type.
+    const srRunId = tryReadEnvelopeRunId(srPath, DE_PARENT_IDENTITIES);
     sourceArtifacts.push({
       path: parentFlag,
       ...(srRunId ? { run_id: srRunId } : {}),
@@ -284,6 +351,8 @@ if (require.main === module) {
 module.exports = {
   HANDOFF_REQUIRED,
   VALID_HANDOFF_KINDS,
+  KIND_DIRECTIONS,
+  DE_PARENT_IDENTITIES,
   validateHandoffPayload,
   tryReadEnvelopeRunId,
 };

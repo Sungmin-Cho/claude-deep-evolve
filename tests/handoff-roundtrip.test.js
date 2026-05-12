@@ -36,6 +36,9 @@ const {
   validateHandoffPayload,
   HANDOFF_REQUIRED,
   VALID_HANDOFF_KINDS,
+  KIND_DIRECTIONS,
+  DE_PARENT_IDENTITIES,
+  tryReadEnvelopeRunId,
 } = require('../hooks/scripts/emit-handoff.js');
 const {
   validateCompactionPayload,
@@ -236,13 +239,81 @@ describe('emit-handoff — HANDOFF_REQUIRED matches dashboard contract', () => {
     );
   });
 
-  it('accepts every schema-enum handoff_kind value', () => {
+  it('accepts every schema-enum handoff_kind value with matching direction', () => {
+    // R2 review fix: direction enforcement requires matching from/to producers
+    // for direction-bound kinds.
     for (const kind of VALID_HANDOFF_KINDS) {
       const payload = makeReverseHandoffPayload();
       payload.handoff_kind = kind;
+      if (KIND_DIRECTIONS[kind]) {
+        payload.from.producer = KIND_DIRECTIONS[kind].from;
+        payload.to.producer = KIND_DIRECTIONS[kind].to;
+      }
       const errors = validateHandoffPayload(payload);
       assert.deepEqual(errors, [], `${kind} should be valid: ${errors.join(';')}`);
     }
+  });
+
+  // R2 review fix (Codex adversarial MEDIUM): direction enforcement.
+  it('rejects evolve-to-deep-work with wrong from.producer (R2)', () => {
+    const payload = makeReverseHandoffPayload();
+    payload.from.producer = 'deep-work';  // wrong — should be deep-evolve
+    const errors = validateHandoffPayload(payload);
+    assert.ok(
+      errors.some((e) => /from\.producer.*must be "deep-evolve"/.test(e)),
+      errors.join(';'),
+    );
+  });
+
+  it('rejects evolve-to-deep-work with wrong to.producer (R2)', () => {
+    const payload = makeReverseHandoffPayload();
+    payload.to.producer = 'deep-evolve';  // wrong — should be deep-work
+    const errors = validateHandoffPayload(payload);
+    assert.ok(
+      errors.some((e) => /to\.producer.*must be "deep-work"/.test(e)),
+      errors.join(';'),
+    );
+  });
+
+  it('does not enforce direction for custom / slice-to-slice', () => {
+    const payload = makeReverseHandoffPayload();
+    payload.handoff_kind = 'custom';
+    payload.from.producer = 'deep-evolve';
+    payload.to.producer = 'deep-evolve';  // intentional same-producer
+    assert.deepEqual(validateHandoffPayload(payload), []);
+  });
+
+  // R2 review fix (Codex adversarial MEDIUM): tryReadEnvelopeRunId identity check.
+  it('tryReadEnvelopeRunId rejects foreign envelope (R2)', () => {
+    const dir = tmpDir();
+    // Build a deep-wiki page envelope (foreign).
+    const foreign = {
+      $schema: 'https://example/envelope.schema.json',
+      schema_version: '1.0',
+      envelope: {
+        producer: 'deep-wiki',
+        producer_version: '1.5.0',
+        artifact_kind: 'index',
+        run_id: '01JTKGZQ7NABCDEFGHJKMNPQRS',
+        generated_at: new Date().toISOString(),
+        schema: { name: 'index', version: '1.0' },
+        git: { head: 'abc1234', branch: 'main', dirty: false },
+        provenance: { source_artifacts: [], tool_versions: { node: 'v20' } },
+      },
+      payload: { schema_version: '1.0', pages: [] },
+    };
+    const foreignPath = path.join(dir, 'foreign.json');
+    writeJson(foreignPath, foreign);
+
+    const result = tryReadEnvelopeRunId(foreignPath, DE_PARENT_IDENTITIES);
+    assert.equal(result, null, 'foreign envelope must not yield a run_id');
+  });
+
+  it('tryReadEnvelopeRunId accepts deep-work forward handoff as parent (R2)', () => {
+    const dir = tmpDir();
+    const fwd = makeForwardHandoffEnvelope(dir);
+    const result = tryReadEnvelopeRunId(fwd.path, DE_PARENT_IDENTITIES);
+    assert.equal(result, fwd.runId);
   });
 
   it('VALID_HANDOFF_KINDS contains all 5 schema enum values', () => {
