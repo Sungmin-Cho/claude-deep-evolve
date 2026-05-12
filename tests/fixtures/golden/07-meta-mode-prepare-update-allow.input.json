@@ -1,0 +1,10 @@
+{
+  "description": "DEEP_EVOLVE_META_MODE=prepare_update + Edit on prepare.py → allow (Section D expansion bypass)",
+  "state": {
+    "session_id": "s-active",
+    "status": "active"
+  },
+  "tool_name": "Edit",
+  "tool_input": { "file_path": "{{SESSION_ROOT}}/prepare.py" },
+  "env": { "DEEP_EVOLVE_META_MODE": "prepare_update" }
+}

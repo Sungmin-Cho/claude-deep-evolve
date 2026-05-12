@@ -1,5 +1,58 @@
 # Changelog
 
+## [3.3.1] — 2026-05-12 (M5.5 #3 protect-readonly hook golden test)
+
+Patch release adding regression coverage for `hooks/scripts/protect-readonly.sh`
+via the M5.5 #3 golden-fixture pattern established by claude-deep-work PR #29
+(`tests/phase-guard-golden.test.js`). Pins the contract of the PreToolUse
+hook — exit code + decision JSON + reason regex — across the representative
+tool × session-state × meta-mode matrix so future hook edits can't silently
+flip allow/block decisions. No behavior change in the hook itself.
+
+Suite plan reference:
+`claude-deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-tests-handoff.md` §2 #3.
+
+### Added
+
+- **`hooks/scripts/test-helpers/run-protect-readonly.js`** — node:test
+  helper that scrubs host-leakable env vars (`CLAUDE_TOOL_USE_TOOL_NAME`,
+  `CLAUDE_TOOL_NAME`, `DEEP_EVOLVE_HELPER`, `DEEP_EVOLVE_META_MODE`,
+  `DEEP_EVOLVE_SEAL_PREPARE`) before spawning the hook, then encodes the
+  fixture's `tool_input` JSON onto stdin. Exports `scrubHostEnv()`,
+  `runProtectReadonly()`, `parseGuardOutput()`. Sibling pattern to
+  deep-work's `run-phase-guard.js`.
+- **`tests/protect-readonly-golden.test.js`** — node:test driver that
+  discovers `<name>.{input,expected}.json` pairs under
+  `tests/fixtures/golden/`, materializes the `.deep-evolve/<session_id>/`
+  namespace inside `fs.mkdtempSync()`, spawns the hook, and asserts
+  exit code + decision + reason regex per fixture. Fails loud at load
+  time if either half of a pair is missing.
+- **`tests/fixtures/golden/`** — 8-scenario corpus covering:
+  - 01 — no `.deep-evolve/` dir → allow (walk-up early exit)
+  - 02 — `status: initializing` → allow (only `status: active` triggers protection)
+  - 03 — active + Edit `prepare.py` → block (harness sealed)
+  - 04 — active + Edit `program.md` → block
+  - 05 — active + Edit `strategy.yaml` → block
+  - 06 — active + Edit unrelated file → allow
+  - 07 — `DEEP_EVOLVE_META_MODE=prepare_update` + Edit `prepare.py` → allow
+    (Section D expansion bypass)
+  - 08 — `DEEP_EVOLVE_SEAL_PREPARE=1` + Bash `cat prepare.py` → block
+    (shortcut-detection read seal)
+  - Plus `README.md` documenting the fixture schema + template variables
+    (`{{SESSION_ROOT}}`, `{{PROJECT_ROOT}}`).
+- **`package.json` test script** — added
+  `tests/protect-readonly-golden.test.js` to the existing glob (kept
+  explicit per-file form to match current convention).
+
+### Notes
+
+- Each test creates and tears down its own `fs.mkdtempSync()` tmpdir; no
+  state files are written outside that tmpdir.
+- Test count: 112 → 120 (+8). Existing 112 tests unchanged.
+- The suite handoff doc speculated about Stop / SessionStart hooks for
+  deep-evolve. They do not exist in v3.3.x — protect-readonly is the only
+  PreToolUse hook. Scope is correctly limited to that hook here.
+
 ## [3.3.0] — 2026-05-12 (M5.7.B Reverse Handoff + Compaction Telemetry)
 
 Minor release adopting the M5.7.B leg of the cross-plugin handoff +

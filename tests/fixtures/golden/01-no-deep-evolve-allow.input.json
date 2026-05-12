@@ -1,0 +1,5 @@
+{
+  "description": "no .deep-evolve/ dir — hook walks up + finds nothing → allow",
+  "tool_name": "Edit",
+  "tool_input": { "file_path": "/tmp/anything.py" }
+}

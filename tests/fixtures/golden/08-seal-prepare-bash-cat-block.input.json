@@ -1,0 +1,10 @@
+{
+  "description": "DEEP_EVOLVE_SEAL_PREPARE=1 + Bash `cat prepare.py` → block (shortcut-detection seal)",
+  "state": {
+    "session_id": "s-active",
+    "status": "active"
+  },
+  "tool_name": "Bash",
+  "tool_input": { "command": "cat {{SESSION_ROOT}}/prepare.py" },
+  "env": { "DEEP_EVOLVE_SEAL_PREPARE": "1" }
+}

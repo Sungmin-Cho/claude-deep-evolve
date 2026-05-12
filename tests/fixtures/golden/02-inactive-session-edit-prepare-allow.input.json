@@ -1,0 +1,9 @@
+{
+  "description": "session.yaml status=initializing — Edit on prepare.py passes through",
+  "state": {
+    "session_id": "s-inactive",
+    "status": "initializing"
+  },
+  "tool_name": "Edit",
+  "tool_input": { "file_path": "{{SESSION_ROOT}}/prepare.py" }
+}
