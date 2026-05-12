@@ -301,6 +301,153 @@ fi
 > local file and using that here) would tighten the contract; tracked as
 > a follow-up since it requires init.md A.3 restructuring.
 
+## M5.7.B — Loop-epoch-end compaction-state emit (v3.3.0+)
+
+**Always runs** after the evolve-receipt is wrapped (above) and before the
+apply-path branch. Emits an envelope-wrapped `compaction-state.json` so the
+dashboard's `suite.compaction.frequency` + `suite.compaction.preserved_artifact_ratio`
+metrics see this epoch's compaction event. Strategy is `receipt-only` —
+the evolve-receipt subsumes intermediate experiment state, intermediate
+trace files are discarded.
+
+```bash
+set -euo pipefail
+
+# Re-resolve PROJECT_ROOT (handoff §4 W2 — Bash-tool calls are stateless).
+PROJECT_ROOT="${PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+EVOLVE_RECEIPT="$SESSION_ROOT/evolve-receipt.json"
+
+# Flat-dir layout matches dashboard SOURCE_SPECS (.deep-evolve/compaction-states/*.json).
+CS_DIR="$PROJECT_ROOT/.deep-evolve/compaction-states"
+mkdir -p "$CS_DIR"
+CS_TS="$(date -u +%Y%m%dT%H%M%SZ)"
+CS_OUT="$CS_DIR/${CS_TS}-${SESSION_ID:-loop-end}.json"
+
+# Collect discarded epoch trace files (best-effort; missing dirs OK).
+DISCARDED=""
+for d in "$SESSION_ROOT/code-archive" "$SESSION_ROOT/strategy-archive"; do
+  [ -d "$d" ] || continue
+  # Comma-separated list of immediate subdirs that hold per-epoch traces.
+  for sub in "$d"/*/; do
+    [ -d "$sub" ] || continue
+    DISCARDED="${DISCARDED:+$DISCARDED,}${sub%/}"
+  done
+done
+
+CS_ARGS=(
+  --trigger loop-epoch-end
+  --output "$CS_OUT"
+  --preserved "$EVOLVE_RECEIPT"
+  --strategy receipt-only
+  --source-parent "$EVOLVE_RECEIPT"
+)
+[ -n "${SESSION_ID:-}" ] && CS_ARGS+=(--session-id "$SESSION_ID")
+[ -n "$DISCARDED" ] && CS_ARGS+=(--discarded "$DISCARDED")
+
+if node "$CLAUDE_PLUGIN_ROOT/hooks/scripts/emit-compaction-state.js" "${CS_ARGS[@]}"; then
+  echo "✓ compaction-state emitted → $CS_OUT"
+else
+  echo "⚠️ compaction-state emit failed (non-fatal); receipt already finalized." >&2
+fi
+```
+
+This emit MUST NOT block the apply path on failure — `compaction-state.json`
+is dashboard telemetry, not a control artifact. Treat any non-zero exit as a
+loggable warning and continue.
+
+## M5.7.B — Optional reverse-handoff emit (v3.3.0+)
+
+**Triggers** (LLM decides):
+- This epoch ended on a **plateau** (`session.yaml.outer_loop.terminated_by == "plateau"`)
+  or **budget exhaustion** AND `session.yaml.metric.best` falls short of the
+  user-stated target → strongly recommend handing back to deep-work for
+  structural refactor.
+- Or user opts in via menu (added below the existing AskUserQuestion).
+
+When the reverse-handoff branch fires, build a handoff payload chaining
+`parent_run_id` to the upstream **forward handoff** if one exists (so the
+dashboard's `suite.handoff.roundtrip_success_rate` reads 1.0), otherwise to
+the evolve-receipt itself.
+
+```bash
+set -euo pipefail
+
+PROJECT_ROOT="${PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+EVOLVE_RECEIPT="$SESSION_ROOT/evolve-receipt.json"
+HANDOFF_DIR="$PROJECT_ROOT/.deep-evolve/handoffs"
+mkdir -p "$HANDOFF_DIR"
+HANDOFF_TS="$(date -u +%Y%m%dT%H%M%SZ)"
+HANDOFF_OUT="$HANDOFF_DIR/${HANDOFF_TS}-${SESSION_ID:-reverse}.json"
+
+# Find the upstream forward handoff to chain to. deep-work writes these under
+# .deep-work/handoffs/; pick the most recent matching this session_id if
+# present (session.yaml.transfer.source_id), else fall back to evolve-receipt
+# as the chain parent.
+FWD_HANDOFF=""
+if [ -d "$PROJECT_ROOT/.deep-work/handoffs" ]; then
+  # Take the most-recent handoff whose to.producer == deep-evolve.
+  FWD_HANDOFF=$(node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const dir = process.argv[1];
+    let cands = [];
+    try { cands = fs.readdirSync(dir).filter(f => f.endsWith(".json")); } catch { process.exit(0); }
+    let best = null;
+    for (const f of cands) {
+      try {
+        const obj = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+        if (obj && obj.envelope && obj.envelope.producer === "deep-work"
+            && obj.envelope.artifact_kind === "handoff"
+            && obj.payload && obj.payload.to && obj.payload.to.producer === "deep-evolve") {
+          const stat = fs.statSync(path.join(dir, f));
+          if (!best || stat.mtimeMs > best.mtime) best = { f: path.join(dir, f), mtime: stat.mtimeMs };
+        }
+      } catch {}
+    }
+    if (best) console.log(best.f);
+  ' "$PROJECT_ROOT/.deep-work/handoffs" 2>/dev/null || true)
+fi
+
+CHAIN_TARGET="${FWD_HANDOFF:-$EVOLVE_RECEIPT}"
+
+# Build the reverse-handoff payload. SKILL composes this from session.yaml +
+# evolve-receipt + meta-analyses.
+HANDOFF_PAYLOAD="$SESSION_ROOT/.reverse-handoff.payload.json"
+# (the LLM writes the payload JSON to HANDOFF_PAYLOAD per the schema; see
+# `claude-deep-suite/schemas/handoff.schema.json`. handoff_kind MUST be
+# "evolve-to-deep-work"; from.producer = "deep-evolve"; to.producer = "deep-work".)
+
+H_ARGS=(
+  --payload-file "$HANDOFF_PAYLOAD"
+  --output "$HANDOFF_OUT"
+  --source-parent "$CHAIN_TARGET"
+)
+[ -n "${SESSION_ID:-}" ] && H_ARGS+=(--session-id "$SESSION_ID")
+
+if node "$CLAUDE_PLUGIN_ROOT/hooks/scripts/emit-handoff.js" "${H_ARGS[@]}"; then
+  rm -f "$HANDOFF_PAYLOAD"
+  echo "✓ reverse handoff emitted → $HANDOFF_OUT (chains to: $CHAIN_TARGET)"
+else
+  echo "⚠️ reverse handoff emit failed — payload preserved at $HANDOFF_PAYLOAD" >&2
+fi
+```
+
+The emit-handoff helper validates the payload against
+`HANDOFF_REQUIRED = [schema_version, handoff_kind, from, to, summary, next_action_brief]`
+before writing. Missing fields → exit 1 with the field name and the payload
+file is preserved for retry. The identity-triplet (`producer = deep-evolve`,
+`artifact_kind = handoff`, `schema.name = handoff`, `schema.version = "1.0"`)
+is set automatically and satisfies the dashboard's `unwrapStrict`.
+
+**Round-trip closure semantics**: when `FWD_HANDOFF` is found, the dashboard
+sees `reverse-handoff.envelope.parent_run_id === forward-handoff.envelope.run_id`
+and counts this as a successful round-trip — `suite.handoff.roundtrip_success_rate`
+trends toward 1.0. When no forward handoff exists (deep-evolve session started
+directly without a deep-work handoff), the chain falls back to the
+evolve-receipt; the dashboard sees this as an "orphan" reverse handoff (no
+counterpart) and counts it as a failed round-trip in that metric — which is
+the correct semantics.
+
 **Completion hooks**:
 - `session-helper.sh append_sessions_jsonl finished <id> --status=completed --outcome=<outcome> ...`
 - `session-helper.sh append_meta_archive_local <id>`

@@ -19,8 +19,12 @@
  *   isValidEnvelope(obj)            boolean — strict (also requires payload object)
  *
  * Identity contract: producer === 'deep-evolve', artifact_kind ∈ {evolve-receipt,
- * evolve-insights}, schema.name === artifact_kind. unwrapEnvelope() enforces all
- * three (handoff §4 round-4 "envelope identity guards").
+ * evolve-insights, handoff, compaction-state}, schema.name === artifact_kind.
+ * unwrapEnvelope() enforces all three (handoff §4 round-4 "envelope identity
+ * guards"). 'handoff' and 'compaction-state' added in v3.3.0 for M5.7 reverse
+ * cross-plugin handoff (evolve-to-deep-work) + dashboard compaction telemetry;
+ * cf. claude-deep-suite/schemas/handoff.schema.json +
+ * schemas/compaction-state.schema.json.
  */
 
 const fs = require('node:fs');
@@ -29,7 +33,9 @@ const { execFileSync } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
 
 const PLUGIN_NAME = 'deep-evolve';
-const ALLOWED_ARTIFACT_KINDS = Object.freeze(new Set(['evolve-receipt', 'evolve-insights']));
+const ALLOWED_ARTIFACT_KINDS = Object.freeze(
+  new Set(['evolve-receipt', 'evolve-insights', 'handoff', 'compaction-state']),
+);
 
 // Crockford's Base32 alphabet (per ULID spec) — excludes I/L/O/U.
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';

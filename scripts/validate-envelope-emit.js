@@ -48,7 +48,15 @@ const GIT_HEAD_RE = /^[a-f0-9]{7,40}$/;
 const SCHEMA_VERSION_RE = /^\d+\.\d+$/;
 
 const PLUGIN_NAME = 'deep-evolve';
-const ALLOWED_KINDS = new Set(['evolve-receipt', 'evolve-insights']);
+// 'handoff' and 'compaction-state' added in v3.3.0 (M5.7 reverse handoff +
+// dashboard compaction telemetry). Schemas live in claude-deep-suite/schemas/
+// {handoff,compaction-state}.schema.json.
+const ALLOWED_KINDS = new Set([
+  'evolve-receipt',
+  'evolve-insights',
+  'handoff',
+  'compaction-state',
+]);
 
 const ROOT_KEYS = new Set(['$schema', 'schema_version', 'envelope', 'payload']);
 const ENVELOPE_KEYS = new Set([

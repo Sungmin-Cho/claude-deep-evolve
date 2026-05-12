@@ -1,5 +1,76 @@
 # Changelog
 
+## [3.3.0] — 2026-05-12 (M5.7.B Reverse Handoff + Compaction Telemetry)
+
+Minor release adopting the M5.7.B leg of the cross-plugin handoff +
+dashboard compaction telemetry milestone documented at
+`claude-deep-suite/docs/superpowers/plans/2026-05-11-m5.7-plugin-adoption-handoff.md`.
+deep-evolve now emits `handoff.json` (`handoff_kind: "evolve-to-deep-work"`,
+chaining `parent_run_id` to an upstream forward handoff to close the
+round-trip) and `compaction-state.json` (`trigger: loop-epoch-end`,
+`strategy: receipt-only`) at each session-completion boundary — the
+canonical deep-evolve compaction event.
+
+### Added
+
+- **`hooks/scripts/emit-handoff.js`** — CLI wrapper for reverse handoff
+  envelopes. Identity-triplet (`producer = "deep-evolve"`, `artifact_kind = "handoff"`,
+  `schema.name = "handoff"`, `schema.version = "1.0"`) set automatically; payload
+  required fields enforced before write (`schema_version`, `handoff_kind`,
+  `from{producer,completed_at}`, `to{producer,intent}`, `summary`,
+  `next_action_brief`) per `claude-deep-suite/schemas/handoff.schema.json`.
+  Flags: `--source-parent` (chains `parent_run_id` from upstream envelope —
+  forward handoff or evolve-receipt), `--source-evolve-receipt` (alias for
+  semantic clarity), `--source` (provenance-only entry).
+- **`hooks/scripts/emit-compaction-state.js`** — CLI wrapper for
+  compaction-state envelopes. Trigger enum validated against suite schema
+  (`phase-transition`, `slice-green`, `loop-epoch-end`, `window-threshold`,
+  `manual`, `session-stop`); strategy enum validated. Two input modes: build
+  payload from CLI flags (`--trigger`, `--preserved`, `--discarded`,
+  `--strategy`, `--pre-tokens`, `--post-tokens`) for protocol-driven emit, OR
+  `--payload-file` for skill-composed emit. Powers dashboard metrics
+  `suite.compaction.frequency` + `suite.compaction.preserved_artifact_ratio`.
+- **`skills/deep-evolve-workflow/protocols/completion.md`** — new
+  `M5.7.B — Loop-epoch-end compaction-state emit` section runs after evolve-receipt
+  wrap, before apply-path branch. Always-emit on completion to feed dashboard.
+  Preserved: evolve-receipt; discarded: code-archive + strategy-archive
+  subdirectories. Strategy: receipt-only.
+- **`skills/deep-evolve-workflow/protocols/completion.md`** — new
+  `M5.7.B — Optional reverse-handoff emit` section. Auto-detects upstream
+  forward handoff in `.deep-work/handoffs/*.json` (filters by
+  `to.producer === "deep-evolve"`, picks most-recent) and chains `parent_run_id`
+  to it. Falls back to evolve-receipt as chain parent when no forward handoff
+  exists.
+- **`tests/handoff-roundtrip.test.js`** — 14 assertions covering M5.5 #8
+  (deep-evolve half): `HANDOFF_REQUIRED`/`COMPACTION_REQUIRED` identical to
+  dashboard `PAYLOAD_REQUIRED_FIELDS["deep-evolve/{handoff,compaction-state}"]`,
+  reverse-handoff CLI roundtrip producing envelopes that satisfy a mirrored
+  `unwrapStrict`, round-trip closure (`reverse-handoff.envelope.parent_run_id
+  === forward-handoff.envelope.run_id`), trigger enum coverage (6 values),
+  failure paths (missing field → exit 1).
+
+### Changed
+
+- **`hooks/scripts/envelope.js`** — `ALLOWED_ARTIFACT_KINDS` extended from
+  `{evolve-receipt, evolve-insights}` to include `handoff` and `compaction-state`.
+  Existing identity-triplet semantics preserved for evolve-receipt /
+  evolve-insights callers.
+- **`scripts/validate-envelope-emit.js`** — `ALLOWED_KINDS` extended symmetrically
+  so the CI validator accepts the two new envelope kinds.
+
+### Notes
+
+- This release is **producer-only** for the new artifact kinds. deep-evolve
+  does not consume `handoff.json` or `compaction-state.json` from other
+  plugins; the dashboard does. Cross-plugin contract is enforced by
+  `claude-deep-dashboard/lib/suite-collector.js unwrapStrict`.
+- Round-trip closure: when `.deep-work/handoffs/*.json` contains a forward
+  handoff (`producer = "deep-work"`, `to.producer = "deep-evolve"`) matching
+  the current session, the reverse handoff's `parent_run_id` closes it and
+  the dashboard's `suite.handoff.roundtrip_success_rate` rises toward 1.0.
+- See `claude-deep-suite/docs/superpowers/plans/2026-05-11-m5.7-plugin-adoption-handoff.md`
+  §M5.7.B for the M5 acceptance criteria this milestone closes.
+
 ## [3.2.0] — 2026-05-08 (M3 Common Artifact Envelope)
 
 Minor release adopting the M3 cross-plugin envelope contract for both
