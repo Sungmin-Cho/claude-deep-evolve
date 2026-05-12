@@ -30,17 +30,17 @@ canonical deep-evolve compaction event.
   `--strategy`, `--pre-tokens`, `--post-tokens`) for protocol-driven emit, OR
   `--payload-file` for skill-composed emit. Powers dashboard metrics
   `suite.compaction.frequency` + `suite.compaction.preserved_artifact_ratio`.
-- **`skills/deep-evolve-workflow/protocols/completion.md`** — new
-  `M5.7.B — Loop-epoch-end compaction-state emit` section runs after evolve-receipt
+- **`skills/deep-evolve-workflow/protocols/completion.md`** — new section
+  `M5.7.B — Loop-epoch-end compaction-state emit` runs after evolve-receipt
   wrap, before apply-path branch. Always-emit on completion to feed dashboard.
   Preserved: evolve-receipt; discarded: code-archive + strategy-archive
   subdirectories. Strategy: receipt-only.
-- **`skills/deep-evolve-workflow/protocols/completion.md`** — new
-  `M5.7.B — Optional reverse-handoff emit` section. Auto-detects upstream
-  forward handoff in `.deep-work/handoffs/*.json` (filters by
-  `to.producer === "deep-evolve"`, picks most-recent) and chains `parent_run_id`
-  to it. Falls back to evolve-receipt as chain parent when no forward handoff
-  exists.
+- **`skills/deep-evolve-workflow/protocols/completion.md`** — additional
+  section `M5.7.B — Optional reverse-handoff emit`. Auto-detects upstream
+  forward handoff in `.deep-work/handoffs/*.json` with envelope-strict
+  identity-triplet check + symlink containment + tiered correlation
+  (transfer.source_id → session_id match → mtime fallback). Falls back to
+  evolve-receipt as chain parent when no forward handoff exists.
 - **`tests/handoff-roundtrip.test.js`** — 14 assertions covering M5.5 #8
   (deep-evolve half): `HANDOFF_REQUIRED`/`COMPACTION_REQUIRED` identical to
   dashboard `PAYLOAD_REQUIRED_FIELDS["deep-evolve/{handoff,compaction-state}"]`,

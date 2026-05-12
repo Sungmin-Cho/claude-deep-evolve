@@ -27,15 +27,16 @@ round-trip을 닫기 위해 상위 forward handoff에 `parent_run_id` chain) 과
   `manual`, `session-stop`); strategy enum도 검증. 두 입력 모드: protocol-driven
   emit용 CLI 플래그 또는 skill-composed emit용 `--payload-file`. Dashboard 메트릭
   `suite.compaction.frequency` + `suite.compaction.preserved_artifact_ratio`를 구동.
-- **`skills/deep-evolve-workflow/protocols/completion.md`** — `M5.7.B — Loop-epoch-end
-  compaction-state emit` 새 섹션이 evolve-receipt wrap 직후 apply-path 분기
-  전에 실행. 세션 완료 시점에 항상 emit하여 dashboard에 telemetry를 공급.
-  Preserved: evolve-receipt; discarded: code-archive + strategy-archive
-  하위 디렉토리. Strategy: receipt-only.
-- **`skills/deep-evolve-workflow/protocols/completion.md`** — `M5.7.B — Optional
-  reverse-handoff emit` 새 섹션. `.deep-work/handoffs/*.json`에서 상위 forward
-  handoff을 자동 감지 (`to.producer === "deep-evolve"`로 필터, 가장 최근 선택)
-  하고 `parent_run_id`를 chain. forward handoff이 없을 때는 evolve-receipt를
+- **`skills/deep-evolve-workflow/protocols/completion.md`** — 신규 섹션 1:
+  `M5.7.B — Loop-epoch-end compaction-state emit` 가 evolve-receipt wrap 직후
+  apply-path 분기 전에 실행. 세션 완료 시점에 항상 emit하여 dashboard에
+  telemetry를 공급. Preserved: evolve-receipt; discarded: code-archive +
+  strategy-archive 하위 디렉토리. Strategy: receipt-only.
+- **`skills/deep-evolve-workflow/protocols/completion.md`** — 신규 섹션 2:
+  `M5.7.B — Optional reverse-handoff emit` 가 `.deep-work/handoffs/*.json`에서
+  상위 forward handoff을 envelope-strict identity-triplet 검증 + symlink
+  containment + tiered correlation (`transfer.source_id` → `session_id` →
+  mtime fallback)으로 자동 감지. forward handoff이 없으면 evolve-receipt를
   chain parent로 fallback.
 - **`tests/handoff-roundtrip.test.js`** — M5.5 #8 (deep-evolve 절반) 14개 assertion:
   `HANDOFF_REQUIRED`/`COMPACTION_REQUIRED`가 dashboard

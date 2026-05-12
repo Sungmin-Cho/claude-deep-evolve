@@ -35,10 +35,12 @@ const {
 const {
   validateHandoffPayload,
   HANDOFF_REQUIRED,
+  VALID_HANDOFF_KINDS,
 } = require('../hooks/scripts/emit-handoff.js');
 const {
   validateCompactionPayload,
   VALID_TRIGGERS,
+  VALID_STRATEGIES,
   COMPACTION_REQUIRED,
 } = require('../hooks/scripts/emit-compaction-state.js');
 
@@ -83,9 +85,15 @@ function runValidate(file) {
 
 /**
  * Mirror of claude-deep-dashboard/lib/suite-collector.js `unwrapStrict`. Kept
- * zero-dep so deep-evolve doesn't import dashboard code. If dashboard contract
- * drifts, this mirror goes stale — caught by M5.5 #8 cross-plugin CI in suite
- * repo.
+ * zero-dep so deep-evolve doesn't import dashboard code.
+ *
+ * R1 review C3 (Opus): the real dashboard checks `schema.name === expectedKind`
+ * but NOT `schema.version`. The mirror previously was a strict superset (also
+ * checked schema.version === '1.0') which defeats its drift-sensor purpose.
+ * Now a true mirror — additive future evolution (schema.version='1.1') would
+ * pass both real and mirrored checks identically.
+ *
+ * If dashboard contract drifts, M5.5 #8 cross-plugin CI in suite repo catches it.
  */
 function dashboardUnwrapStrict(obj, expectedProducer, expectedKind, requiredFields) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
@@ -103,8 +111,7 @@ function dashboardUnwrapStrict(obj, expectedProducer, expectedKind, requiredFiel
     !env.schema ||
     typeof env.schema !== 'object' ||
     Array.isArray(env.schema) ||
-    env.schema.name !== expectedKind ||
-    env.schema.version !== '1.0'
+    env.schema.name !== expectedKind
   ) {
     return { failure: 'identity-mismatch' };
   }
@@ -216,6 +223,33 @@ describe('emit-handoff — HANDOFF_REQUIRED matches dashboard contract', () => {
   it('rejects array payload (corrupt-payload defense)', () => {
     const errors = validateHandoffPayload([makeReverseHandoffPayload()]);
     assert.ok(errors.some((e) => /non-array/.test(e)), errors.join(';'));
+  });
+
+  // R1 review C2 (Opus): handoff_kind enum validation regression test.
+  it('rejects payload with invalid handoff_kind (R1 C2)', () => {
+    const payload = makeReverseHandoffPayload();
+    payload.handoff_kind = 'evolve-to-deepwork';  // missing hyphen
+    const errors = validateHandoffPayload(payload);
+    assert.ok(
+      errors.some((e) => /handoff_kind must be one of/.test(e)),
+      errors.join(';'),
+    );
+  });
+
+  it('accepts every schema-enum handoff_kind value', () => {
+    for (const kind of VALID_HANDOFF_KINDS) {
+      const payload = makeReverseHandoffPayload();
+      payload.handoff_kind = kind;
+      const errors = validateHandoffPayload(payload);
+      assert.deepEqual(errors, [], `${kind} should be valid: ${errors.join(';')}`);
+    }
+  });
+
+  it('VALID_HANDOFF_KINDS contains all 5 schema enum values', () => {
+    assert.deepEqual(
+      [...VALID_HANDOFF_KINDS].sort(),
+      ['custom', 'evolve-to-deep-work', 'phase-5-to-evolve', 'session-resume', 'slice-to-slice'].sort(),
+    );
   });
 });
 
@@ -341,6 +375,34 @@ describe('emit-compaction-state — required + trigger enum match suite schema',
         'window-threshold',
       ].sort(),
     );
+  });
+
+  // R1 review C2: compaction_strategy enum validation in --payload-file mode.
+  it('rejects payload-file with invalid compaction_strategy (R1 C2)', () => {
+    const errors = validateCompactionPayload({
+      schema_version: '1.0',
+      compacted_at: '2026-05-12T11:00:00Z',
+      trigger: 'loop-epoch-end',
+      preserved_artifact_paths: [],
+      compaction_strategy: 'receipt-onnly',  // typo
+    });
+    assert.ok(
+      errors.some((e) => /compaction_strategy must be one of/.test(e)),
+      errors.join(';'),
+    );
+  });
+
+  it('accepts every schema-enum compaction_strategy value', () => {
+    for (const strategy of VALID_STRATEGIES) {
+      const errors = validateCompactionPayload({
+        schema_version: '1.0',
+        compacted_at: '2026-05-12T11:00:00Z',
+        trigger: 'loop-epoch-end',
+        preserved_artifact_paths: [],
+        compaction_strategy: strategy,
+      });
+      assert.deepEqual(errors, [], `${strategy} should be valid: ${errors.join(';')}`);
+    }
   });
 });
 

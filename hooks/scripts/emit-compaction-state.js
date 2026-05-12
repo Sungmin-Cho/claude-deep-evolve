@@ -233,6 +233,14 @@ function validateCompactionPayload(payload) {
   ) {
     errors.push('payload.preserved_artifact_paths must be array');
   }
+  // R1 review C2: enforce compaction_strategy enum in --payload-file mode too
+  // (buildPayloadFromFlags validates at CLI level but file-mode bypassed it).
+  if ('compaction_strategy' in payload && !VALID_STRATEGIES.has(payload.compaction_strategy)) {
+    errors.push(
+      `payload.compaction_strategy must be one of ${[...VALID_STRATEGIES].join(', ')}, ` +
+        `got ${JSON.stringify(payload.compaction_strategy)}`,
+    );
+  }
   return errors;
 }
 
@@ -267,6 +275,13 @@ function main() {
 
   let parentRunId = args['parent-run-id'] || undefined;
   const sourceArtifacts = [];
+  // R1 review W1: warn on dual supply (--source-parent precedence).
+  if (args['source-parent'] && args['source-evolve-receipt']) {
+    process.stderr.write(
+      'warning: both --source-parent and --source-evolve-receipt set; ' +
+        'using --source-parent (precedence)\n',
+    );
+  }
   const parentFlag = args['source-parent'] || args['source-evolve-receipt'];
   if (parentFlag) {
     const srPath = path.resolve(process.cwd(), parentFlag);
@@ -276,6 +291,14 @@ function main() {
       ...(srRunId ? { run_id: srRunId } : {}),
     });
     if (!parentRunId && srRunId) parentRunId = srRunId;
+    // R1 review W2: stderr-warn on invalid envelope parent.
+    if (!parentRunId && !srRunId && !args['parent-run-id']) {
+      process.stderr.write(
+        `warning: ${args['source-parent'] ? '--source-parent' : '--source-evolve-receipt'} ` +
+          `${parentFlag} is not a valid envelope (parent_run_id omitted; ` +
+          `compaction-state will appear orphan in dashboard view)\n`,
+      );
+    }
   }
 
   let wrapped;

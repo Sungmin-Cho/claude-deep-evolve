@@ -62,6 +62,17 @@ const HANDOFF_REQUIRED = [
   'next_action_brief',
 ];
 
+// R1 review C2: handoff_kind enum from claude-deep-suite/schemas/handoff.schema.json.
+// Previously not enforced — a typo (`evolve-to-deepwork` missing hyphen) would
+// write successfully and pollute dashboard telemetry.
+const VALID_HANDOFF_KINDS = new Set([
+  'phase-5-to-evolve',
+  'evolve-to-deep-work',
+  'slice-to-slice',
+  'session-resume',
+  'custom',
+]);
+
 function usage(extra) {
   if (extra) process.stderr.write(`error: ${extra}\n`);
   process.stderr.write(
@@ -140,6 +151,13 @@ function validateHandoffPayload(payload) {
       `payload.schema_version must be "1.0", got ${JSON.stringify(payload.schema_version)}`,
     );
   }
+  // R1 review C2: enforce handoff_kind enum (was unchecked).
+  if ('handoff_kind' in payload && !VALID_HANDOFF_KINDS.has(payload.handoff_kind)) {
+    errors.push(
+      `payload.handoff_kind must be one of ${[...VALID_HANDOFF_KINDS].join(', ')}, ` +
+        `got ${JSON.stringify(payload.handoff_kind)}`,
+    );
+  }
   if (
     'from' in payload &&
     (payload.from === null ||
@@ -196,6 +214,15 @@ function main() {
   // --source-parent and --source-evolve-receipt are functional aliases (the
   // latter exists for semantic clarity in receipts that chain to upstream
   // evolve-receipts rather than handoffs).
+  //
+  // R1 review W1: warn when both are supplied — short-circuit OR picks
+  // --source-parent silently. Make the precedence explicit at stderr.
+  if (args['source-parent'] && args['source-evolve-receipt']) {
+    process.stderr.write(
+      'warning: both --source-parent and --source-evolve-receipt set; ' +
+        'using --source-parent (precedence)\n',
+    );
+  }
   const parentFlag = args['source-parent'] || args['source-evolve-receipt'];
   if (parentFlag) {
     const srPath = path.resolve(process.cwd(), parentFlag);
@@ -205,6 +232,17 @@ function main() {
       ...(srRunId ? { run_id: srRunId } : {}),
     });
     if (!parentRunId && srRunId) parentRunId = srRunId;
+    // R1 review W2: stderr-warn when parent flag is set but yields no run_id
+    // (path missing, corrupt, or non-envelope). Producer-side: previously
+    // silently emitted with no parent_run_id, indistinguishable from
+    // legitimate "no upstream" case in dashboard's view.
+    if (!parentRunId && !srRunId && !args['parent-run-id']) {
+      process.stderr.write(
+        `warning: ${args['source-parent'] ? '--source-parent' : '--source-evolve-receipt'} ` +
+          `${parentFlag} is not a valid envelope (parent_run_id omitted; round-trip ` +
+          `closure will fail for the dashboard)\n`,
+      );
+    }
   }
 
   if (args.source) {
@@ -245,6 +283,7 @@ if (require.main === module) {
 
 module.exports = {
   HANDOFF_REQUIRED,
+  VALID_HANDOFF_KINDS,
   validateHandoffPayload,
   tryReadEnvelopeRunId,
 };

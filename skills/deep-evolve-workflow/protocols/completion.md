@@ -379,33 +379,79 @@ mkdir -p "$HANDOFF_DIR"
 HANDOFF_TS="$(date -u +%Y%m%dT%H%M%SZ)"
 HANDOFF_OUT="$HANDOFF_DIR/${HANDOFF_TS}-${SESSION_ID:-reverse}.json"
 
-# Find the upstream forward handoff to chain to. deep-work writes these under
-# .deep-work/handoffs/; pick the most recent matching this session_id if
-# present (session.yaml.transfer.source_id), else fall back to evolve-receipt
-# as the chain parent.
+# R1 review C1 (THREE-WAY UNANIMOUS — Opus + Codex review + adversarial):
+# Find the upstream forward handoff to chain to. Filter strictly: identity-triplet
+# (producer=deep-work, artifact_kind=handoff, schema.name=handoff) + to.producer
+# = deep-evolve + (when session correlation is available) session_id match.
+# Falls back to mtime-newest only within the same identity scope.
+#
+# R1 review W4 (Opus): reject symlinks to prevent forged handoffs at fixed
+# paths (matches dashboard's suite-collector.js out-of-boundary-symlink defense).
+#
+# Source correlation: prefer session.yaml.transfer.source_id (records the
+# upstream handoff's source identifier when init.md adopted it). Fall back to
+# session_id matching. If neither correlates, picks mtime-newest within the
+# filtered candidates (still envelope-strict).
+SOURCE_ID=""
+if [ -f "$SESSION_ROOT/session.yaml" ]; then
+  # transfer.source_id may live at top-level transfer block in session.yaml
+  SOURCE_ID=$(grep -E '^  source_id:' "$SESSION_ROOT/session.yaml" 2>/dev/null \
+    | head -1 | sed 's/^  source_id:[[:space:]]*//; s/"//g' || true)
+fi
+
 FWD_HANDOFF=""
 if [ -d "$PROJECT_ROOT/.deep-work/handoffs" ]; then
-  # Take the most-recent handoff whose to.producer == deep-evolve.
   FWD_HANDOFF=$(node -e '
     const fs = require("fs");
     const path = require("path");
     const dir = process.argv[1];
-    let cands = [];
-    try { cands = fs.readdirSync(dir).filter(f => f.endsWith(".json")); } catch { process.exit(0); }
-    let best = null;
-    for (const f of cands) {
-      try {
-        const obj = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
-        if (obj && obj.envelope && obj.envelope.producer === "deep-work"
-            && obj.envelope.artifact_kind === "handoff"
-            && obj.payload && obj.payload.to && obj.payload.to.producer === "deep-evolve") {
-          const stat = fs.statSync(path.join(dir, f));
-          if (!best || stat.mtimeMs > best.mtime) best = { f: path.join(dir, f), mtime: stat.mtimeMs };
-        }
-      } catch {}
+    const sourceId = process.argv[2] || "";
+    const sessionId = process.argv[3] || "";
+    let names = [];
+    try { names = fs.readdirSync(dir).filter(f => f.endsWith(".json")); } catch { process.exit(0); }
+    const cands = [];
+    for (const f of names) {
+      const p = path.join(dir, f);
+      // W4: reject symlinks (containment defense — mirrors dashboard collector).
+      let lstat;
+      try { lstat = fs.lstatSync(p); } catch { continue; }
+      if (lstat.isSymbolicLink()) continue;
+      if (!lstat.isFile()) continue;
+      let obj;
+      try { obj = JSON.parse(fs.readFileSync(p, "utf8")); } catch { continue; }
+      // Identity-triplet check (envelope-strict, mirrors dashboard unwrapStrict).
+      if (!obj || obj.schema_version !== "1.0"
+          || !obj.envelope || typeof obj.envelope !== "object"
+          || obj.envelope.producer !== "deep-work"
+          || obj.envelope.artifact_kind !== "handoff"
+          || !obj.envelope.schema || obj.envelope.schema.name !== "handoff"
+          || !obj.payload || typeof obj.payload !== "object" || Array.isArray(obj.payload)
+          || !obj.payload.to || obj.payload.to.producer !== "deep-evolve") {
+        continue;
+      }
+      const mtime = lstat.mtimeMs;
+      const runId = obj.envelope.run_id || "";
+      const fromSid = (obj.payload.from && obj.payload.from.session_id) || "";
+      cands.push({ p, mtime, runId, fromSid });
     }
-    if (best) console.log(best.f);
-  ' "$PROJECT_ROOT/.deep-work/handoffs" 2>/dev/null || true)
+    if (cands.length === 0) process.exit(0);
+    // Tier 1: exact match on transfer.source_id (handoff envelope run_id OR
+    // upstream session_id).
+    if (sourceId) {
+      const m = cands.find(c => c.runId === sourceId || c.fromSid === sourceId);
+      if (m) { console.log(m.p); process.exit(0); }
+    }
+    // Tier 2: exact match on current session_id (if upstream embedded it).
+    if (sessionId) {
+      const m = cands.find(c => c.fromSid === sessionId);
+      if (m) { console.log(m.p); process.exit(0); }
+    }
+    // Tier 3: mtime-newest within filtered identity scope (last-resort fallback;
+    // emits stderr hint so callers know correlation was weak).
+    cands.sort((a, b) => b.mtime - a.mtime);
+    process.stderr.write(`info: forward-handoff picked by mtime fallback (${cands.length} candidates, no session correlation matched)\n`);
+    console.log(cands[0].p);
+  ' "$PROJECT_ROOT/.deep-work/handoffs" "$SOURCE_ID" "${SESSION_ID:-}" 2>/dev/null || true)
 fi
 
 CHAIN_TARGET="${FWD_HANDOFF:-$EVOLVE_RECEIPT}"
