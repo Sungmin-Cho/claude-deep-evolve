@@ -1,5 +1,73 @@
 # 변경 이력
 
+## [3.3.0] — 2026-05-12 (M5.7.B Reverse Handoff + Compaction Telemetry)
+
+Cross-plugin handoff + dashboard compaction telemetry milestone의 M5.7.B
+한쪽을 채택한 minor 릴리스. 상세 plan은
+`claude-deep-suite/docs/superpowers/plans/2026-05-11-m5.7-plugin-adoption-handoff.md`.
+deep-evolve가 이제 `handoff.json` (`handoff_kind: "evolve-to-deep-work"`,
+round-trip을 닫기 위해 상위 forward handoff에 `parent_run_id` chain) 과
+`compaction-state.json` (`trigger: loop-epoch-end`, `strategy: receipt-only`)
+을 세션 완료 시점에 emit — deep-evolve의 canonical compaction event.
+
+### Added
+
+- **`hooks/scripts/emit-handoff.js`** — reverse handoff envelope을 위한 CLI
+  wrapper. Identity-triplet (`producer = "deep-evolve"`, `artifact_kind = "handoff"`,
+  `schema.name = "handoff"`, `schema.version = "1.0"`) 자동 설정; write 전에
+  payload required 필드 enforce (`schema_version`, `handoff_kind`,
+  `from{producer,completed_at}`, `to{producer,intent}`, `summary`,
+  `next_action_brief`) — `claude-deep-suite/schemas/handoff.schema.json` 기준.
+  플래그: `--source-parent` (상위 envelope(forward handoff 또는 evolve-receipt)
+  로부터 `parent_run_id` chain), `--source-evolve-receipt` (semantic clarity용 alias),
+  `--source` (provenance-only 항목).
+- **`hooks/scripts/emit-compaction-state.js`** — compaction-state envelope을
+  위한 CLI wrapper. Trigger enum을 suite schema 기준으로 검증
+  (`phase-transition`, `slice-green`, `loop-epoch-end`, `window-threshold`,
+  `manual`, `session-stop`); strategy enum도 검증. 두 입력 모드: protocol-driven
+  emit용 CLI 플래그 또는 skill-composed emit용 `--payload-file`. Dashboard 메트릭
+  `suite.compaction.frequency` + `suite.compaction.preserved_artifact_ratio`를 구동.
+- **`skills/deep-evolve-workflow/protocols/completion.md`** — 신규 섹션 1:
+  `M5.7.B — Loop-epoch-end compaction-state emit` 가 evolve-receipt wrap 직후
+  apply-path 분기 전에 실행. 세션 완료 시점에 항상 emit하여 dashboard에
+  telemetry를 공급. Preserved: evolve-receipt; discarded: code-archive +
+  strategy-archive 하위 디렉토리. Strategy: receipt-only.
+- **`skills/deep-evolve-workflow/protocols/completion.md`** — 신규 섹션 2:
+  `M5.7.B — Optional reverse-handoff emit` 가 `.deep-work/handoffs/*.json`에서
+  상위 forward handoff을 envelope-strict identity-triplet 검증 + symlink
+  containment + tiered correlation (`transfer.source_id` → `session_id` →
+  mtime fallback)으로 자동 감지. forward handoff이 없으면 evolve-receipt를
+  chain parent로 fallback.
+- **`tests/handoff-roundtrip.test.js`** — M5.5 #8 (deep-evolve 절반) 14개 assertion:
+  `HANDOFF_REQUIRED`/`COMPACTION_REQUIRED`가 dashboard
+  `PAYLOAD_REQUIRED_FIELDS["deep-evolve/{handoff,compaction-state}"]`와 동일,
+  mirror된 `unwrapStrict`를 만족하는 envelope을 emit하는 reverse-handoff CLI
+  roundtrip, round-trip closure (`reverse-handoff.envelope.parent_run_id ===
+  forward-handoff.envelope.run_id`), trigger enum 6개 값 커버리지, 실패 경로
+  (필수 필드 누락 → exit 1).
+
+### Changed
+
+- **`hooks/scripts/envelope.js`** — `ALLOWED_ARTIFACT_KINDS`를
+  `{evolve-receipt, evolve-insights}`에서 `handoff`와 `compaction-state` 포함으로
+  확장. evolve-receipt / evolve-insights 호출자의 기존 identity-triplet 의미론은
+  그대로 유지.
+- **`scripts/validate-envelope-emit.js`** — `ALLOWED_KINDS`를 대칭 확장하여
+  CI validator가 두 신규 envelope kind를 수락.
+
+### Notes
+
+- 이 릴리스는 신규 artifact kind에 대해 **producer-only**. deep-evolve는 다른
+  플러그인의 `handoff.json` / `compaction-state.json`을 consume 하지 않으며 —
+  dashboard가 한다. Cross-plugin contract는 `claude-deep-dashboard/lib/
+  suite-collector.js unwrapStrict`가 enforce.
+- Round-trip closure: `.deep-work/handoffs/*.json`에 현재 세션과 매칭되는
+  forward handoff (`producer = "deep-work"`, `to.producer = "deep-evolve"`)
+  가 있으면 reverse handoff의 `parent_run_id`가 이를 닫고 dashboard의
+  `suite.handoff.roundtrip_success_rate`가 1.0으로 수렴.
+- M5 acceptance criteria는 `claude-deep-suite/docs/superpowers/plans/
+  2026-05-11-m5.7-plugin-adoption-handoff.md` §M5.7.B 참조.
+
 ## [3.2.0] — 2026-05-08 (M3 공통 아티팩트 envelope)
 
 `evolve-receipt.json`과 `evolve-insights.json` 두 산출물을 모두 M3 cross-plugin
