@@ -1,6 +1,6 @@
 ---
 name: deep-evolve-workflow
-version: "3.3.2"
+version: "3.3.3"
 description: |
   This skill should be used when the user wants to run autonomous, measured
   code-improvement experiments — analyzing the project, generating an evaluation

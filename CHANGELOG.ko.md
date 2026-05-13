@@ -1,5 +1,27 @@
 # 변경 이력
 
+## [3.3.3] — 2026-05-13 (plugin-dev 검증 클린업 + manifest drift CI 가드)
+
+### 추가
+
+- **`hooks/scripts/tests/test_package_manifest.py` 의 4중 버전 drift 가드** — README §3.1.1 이 약속만 했고 실제로 구현되지 않았던 안전망을 구현. 신규 테스트 `test_plugin_and_package_versions_match`, `test_skill_md_version_matches_plugin_manifest`, `test_helper_version_matches_plugin_manifest` 가 `.claude-plugin/plugin.json` / `package.json` / `SKILL.md` frontmatter / `session-helper.sh::HELPER_VERSION` 네 곳이 동기 상태인지 단언한다. v3.3.0–v3.3.2 릴리스 구간에서 조용히 drift 가 발생했으며 (`SKILL.md` 의 `version: "3.2.0"`, `HELPER_VERSION="3.2.0"` 잔존) — 본 테스트가 존재했다면 즉시 잡혔을 결함이다.
+- **CI 매트릭스에 pytest 단계** — `.github/workflows/tests.yml` 가 `ubuntu-latest` + `macos-latest` 양쪽에서 `npm test` 후 `pytest hooks/scripts/tests/ -q` 를 실행한다. 그동안 로컬에서만 강제되던 551 개 pytest 케이스 (+ T22 polling 추적용 의도된 1개 xfail) 가 이제 모든 PR 에 대해 강제된다. install 단계에 `pyyaml` 도 추가 — 5 개 테스트 파일 (`conftest.py`, `test_v31_fallback_note.py`, `test_v31_resume_v31.py`, `test_v31_scheduler_decision.py`, `test_v31_status_subcommand.py`) 이 `session.yaml` 을 파싱한다.
+
+### 변경
+
+- **`skills/deep-evolve-workflow/SKILL.md`** — Routing Table 을 기존 2 개(`resume.md`, `history.md`)에서 11 개 protocol 전체로 markdown 표 형식으로 확장. 각 항목에 진입 트리거와 책임을 명시. 신규 State Machine 표 (`initializing → active → paused → completed/aborted`), CLI 인자 매트릭스 (이전엔 누락됐던 6 개 — `--no-parallel`, `--n-min`, `--n-max`, `--kill-seed`, `--status`, `--archive-prune` — 포함 총 13 개), 시나리오형 `description` ("This skill should be used when …") 추가. LLM 이 frontmatter 만 보고 스킬 활성 여부를 판정할 수 있도록 사용자 톤("프로젝트를 자동 개선합니다" 등)을 LLM 대상 imperative 톤으로 교체. 본문 분량이 약 150 단어 → 500 단어로 증가하여, `commands/deep-evolve.md` 를 먼저 읽지 않아도 워크플로우 진입 가능.
+- **`commands/deep-evolve.md`** — frontmatter `allowed_tools: all` 을 Claude Code 표준 키인 `allowed-tools: [Read, Write, Edit, MultiEdit, Bash, Glob, Grep, AskUserQuestion, Task, TodoWrite]` 배열로 정정 (하이픈 키 + 명시 배열; 기존 underscore 형은 조용히 무시되고 있었다). 5 개 헬퍼 스크립트 호출 (`session-helper.sh` × 2, `kill-request-writer.sh`, `status-dashboard.py`, Step 1 prose) 를 `bash hooks/scripts/…` (marketplace install 시 cwd 의존으로 깨질 위험) → `bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/…` 로 전환. `hooks.json` 컨벤션과 일치시키고 `test_v31_kill_seed_cli.py::test_kill_seed_passes_seed_argv_format` regex 계약 (`kill-request-writer.sh<공백>--seed=`) 을 유지하기 위해 unquoted.
+- **`hooks/hooks.json`** — `description` 을 v3.0+ 현행 동작 (TOOL_NAME guard, `initializing`-상태 bypass, 옵션 `seal_prepare_read` Read-branch, `prepare.py` / `program.md` / `strategy.yaml` META_MODE-게이트 쓰기) 반영해 재작성; 기존 텍스트는 v2.2.2 시점에 고정되어 있었음. PreToolUse `timeout`: `2` → `5` 로 macOS 의 `jq + python` cold-cache 헤드룸 확보; deny-by-default 동작과 보호 파일 집합은 변경 없음.
+- **`package.json`** — `description` 을 `.claude-plugin/plugin.json` 본문과 정렬 ("Autonomous Experimentation Protocol — goal-driven experiment loops that systematically improve any project through measured code modifications"); 기존엔 분기된 카피 ("Plugin for Claude Code … with autoresearch methodology") 였음.
+- **`hooks/scripts/session-helper.sh`** — `HELPER_VERSION` `3.2.0` → `3.3.3` 으로 갱신. 신규 4 중 sync 단언을 통과시키기 위한 것이며 헬퍼 동작은 변경 없음 (drift 는 누락된 테스트의 잠재 증상이었을 뿐).
+- **4 개 버전 파일 모두 `3.3.3` 으로 bump**: `.claude-plugin/plugin.json`, `package.json`, `skills/deep-evolve-workflow/SKILL.md`, `hooks/scripts/session-helper.sh::HELPER_VERSION`. 신규 manifest drift 테스트가 향후 lockstep 을 강제한다.
+
+### 노트
+
+본 패치는 plugin-dev `plugin-validator` + `skill-reviewer` 리뷰가 지적한 9 개 실효성 있는 항목 (C-1, C-2, W-1~W-4, W-7, W-8, S-1, S-2, S-6, S-7) 을 종결한다. 다음 5 개 아키텍처 항목은 기능적 영향이 입증되지 않은 이론적 베스트 프랙티스 결손이라 의도적으로 보류했다: (C-3) 4 개 거대 protocol 파일 (`init.md` 1090 줄, `inner-loop.md` 734, `outer-loop.md` 676, `synthesis.md` 626) 의 분해, (S-3) W-fix / C-fix / "Opus review YYYY-MM-DD" 인라인 주석을 `docs/changes/` 트리로 분리, (S-5) `protect-readonly.sh` 의 substring 매칭을 word-boundary regex 로 교체 (현재의 deny-by-default 의도가 합리적임), (W-5) `coordinator.md` 의 의사코드를 실제 ```bash``` 블록으로 승격 (`test_v31_kill_seed_cli.py` xfail 이 추적 중인 T22 polling 구현과 결합), (W-6) `inner-loop.md` Section B 와 `resume.md` 책임 경계 정리 (오라우팅 사례 관찰 안 됨). 각 항목은 risk/benefit 프로파일이 바뀌는 시점에 재검토 가능.
+
+소스: `plugin-dev:plugin-validator` + `plugin-dev:skill-reviewer` 리포트, 2026-05-13.
+
 ## [3.3.2] — 2026-05-12 (M5.5 #5 interrupted-session 복구 테스트)
 
 ### 추가 — M5.5 #5 deep-evolve session-recovery 테스트 (테스트 전용 patch)
