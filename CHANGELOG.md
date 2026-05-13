@@ -1,5 +1,27 @@
 # Changelog
 
+## [3.3.3] — 2026-05-13 (plugin-dev validation cleanup + manifest drift CI guard)
+
+### Added
+
+- **Cross-file version drift guard in `hooks/scripts/tests/test_package_manifest.py`** — implements the four-way version sync safety net the README §3.1.1 already promised but had not been wired. New tests `test_plugin_and_package_versions_match`, `test_skill_md_version_matches_plugin_manifest`, `test_helper_version_matches_plugin_manifest` assert `.claude-plugin/plugin.json` / `package.json` / `SKILL.md` frontmatter / `session-helper.sh::HELPER_VERSION` stay in lockstep. The v3.3.0–v3.3.2 release window had silently drifted (`SKILL.md` advertised `version: "3.2.0"`, `HELPER_VERSION` stuck at `"3.2.0"`); this gap would have been caught immediately had the test existed.
+- **pytest step in CI matrix** — `.github/workflows/tests.yml` now runs `pytest hooks/scripts/tests/ -q` after `npm test` on both `ubuntu-latest` and `macos-latest`. 551 previously local-only pytest cases (+ 1 intentional xfail tracking T22 polling) are now enforced on every PR. `pyyaml` added to the install step (5 test files parse `session.yaml`: `conftest.py`, `test_v31_fallback_note.py`, `test_v31_resume_v31.py`, `test_v31_scheduler_decision.py`, `test_v31_status_subcommand.py`).
+
+### Changed
+
+- **`skills/deep-evolve-workflow/SKILL.md`** — Routing Table expanded from 2 protocol files (`resume.md`, `history.md`) to all 11 in markdown table form, each with entry trigger and responsibility. Added State Machine table (`initializing → active → paused → completed/aborted`), CLI argument matrix (13 flags including 6 previously undocumented: `--no-parallel`, `--n-min`, `--n-max`, `--kill-seed`, `--status`, `--archive-prune`), and scenario-driven `description` ("This skill should be used when …") so the LLM can decide skill activation from frontmatter alone. User-facing tone (e.g., "프로젝트를 자동 개선합니다") replaced with LLM-targeted imperative form. Body grew from ~150 to ~500 words; sufficient to start the workflow without reading `commands/deep-evolve.md` first.
+- **`commands/deep-evolve.md`** — `allowed_tools: all` corrected to the standard Claude Code key `allowed-tools: [Read, Write, Edit, MultiEdit, Bash, Glob, Grep, AskUserQuestion, Task, TodoWrite]` (the hyphenated key with an explicit array; the prior underscore form was silently ignored). 5 helper-script invocations (`session-helper.sh` × 2, `kill-request-writer.sh`, `status-dashboard.py`, prose reference in Step 1) switched from `bash hooks/scripts/…` (cwd-fragile under marketplace install) to `bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/…`. Unquoted to match `hooks.json` convention and preserve `test_v31_kill_seed_cli.py::test_kill_seed_passes_seed_argv_format` regex contract (`kill-request-writer.sh<whitespace>--seed=`).
+- **`hooks/hooks.json`** — `description` rewritten to reflect v3.0+ behaviour (TOOL_NAME guard, `initializing`-status bypass, optional `seal_prepare_read` Read-branch, META_MODE-gated writes for `prepare.py` / `program.md` / `strategy.yaml`); previous text was pinned to v2.2.2. PreToolUse `timeout`: `2` → `5` for `jq + python` cold-cache headroom on macOS; deny-by-default behaviour and protected file set are unchanged.
+- **`package.json`** — `description` aligned with `.claude-plugin/plugin.json` ("Autonomous Experimentation Protocol — goal-driven experiment loops that systematically improve any project through measured code modifications"); was previously divergent ("Plugin for Claude Code … with autoresearch methodology").
+- **`hooks/scripts/session-helper.sh`** — `HELPER_VERSION` `3.2.0` → `3.3.3` to satisfy the new four-way sync assertion (the drift was a latent symptom of the missing test, not a behavioural change in the helper).
+- **All four version files bumped to `3.3.3`**: `.claude-plugin/plugin.json`, `package.json`, `skills/deep-evolve-workflow/SKILL.md`, `hooks/scripts/session-helper.sh::HELPER_VERSION`. The new manifest drift test enforces this lockstep going forward.
+
+### Notes
+
+This patch closes the nine actionable items surfaced by the plugin-dev `plugin-validator` + `skill-reviewer` review (C-1, C-2, W-1 through W-4, W-7, W-8, S-1, S-2, S-6, S-7). Five architectural items were intentionally deferred as theoretical best-practice gaps without demonstrated functional impact: (C-3) decomposition of the four large protocol files (`init.md` 1090, `inner-loop.md` 734, `outer-loop.md` 676, `synthesis.md` 626), (S-3) extraction of inline W-fix / C-fix / "Opus review YYYY-MM-DD" annotations to a `docs/changes/` tree, (S-5) replacing the substring match in `protect-readonly.sh` with word-boundary regexes (deny-by-default intent is correct as-is), (W-5) lifting `coordinator.md` pseudocode into actual `bash` blocks (couples to the T22 polling implementation tracked by the xfail in `test_v31_kill_seed_cli.py`), (W-6) tightening `inner-loop.md` Section B vs `resume.md` responsibility split (no observed misrouting). Each can be revisited when its risk/benefit profile shifts.
+
+Spec source: `plugin-dev:plugin-validator` + `plugin-dev:skill-reviewer` reports run 2026-05-13.
+
 ## [3.3.2] — 2026-05-12 (M5.5 #5 interrupted-session recovery test)
 
 ### Added — M5.5 #5 deep-evolve session-recovery test (test-only patch)
