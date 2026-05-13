@@ -35,8 +35,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install pytest
-        run: python -m pip install --upgrade pip pytest
+      - name: Install pytest and runtime test deps
+        # pyyaml: 5 test files (conftest.py + test_v31_fallback_note.py +
+        # test_v31_resume_v31.py + test_v31_scheduler_decision.py +
+        # test_v31_status_subcommand.py) parse / write session.yaml.
+        run: python -m pip install --upgrade pip pytest pyyaml
 
       - name: Run pytest hook + helper suite
         run: pytest hooks/scripts/tests/ -q
