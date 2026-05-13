@@ -1,7 +1,7 @@
 {
   "name": "@deep-evolve/deep-evolve",
   "version": "3.3.2",
-  "description": "Autonomous Experimentation Plugin for Claude Code — goal-driven experiment loops with autoresearch methodology",
+  "description": "Autonomous Experimentation Protocol — goal-driven experiment loops that systematically improve any project through measured code modifications",
   "author": "sungmin",
   "license": "MIT",
   "repository": {

@@ -4,7 +4,7 @@ description: |
   Autonomous experimentation protocol. Analyzes your project, generates an evaluation
   harness, and runs experiment loops to systematically improve code toward your goal.
   Supports init, resume, and completion workflows via state-based auto-routing.
-allowed_tools: all
+allowed-tools: [Read, Write, Edit, MultiEdit, Bash, Glob, Grep, AskUserQuestion, Task, TodoWrite]
 # Note: Bash tool is allowed but protect-readonly.sh hook intercepts shell writes
 # to .deep-evolve/prepare.py, prepare-protocol.md, program.md, and strategy.yaml during active experiment runs.
 ---
@@ -105,13 +105,18 @@ if printf '%s\n' "$ARGS_LINE" | grep -q -- '--kill-seed='; then
     exit 2
   fi
   # Resolve active session for SESSION_ROOT — T23 contract requires it
-  if ! SESSION_LINE=$(bash hooks/scripts/session-helper.sh resolve_current 2>/dev/null); then
+  # S-1 fix: use ${CLAUDE_PLUGIN_ROOT} so the script resolves correctly when the
+  # user's cwd differs from the plugin install root (marketplace install case).
+  # Unquoted to match hooks.json convention and existing T35 argv-shape contract
+  # (test_v31_kill_seed_cli.py::test_kill_seed_passes_seed_argv_format expects
+  # `kill-request-writer.sh<whitespace>--seed=`).
+  if ! SESSION_LINE=$(bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh resolve_current 2>/dev/null); then
     echo "활성 세션이 없습니다. --kill-seed는 진행 중인 세션이 있을 때만 사용 가능합니다." >&2
     exit 1
   fi
   read -r KILL_SESSION_ID KILL_SESSION_ROOT <<<"$SESSION_LINE"
   export SESSION_ROOT="$KILL_SESSION_ROOT"
-  if ! bash hooks/scripts/kill-request-writer.sh --seed="$KILL_SEED_RAW"; then
+  if ! bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/kill-request-writer.sh --seed="$KILL_SEED_RAW"; then
     echo "error: --kill-seed delegation to T23 failed" >&2
     exit 1
   fi
@@ -130,12 +135,14 @@ fi
 # accidentally normalize them.
 case " $ARGS_LINE " in
   *' --status '*|*' --status='*)
-    if ! SESSION_LINE=$(bash hooks/scripts/session-helper.sh resolve_current 2>/dev/null); then
+    # S-1 fix: ${CLAUDE_PLUGIN_ROOT}-prefixed paths (cwd-independent invocation).
+    # Unquoted to match hooks.json convention.
+    if ! SESSION_LINE=$(bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh resolve_current 2>/dev/null); then
       echo "활성 세션이 없습니다. --status는 진행 중인 세션이 있을 때만 사용 가능합니다." >&2
       exit 0
     fi
     read -r STATUS_SESSION_ID STATUS_SESSION_ROOT <<<"$SESSION_LINE"
-    if ! python3 hooks/scripts/status-dashboard.py \
+    if ! python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/status-dashboard.py \
         --session-yaml "$STATUS_SESSION_ROOT/session.yaml" \
         --journal      "$STATUS_SESSION_ROOT/journal.jsonl" \
         --forum        "$STATUS_SESSION_ROOT/forum.jsonl"; then
@@ -163,7 +170,7 @@ esac
 
 **Otherwise:**
 
-Run `session-helper.sh resolve_current` to get the active session.
+Run `${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh resolve_current` to get the active session.
 
 **If exit 1 (no active session):**
 - Check if `.deep-evolve/session.yaml` exists at root (legacy layout):
