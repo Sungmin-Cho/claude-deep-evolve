@@ -1,0 +1,41 @@
+{
+  "name": "deep-evolve",
+  "version": "3.4.2",
+  "description": "Autonomous Experimentation Protocol for measured project improvement loops",
+  "author": {
+    "name": "sungmin"
+  },
+  "repository": "https://github.com/Sungmin-Cho/claude-deep-evolve.git",
+  "license": "MIT",
+  "keywords": [
+    "autonomous",
+    "experiment",
+    "autoresearch",
+    "optimization",
+    "evolution",
+    "auto-improve",
+    "experiment-loop",
+    "metric-driven"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Deep Evolve",
+    "shortDescription": "Goal-driven autonomous experiment loops",
+    "longDescription": "Analyze a project, build an evaluation harness, and run measured experiment loops with resume, history, completion, and transfer workflows.",
+    "developerName": "sungmin",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "$deep-evolve:deep-evolve-workflow \"improve this project\"",
+      "$deep-evolve:deep-evolve-workflow resume",
+      "$deep-evolve:deep-evolve-workflow history"
+    ],
+    "brandColor": "#0F766E",
+    "screenshots": []
+  }
+}

@@ -4,6 +4,10 @@
 
 Autonomous experimentation plugin for Claude Code. Specify a goal, and deep-evolve systematically improves your project through measured experiment loops.
 
+## Codex Compatibility
+
+This release includes native Codex plugin metadata in `.codex-plugin/plugin.json` and a Codex project guide in `AGENTS.md`. The Claude Code manifest remains in `.claude-plugin/plugin.json`, and the unchanged `claude-deep-suite` marketplace namespace lets existing installs keep their plugin keys while Codex reads the suite's `.agents/plugins/marketplace.json`.
+
 ## Inspiration
 
 This project is inspired by [autoresearch](https://github.com/karpathy/autoresearch) by Andrej Karpathy — an experiment to have AI agents do their own research autonomously. The core idea: give an AI agent a codebase, let it experiment overnight — modifying code, evaluating results, keeping improvements, discarding regressions — and wake up to a better project.
