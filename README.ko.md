@@ -4,6 +4,10 @@
 
 Claude Code용 자율 실험 플러그인. 목표를 지정하면 deep-evolve가 측정 기반 실험 루프를 통해 프로젝트를 체계적으로 개선합니다.
 
+## Codex 호환성
+
+이번 릴리스는 `.codex-plugin/plugin.json` Codex 네이티브 플러그인 메타데이터와 `AGENTS.md` Codex 프로젝트 가이드를 포함합니다. Claude Code 매니페스트는 `.claude-plugin/plugin.json`에 그대로 유지되며, 기존 `claude-deep-suite` marketplace namespace를 유지해 기존 설치 키를 보존하면서 Codex는 suite의 `.agents/plugins/marketplace.json`을 읽습니다.
+
 ## 영감
 
 이 프로젝트는 Andrej Karpathy의 [autoresearch](https://github.com/karpathy/autoresearch)에서 영감을 받았습니다 — AI 에이전트가 자율적으로 연구를 수행하는 실험입니다. 핵심 아이디어: AI 에이전트에게 코드베이스를 주고, 밤새 실험하게 하고 — 코드를 수정하고, 결과를 평가하고, 개선은 유지하고, 회귀는 폐기하고 — 아침에 더 나은 프로젝트를 확인합니다.
