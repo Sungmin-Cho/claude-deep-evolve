@@ -1,5 +1,37 @@
 # 변경 이력
 
+## [3.4.0] — 2026-05-18 (command → skill 전환: cross-platform parity)
+
+### 변경 (비파괴적 UX)
+
+- **`/deep-evolve` 가 슬래시 커맨드가 아닌 `user-invocable: true` 스킬로 전환됨**. Claude Code 사용자는 그대로 `/deep-evolve [args...]` 입력하면 동작 (슬래시 → 스킬 auto-mapping 으로 entry skill 이 기존 커맨드와 동일하게 응답). Codex / Copilot CLI / Gemini CLI / Agent SDK 호출자는 `Skill({ skill: "deep-evolve:deep-evolve", args: "..." })` 형태로 동일 워크플로우 호출 가능 — 슬래시 커맨드는 Claude Code 전용이었으므로, 본 전환은 cross-platform parity 확보 단계.
+- **`commands/deep-evolve.md` 삭제**, `skills/deep-evolve/SKILL.md` (entry skill, `user-invocable: true`) 로 대체. 본문 (Step 0 / Step 0.5 / Step 1 / Protocol Routing Summary / session.yaml 스키마 / journal 이벤트 카탈로그) 은 그대로 보존하여 마크다운 내 bash 블록 / regex 리터럴 / 섹션 헤더를 grep 하는 15 개 `test_v31_*.py` content-assertion 케이스가 새 경로에서도 PASS. 헤드에 `## Invocation`, `## Inputs (skill args)`, `## Prerequisites` 섹션 신설 — 두 진입 경로 (Claude Code 슬래시 + cross-platform `Skill()` 호출) 와 본문의 `$ARGUMENTS` placeholder 자리에 있던 args-토큰 매트릭스를 문서화. `commands/` 디렉토리 자체도 제거 (다른 커맨드 파일은 존재하지 않았음).
+- **`skills/deep-evolve-workflow/SKILL.md`** — `commands/deep-evolve.md` 참조 4 곳을 `skills/deep-evolve/SKILL.md` 로 갱신 (frontmatter 의 entry-point 설명, Routing Table 머리말, State Machine 머리말, "핵심 불변식" 포인터). 동작 변경 없음.
+- **`skills/deep-evolve-workflow/protocols/synthesis.md`** — Exit Back to Caller 노트의 caller 참조를 entry skill 로 갱신.
+- **`CLAUDE.md`** — 2 개 cross-reference (session-state dispatch / 인자 파싱 안전 단락) 가 새 entry skill 을 가리키도록 갱신.
+- **`hooks/scripts/tests/test_v31_routing.py` / `test_v31_kill_seed_cli.py` / `test_v31_cli_flags.py`** — `Path` 상수와 docstring 을 `commands/deep-evolve.md` → `skills/deep-evolve/SKILL.md` 로 retarget. assertion 로직은 변경 없음; 새 entry skill 이 검증 대상 모든 섹션 헤더 (`## Step 0:`, `## Step 0.5`, `## Step 1:`, `## Protocol Routing Summary`), bash 블록, regex 패턴을 그대로 보존.
+- **4-way 버전 sync 를 `3.4.0` 으로**: `.claude-plugin/plugin.json`, `package.json`, `skills/deep-evolve-workflow/SKILL.md` frontmatter, `hooks/scripts/session-helper.sh::HELPER_VERSION`. v3.3.3 에서 도입된 manifest drift 가드가 이 lockstep 을 강제. 플러그인 description 에 "skill-based entry (cross-platform: Claude Code / Codex / Copilot / Gemini)" 추가.
+- **`package.json::files`** — `commands/` glob 제거 (디렉토리 더 이상 존재하지 않음).
+
+### 근거
+
+슬래시 커맨드는 Claude Code 전용 진입 표면이다. 스킬은 cross-platform 표준 추상화 (Claude Code / Codex CLI / Copilot CLI / Gemini CLI / Agent SDK). 본 릴리스는 `deep-docs` v1.3.0 파일럿 패턴 (PR https://github.com/Sungmin-Cho/claude-deep-docs/pull/7, 2026-05-18 merged) 을 그대로 따른다 — Claude Code 에 대해 비파괴적이고, Skill 프로토콜을 지원하는 모든 플랫폼에 워크플로우가 개방된다. 동일 패턴은 다음 차례인 `deep-wiki`, `deep-review` (잔여 표면), `deep-work` 에도 순차 적용 예정.
+
+### 마이그레이션
+
+사용자 액션 불요.
+
+- Claude Code: 그대로 `/deep-evolve [args...]` 사용 — 동일하게 동작.
+- Codex / Copilot CLI / Gemini CLI: `Skill({ skill: "deep-evolve:deep-evolve", args: "..." })` 또는 스킬 description 과 매칭되는 자연어 트리거 ("run experiments", "이어서 진행" 등) 로 호출.
+- 기존 세션 / `.deep-evolve/` 상태 / journal 이벤트: 스키마 변경 없음. Resume 도 그대로 동작.
+
+### 테스트
+
+- `npm test` — node:test 129 케이스 PASS (envelope contract, handoff roundtrip, protect-readonly golden fixtures, session recovery).
+- `pytest hooks/scripts/tests/ -q` — 551 케이스 PASS + 1 xfail (불변), 새 경로로 retarget 된 15 개 content-assertion 케이스 포함.
+- `plugin-dev:plugin-validator` — 0 critical / 0 major.
+- `plugin-dev:skill-reviewer` — PASS.
+
 ## [3.3.3] — 2026-05-13 (plugin-dev 검증 클린업 + manifest drift CI 가드)
 
 ### 추가

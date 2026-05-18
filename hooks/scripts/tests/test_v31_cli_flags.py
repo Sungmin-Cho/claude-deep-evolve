@@ -1,4 +1,4 @@
-"""commands/deep-evolve.md — v3.1 Step 0.5 CLI flag parsing.
+"""skills/deep-evolve/SKILL.md — v3.1 Step 0.5 CLI flag parsing.
 
 Verifies the v3.1 CLI surface contains:
   - --no-parallel → exports DEEP_EVOLVE_NO_PARALLEL=1
@@ -16,11 +16,11 @@ without duplicating either set.
 import re
 from pathlib import Path
 
-CMD = (Path(__file__).parents[3] / "commands/deep-evolve.md")
+CMD = (Path(__file__).parents[3] / "skills/deep-evolve/SKILL.md")
 
 
 def _content():
-    assert CMD.is_file(), f"deep-evolve.md must exist at {CMD}"
+    assert CMD.is_file(), f"deep-evolve entry SKILL.md must exist at {CMD}"
     return CMD.read_text(encoding="utf-8")
 
 

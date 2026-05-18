@@ -118,7 +118,7 @@ deep-evolve/
 
 Status transitions: `initializing` → `active` → `paused` (outer loop) → `active` | `completed` | `aborted`.
 
-`commands/deep-evolve.md` Step 1 reads the current session's `status` and dispatches to the appropriate protocol under `skills/deep-evolve-workflow/protocols/`.
+`skills/deep-evolve/SKILL.md` (the `user-invocable: true` entry skill, v3.4.0+) Step 1 reads the current session's `status` and dispatches to the appropriate protocol under `skills/deep-evolve-workflow/protocols/`.
 
 ### `session.yaml` — session configuration
 
@@ -221,7 +221,7 @@ All journal lines, envelope `generated_at`, and `session.yaml` timestamps use `Y
 
 ### Argument parsing safety
 
-`commands/deep-evolve.md` Step 0 / Step 0.5 uses `case " $ARGS_LINE "` with surrounding spaces (no regex) for word-boundary matching (C2 fix). New flags must follow this pattern.
+`skills/deep-evolve/SKILL.md` Step 0 / Step 0.5 uses `case " $ARGS_LINE "` with surrounding spaces (no regex) for word-boundary matching (C2 fix). New flags must follow this pattern.
 
 ---
 
