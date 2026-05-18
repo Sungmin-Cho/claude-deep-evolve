@@ -1,5 +1,16 @@
 # 변경 이력
 
+## [3.4.1] — 2026-05-18 (Codex 1024자 description 한계 대응)
+
+### Fixed
+
+- **`skills/deep-evolve-workflow/SKILL.md` description 를 1137 → 905자로 trim** — Codex 의 skill description 1024자 한계에 부합하도록 정리. Codex 가 `⚠ invalid description: exceeds maximum length of 1024 characters` 경고와 함께 skill 을 로드 시 스킵하여 v3.4.0 의 cross-platform parity 가 실제로는 깨져 있었음. 트리거 구문 목록에서 중복 제거 ("프로젝트 개선" / "self-evolution" / "자기 진화" / standalone "strategy" / standalone "outer loop" / "stepping stones" / "lineage" / "entropy tracking" / "shortcut detection" / "diagnose retry" / "legibility" / "evidence-rich hill-climbing"). 잔류한 15 개 trigger (한·영 혼합 진입 의도 cover) + `/deep-evolve` 슬래시 호출 명시로 description-기반 discovery 에 충분. 본문 변경 없음.
+- **4-way 버전 sync 를 `3.4.1` 로 bump** (`.claude-plugin/plugin.json` / `package.json` / `skills/deep-evolve-workflow/SKILL.md` frontmatter / `hooks/scripts/session-helper.sh::HELPER_VERSION`) — manifest drift 가드 통과.
+
+### 왜 중요한가
+
+- v3.4.0 의 conversion 은 description 을 의도적으로 넓혀 trigger phrase 다수 포함했지만, Codex 의 1024자 ceiling 을 초과. Claude Code 와 Anthropic SDK 는 허용했으나 Codex 는 skill 을 silent drop. 본 patch trim 으로 Codex 호환성 복원, Claude Code parity 유지.
+
 ## [3.4.0] — 2026-05-18 (command → skill 전환: cross-platform parity)
 
 ### 변경 (비파괴적 UX)

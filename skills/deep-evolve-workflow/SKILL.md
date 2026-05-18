@@ -1,6 +1,6 @@
 ---
 name: deep-evolve-workflow
-version: "3.4.0"
+version: "3.4.1"
 description: |
   This skill should be used when the user wants to run autonomous, measured
   code-improvement experiments — analyzing the project, generating an evaluation
@@ -10,13 +10,10 @@ description: |
   sibling `deep-evolve` skill (`skills/deep-evolve/SKILL.md`, `user-invocable: true`,
   invoked as `/deep-evolve` in Claude Code or `Skill({ skill: "deep-evolve:deep-evolve" })`
   cross-platform).
-  Trigger phrases include: "deep evolve", "deep-evolve", "autonomous experiment",
+  Trigger phrases: "deep evolve", "deep-evolve", "autonomous experiment",
   "자율 실험", "auto improve", "자동 개선", "experiment loop", "실험 루프",
-  "프로젝트 개선", "코드 최적화", "self-evolution", "자기 진화",
-  "strategy", "전략 진화", "outer loop", "strategy evolution", "meta-archive",
-  "stepping stones", "session history", "resume", "이어서 실험", "lineage",
-  "entropy tracking", "shortcut detection", "diagnose retry", "legibility",
-  "evidence-rich hill-climbing", or `/deep-evolve` invocation.
+  "코드 최적화", "strategy evolution", "전략 진화", "meta-archive",
+  "session history", "resume", "이어서 실험", or `/deep-evolve` invocation.
 ---
 
 # Deep Evolve: Autonomous Experimentation Protocol

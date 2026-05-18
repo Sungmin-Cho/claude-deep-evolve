@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.4.1] — 2026-05-18 (Codex 1024-char description limit fix)
+
+### Fixed
+
+- **`skills/deep-evolve-workflow/SKILL.md` description trimmed from 1137 → 905 characters** to fit Codex's 1024-char skill description limit. Codex was emitting `⚠ invalid description: exceeds maximum length of 1024 characters` and skipping the skill at load time, breaking the cross-platform parity that v3.4.0 shipped. Trigger phrase list collapsed: removed redundant duplicates ("프로젝트 개선" / "self-evolution" / "자기 진화" / standalone "strategy" / standalone "outer loop" / "stepping stones" / "lineage" / "entropy tracking" / "shortcut detection" / "diagnose retry" / "legibility" / "evidence-rich hill-climbing"). The 15 retained triggers (Korean + English mix covering the entry intents) plus the canonical `/deep-evolve` slash invocation are sufficient for description-based discovery. Body content unchanged.
+- **Four-way version sync bumped to `3.4.1`** (`.claude-plugin/plugin.json` / `package.json` / `skills/deep-evolve-workflow/SKILL.md` frontmatter / `hooks/scripts/session-helper.sh::HELPER_VERSION`) per the manifest drift guard.
+
+### Why this matters
+
+- The v3.4.0 conversion intentionally widened the description with trigger phrases to maximize discoverability, but pushed past Codex's 1024-char ceiling. Claude Code and Anthropic SDK accepted it; Codex did not, silently dropping the skill. Patch trim restores Codex compatibility while preserving Claude Code parity.
+
 ## [3.4.0] — 2026-05-18 (command → skill conversion: cross-platform parity)
 
 ### Changed (non-breaking UX)
