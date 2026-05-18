@@ -745,5 +745,5 @@ protocol is designed to be re-run.
 ## Exit Back to Caller
 
 On success, this protocol returns exit code 0 with `$FINAL_BRANCH`
-pointing to the deliverable branch. Caller (G11 `commands/deep-evolve.md`)
+pointing to the deliverable branch. Caller (G11 `skills/deep-evolve/SKILL.md`)
 is responsible for any post-synthesis push / PR / archive operations.

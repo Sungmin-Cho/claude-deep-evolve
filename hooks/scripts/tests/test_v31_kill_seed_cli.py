@@ -1,4 +1,4 @@
-"""commands/deep-evolve.md --kill-seed=<id> → T23 writer delegation.
+"""skills/deep-evolve/SKILL.md --kill-seed=<id> → T23 writer delegation.
 
 Behavioral subprocess tests live in test_v31_kill_request.py (G8).
 This file verifies the markdown SURFACE — argv shape, terminal exit,
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-CMD = (Path(__file__).parents[3] / "commands/deep-evolve.md")
+CMD = (Path(__file__).parents[3] / "skills/deep-evolve/SKILL.md")
 
 
 def _step_0_5():
@@ -138,7 +138,7 @@ def test_kill_seed_w6_trace_to_t22_polling():
     """
     cmd_text = CMD.read_text(encoding="utf-8")
     assert "kill_requests.jsonl" in cmd_text, \
-        "T35 (commands/deep-evolve.md) must reference kill_requests.jsonl"
+        "T35 (skills/deep-evolve/SKILL.md) must reference kill_requests.jsonl"
     coordinator_path = (Path(__file__).parents[3]
                         / "skills/deep-evolve-workflow/protocols/coordinator.md")
     coord_text = coordinator_path.read_text(encoding="utf-8")

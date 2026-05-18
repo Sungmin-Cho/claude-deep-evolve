@@ -1,15 +1,47 @@
 ---
 name: deep-evolve
-description: |
-  Autonomous experimentation protocol. Analyzes your project, generates an evaluation
-  harness, and runs experiment loops to systematically improve code toward your goal.
-  Supports init, resume, and completion workflows via state-based auto-routing.
-allowed-tools: [Read, Write, Edit, MultiEdit, Bash, Glob, Grep, AskUserQuestion, Task, TodoWrite]
-# Note: Bash tool is allowed but protect-readonly.sh hook intercepts shell writes
-# to .deep-evolve/prepare.py, prepare-protocol.md, program.md, and strategy.yaml during active experiment runs.
+description: Use when the user wants to start, resume, or query measured autonomous experimentation loops that improve a project against a fitness metric. Triggers on `/deep-evolve`, "autonomous experiment", "evolution loop", "outer loop", "session history", "lineage", "자율 실험", "전략 진화", "이어서 진행". Step 0/0.5/1 parse `resume`, `history`, count, goal, `--no-parallel`, `--n-min`/`--n-max`, `--kill-seed`, `--status`, `--archive-prune` and dispatch by session state + VERSION_TIER to the appropriate workflow protocol.
+user-invocable: true
 ---
 
 You are running the **deep-evolve** autonomous experimentation protocol.
+
+## Invocation
+
+이 스킬은 두 가지 경로로 호출됩니다 — 어느 쪽이든 본 SKILL §"Step 0" 이하의 절차를 그대로 실행합니다:
+
+1. **Claude Code 슬래시** — 사용자가 `/deep-evolve [args...]` 입력 (skill 의 `user-invocable: true` 가 슬래시 진입을 허용).
+2. **타 에이전트 / Codex / Copilot CLI / Gemini CLI / SDK** — `Skill({ skill: "deep-evolve:deep-evolve", args: "..." })` 형태로 명시 invoke (cross-platform 표준 경로).
+
+두 경로 모두 args 는 동일한 토큰 문자열로 전달되며, Step 0 / Step 0.5 의 파서가 동일하게 처리합니다.
+
+## Inputs (skill args)
+
+호출 시 전달된 args 토큰 문자열 (이하 본문에서 `$ARGUMENTS` 자리에 해당하는 값)을 Step 0 / Step 0.5 가 파싱합니다. 지원 토큰 매트릭스:
+
+| 인자 | 의미 |
+|---|---|
+| (없음) | 새 세션 시작 또는 활성 세션 재개 (Step 1 의 AskUserQuestion 분기) |
+| `<숫자>` (예: `50`) | 이번 배치에서 요청할 실험 횟수 |
+| `"<목표>"` | 새 목표 문자열로 세션 시작 |
+| `resume` | 명시적 resume (첫 토큰이 정확히 `resume`일 때만) |
+| `history` | 세션 이력 목록/요약 |
+| `history <session-id>` | 특정 세션 상세 |
+| `history --lineage` | lineage 트리 출력 |
+| `--no-parallel` | A.2.6 가상-병렬 disable, 단일 seed 강제 |
+| `--n-min=<1..9>` | 가상-병렬 최소 동시 seed 수 |
+| `--n-max=<1..9>` | 가상-병렬 최대 동시 seed 수 (N_MIN ≤ N_MAX 보증) |
+| `--kill-seed=<id>` | 진행 중인 seed 종료 요청 큐에 작성 (T23) 후 즉시 exit |
+| `--status` | 활성 세션 read-only 대시보드 (status-dashboard.py) |
+| `--archive-prune` | meta-archive prune (transfer.md Section F) |
+
+빈 args / 매칭되지 않는 토큰 → Step 1 의 State Detection & Routing 분기로 진입.
+
+## Prerequisites
+
+이 스킬은 동일 플러그인 내의 `deep-evolve-workflow` 스킬과 함께 동작합니다 (Claude Code 가 description 매칭으로 자동 로드). workflow skill 의 `protocols/` 디렉토리 (init.md, coordinator.md, inner-loop.md, outer-loop.md, resume.md, completion.md, history.md, archive.md, transfer.md, synthesis.md, taxonomy.md) 가 Step 1 의 dispatch 대상이며, `${CLAUDE_PLUGIN_ROOT}/hooks/scripts/` 의 `session-helper.sh`, `kill-request-writer.sh`, `status-dashboard.py` 등이 본문에서 invoke 됩니다.
+
+**Cross-platform self-containment**: Claude Code 에서는 sibling skill (`deep-evolve-workflow`) 이 description 매칭으로 자동 로드됩니다. 다만 Codex / Copilot CLI / Gemini CLI 등 타 플랫폼에서 `Skill()` 호출 시 sibling skill 의 auto-load 보장이 약할 수 있으므로, 본 SKILL 의 Step 0 / Step 0.5 / Step 1 본문은 **의도적으로 self-contained** — 인자 파싱, 세션 라우팅, AskUserQuestion 분기, 상태 스키마, journal 이벤트 카탈로그를 인라인으로 보존합니다. workflow skill 의 protocols 본문과의 **의도적 duplication** 일부가 발생하며 (예: 핵심 불변식, 사용자 명령 매트릭스), 변경 시 양쪽 (본 SKILL + workflow skill) 동기화가 필요합니다.
 
 ## 핵심 불변식
 
@@ -24,7 +56,7 @@ You are running the **deep-evolve** autonomous experimentation protocol.
 
 ## Step 0: Parse Arguments
 
-Arguments: `$ARGUMENTS`
+`Inputs (skill args)` 에서 전달된 args 문자열 (이하 `$ARGUMENTS`) 을 다음 규칙으로 분류합니다. 이 문자열은 Claude Code 슬래시 호출에서는 슬래시 뒤의 토큰들이며, `Skill({ args })` 호출에서는 `args` 필드 값입니다 — 두 경우 모두 동일하게 처리됩니다.
 
 - If the **first token** of arguments is exactly `resume`: → set RESUME=true (not substring — "resume flaky tests" is a goal, not a resume command)
 - If the **first token** of arguments is exactly `history`: → set HISTORY=true, HISTORY_ARGS=<rest of args>
@@ -43,6 +75,7 @@ Arguments: `$ARGUMENTS`
 
 ```bash
 # Defensive defaults under set -u (foundation pattern from G6 onward)
+# ARGS_LINE는 Step 0의 args 문자열 (slash 호출 시 슬래시 뒤 토큰, Skill() 호출 시 args 필드)
 ARGS_LINE="${ARGUMENTS:-}"
 
 # === --no-parallel: word-boundary token match ===

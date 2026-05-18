@@ -1,5 +1,37 @@
 # Changelog
 
+## [3.4.0] — 2026-05-18 (command → skill conversion: cross-platform parity)
+
+### Changed (non-breaking UX)
+
+- **`/deep-evolve` is now a `user-invocable: true` skill instead of a slash command**. Claude Code users keep typing `/deep-evolve [args...]` (the slash → skill auto-mapping makes the entry skill respond exactly like the old command). Codex / Copilot CLI / Gemini CLI / Agent SDK callers can now invoke the same workflow via `Skill({ skill: "deep-evolve:deep-evolve", args: "..." })` — slash commands were Claude Code-only, so this is the cross-platform parity step.
+- **`commands/deep-evolve.md` removed**; replaced by `skills/deep-evolve/SKILL.md` (entry skill, `user-invocable: true`). Body content (Step 0 / Step 0.5 / Step 1 / Protocol Routing Summary / session.yaml schema / journal event catalog) is preserved verbatim so all `test_v31_*.py` content-assertion tests (15 Python cases that grep the markdown for bash blocks / regex literals / section headers) continue to pass against the new path. New `## Invocation`, `## Inputs (skill args)`, `## Prerequisites` sections were added at the head to document the dual-route entry (Claude Code slash + cross-platform `Skill()` call) and the args-token matrix that used to live in the body's `$ARGUMENTS` placeholder. `commands/` directory removed entirely (no other command files existed).
+- **`skills/deep-evolve-workflow/SKILL.md`** — cross-references retargeted from `commands/deep-evolve.md` to `skills/deep-evolve/SKILL.md` in 4 spots (entry-point description in frontmatter, Routing Table preamble, State Machine preamble, "핵심 불변식" pointer). Behaviour unchanged.
+- **`skills/deep-evolve-workflow/protocols/synthesis.md`** — Exit Back to Caller note updated to reference the entry skill.
+- **`CLAUDE.md`** — 2 cross-references updated to point at the new entry skill (session-state dispatch + argument parsing safety paragraphs).
+- **`hooks/scripts/tests/test_v31_routing.py` / `test_v31_kill_seed_cli.py` / `test_v31_cli_flags.py`** — `Path` constants and docstrings retargeted from `commands/deep-evolve.md` to `skills/deep-evolve/SKILL.md`. No assertion logic changed; the new entry skill preserves every section header (`## Step 0:`, `## Step 0.5`, `## Step 1:`, `## Protocol Routing Summary`), bash block, and regex pattern the tests verify.
+- **Four-way version sync to `3.4.0`**: `.claude-plugin/plugin.json`, `package.json`, `skills/deep-evolve-workflow/SKILL.md` frontmatter, `hooks/scripts/session-helper.sh::HELPER_VERSION`. The manifest drift guard added in v3.3.3 enforces this lockstep. Plugin description appended with "skill-based entry (cross-platform: Claude Code / Codex / Copilot / Gemini)".
+- **`package.json::files`** — `commands/` glob removed (directory no longer exists).
+
+### Rationale
+
+Slash commands are a Claude Code-only entry surface. Skills are the canonical cross-platform abstraction (Claude Code / Codex CLI / Copilot CLI / Gemini CLI / Agent SDK). This release follows the `deep-docs` v1.3.0 pilot pattern (PR https://github.com/Sungmin-Cho/claude-deep-docs/pull/7, merged 2026-05-18) — proven non-breaking for Claude Code, opens the workflow to every platform that honours the Skill protocol. Same pattern will roll out to `deep-wiki`, `deep-review` (remaining surfaces), and `deep-work` next.
+
+### Migration
+
+No user action required.
+
+- Claude Code: keep typing `/deep-evolve [args...]` — works identically.
+- Codex / Copilot CLI / Gemini CLI: invoke `Skill({ skill: "deep-evolve:deep-evolve", args: "..." })` or use natural-language triggers that match the skill description (e.g. "run experiments", "이어서 진행").
+- Existing sessions / `.deep-evolve/` state / journal events: no schema changes. Resume continues to work transparently.
+
+### Tests
+
+- `npm test` — 129 node:test cases PASS (envelope contract, handoff roundtrip, protect-readonly golden fixtures, session recovery).
+- `pytest hooks/scripts/tests/ -q` — 551 cases PASS + 1 xfail (unchanged), including all 15 content-assertion cases retargeted at the new skill path.
+- `plugin-dev:plugin-validator` — 0 critical / 0 major.
+- `plugin-dev:skill-reviewer` — PASS.
+
 ## [3.3.3] — 2026-05-13 (plugin-dev validation cleanup + manifest drift CI guard)
 
 ### Added

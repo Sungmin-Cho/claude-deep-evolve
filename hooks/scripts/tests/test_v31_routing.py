@@ -20,7 +20,7 @@ from pathlib import Path
 REPO = Path(__file__).parents[3]
 INIT = REPO / "skills/deep-evolve-workflow/protocols/init.md"
 RESUME = REPO / "skills/deep-evolve-workflow/protocols/resume.md"
-COMMANDS = REPO / "commands/deep-evolve.md"
+COMMANDS = REPO / "skills/deep-evolve/SKILL.md"
 
 
 # === init.md Step 12 — fresh-init dispatch ===
@@ -143,10 +143,10 @@ def test_resume_md_paused_status_unchanged():
     )
 
 
-# === commands/deep-evolve.md — protocol routing summary ===
+# === skills/deep-evolve/SKILL.md — protocol routing summary ===
 
 def test_commands_routing_summary_includes_coordinator():
-    """commands/deep-evolve.md Protocol Routing Summary must list coordinator.md."""
+    """skills/deep-evolve/SKILL.md Protocol Routing Summary must list coordinator.md."""
     c = COMMANDS.read_text()
     summary_idx = c.find("## Protocol Routing Summary")
     assert summary_idx != -1, "Protocol Routing Summary section missing"

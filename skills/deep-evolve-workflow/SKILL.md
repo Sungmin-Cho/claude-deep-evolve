@@ -1,13 +1,15 @@
 ---
 name: deep-evolve-workflow
-version: "3.3.3"
+version: "3.4.0"
 description: |
   This skill should be used when the user wants to run autonomous, measured
   code-improvement experiments — analyzing the project, generating an evaluation
   harness, and iterating until a goal metric improves. Also handles session
   resume, history queries, lineage tracking, outer-loop strategy evolution,
-  and meta-archive transfer across projects. The actual command entry point
-  is `commands/deep-evolve.md` (invoked as `/deep-evolve`).
+  and meta-archive transfer across projects. The actual entry point is the
+  sibling `deep-evolve` skill (`skills/deep-evolve/SKILL.md`, `user-invocable: true`,
+  invoked as `/deep-evolve` in Claude Code or `Skill({ skill: "deep-evolve:deep-evolve" })`
+  cross-platform).
   Trigger phrases include: "deep evolve", "deep-evolve", "autonomous experiment",
   "자율 실험", "auto improve", "자동 개선", "experiment loop", "실험 루프",
   "프로젝트 개선", "코드 최적화", "self-evolution", "자기 진화",
@@ -32,7 +34,7 @@ experiment loop, and reports results.
 
 ## Routing Table
 
-All routing is owned by `commands/deep-evolve.md` (Step 1: State Detection & Routing).
+All routing is owned by the `deep-evolve` entry skill (`skills/deep-evolve/SKILL.md`, Step 1: State Detection & Routing).
 This table lists every protocol file under `protocols/` and when it is entered.
 
 | 진입 트리거 | Protocol 파일 | 책임 |
@@ -52,7 +54,7 @@ This table lists every protocol file under `protocols/` and when it is entered.
 ## State Machine
 
 `session.yaml.status` 가 다음 5가지 상태를 순환한다. 각 상태별 라우팅 결정은
-`commands/deep-evolve.md` Step 1 의 AskUserQuestion 분기를 따른다.
+`skills/deep-evolve/SKILL.md` Step 1 의 AskUserQuestion 분기를 따른다.
 
 ```
 initializing → active → paused (outer loop 중) → active → completed / aborted
@@ -66,7 +68,7 @@ initializing → active → paused (outer loop 중) → active → completed / a
 
 ## 핵심 불변식
 
-상세 정의는 `commands/deep-evolve.md` "핵심 불변식" 섹션 참조.
+상세 정의는 `skills/deep-evolve/SKILL.md` "핵심 불변식" 섹션 참조.
 
 1. **고정 평가, 가변 코드**: prepare.py는 ground truth. target 파일만 수정한다
 2. **Scoring Contract**: score는 항상 higher-is-better. minimize 메트릭은 `BASELINE_SCORE / raw_score` 변환
