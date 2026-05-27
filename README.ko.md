@@ -2,415 +2,43 @@
 
 # deep-evolve
 
-Claude Code용 자율 실험 플러그인. 목표를 지정하면 deep-evolve가 측정 기반 실험 루프를 통해 프로젝트를 체계적으로 개선합니다.
+> Claude Code · Codex용 자율 실험 플러그인 — 목표를 지정하면 deep-evolve가 측정 기반 실험 루프를 통해 프로젝트를 체계적으로 개선합니다.
 
-## Codex 호환성
+![version](https://img.shields.io/github/package-json/v/Sungmin-Cho/claude-deep-evolve?label=version)
+![license](https://img.shields.io/github/license/Sungmin-Cho/claude-deep-evolve)
+[![part of deep-suite](https://img.shields.io/badge/part%20of-deep--suite-5b8def)](https://github.com/Sungmin-Cho/claude-deep-suite)
 
-이번 릴리스는 `.codex-plugin/plugin.json` Codex 네이티브 플러그인 메타데이터와 `AGENTS.md` Codex 프로젝트 가이드를 포함합니다. Claude Code 매니페스트는 `.claude-plugin/plugin.json`에 그대로 유지되며, 기존 `claude-deep-suite` marketplace namespace를 유지해 기존 설치 키를 보존하면서 Codex는 suite의 `.agents/plugins/marketplace.json`을 읽습니다.
+deep-evolve는 AI 에이전트에게 코드베이스와 fitness 메트릭을 주고 자율적으로 실험하게 합니다 — 코드를 수정하고, 결과를 평가하고, 개선은 유지하고, 회귀는 폐기하며 — 목표가 달성되거나 수익이 감소할 때까지 반복합니다. 프로젝트에 맞춘 평가 harness를 생성하고, 전용 브랜치에서 crash-safe한 journal 기반 실험 루프를 실행하며, 실험 **전략** 자체를 시간에 따라 진화시킬 수 있습니다.
+
+## deep-suite에서의 역할
+
+deep-evolve는 [claude-deep-suite](https://github.com/Sungmin-Cho/claude-deep-suite)의 자율 실험 담당 플러그인입니다. 표준 [Harness Engineering](https://martinfowler.com/articles/harness-engineering.html) 피드포워드/피드백 루프 **밖에서** 동작합니다: 일반 개발 과정의 안내·감지 대신, 어떤 가이드나 센서도 제안하지 않을 개선점을 자동화된 실험으로 발견하며 자체적인 실험 → 평가 → 유지/폐기 사이클을 따릅니다. deep-review의 recurring findings를 소비해 실험 방향을 잡고, deep-dashboard와 deep-work가 소비하는 receipt/insights를 emit합니다.
 
 ## 영감
 
-이 프로젝트는 Andrej Karpathy의 [autoresearch](https://github.com/karpathy/autoresearch)에서 영감을 받았습니다 — AI 에이전트가 자율적으로 연구를 수행하는 실험입니다. 핵심 아이디어: AI 에이전트에게 코드베이스를 주고, 밤새 실험하게 하고 — 코드를 수정하고, 결과를 평가하고, 개선은 유지하고, 회귀는 폐기하고 — 아침에 더 나은 프로젝트를 확인합니다.
+deep-evolve는 Andrej Karpathy의 [autoresearch](https://github.com/karpathy/autoresearch)에서 영감을 받았습니다 — AI 에이전트에게 코드베이스를 주고 밤새 실험하게 한 뒤 아침에 더 나은 프로젝트를 확인하는, 자율 연구 실험입니다. 자기 진화 아키텍처는 [HyperAgents](https://arxiv.org/abs/2603.19461)에서 비롯됐습니다 — 대상 코드뿐 아니라 메타 학습으로 자체 전략을 진화시키는 에이전트입니다. 동작 레이어(entropy 추적, legibility gate, shortcut detection, diagnose-and-retry)는 Wen et al. 2026, "Automated Weak-to-Strong Researcher"를 따릅니다. deep-evolve는 이 방법론을 ML 훈련에서 **모든 소프트웨어 프로젝트**로 일반화합니다.
 
-자기 진화 아키텍처(v2.0)는 [HyperAgents](https://arxiv.org/abs/2603.19461)에서 영감을 받았습니다 — 대상 코드뿐 아니라 메타 학습을 통해 자체 전략을 진화시키는 에이전트입니다.
+## 설치
 
-deep-evolve는 이 방법론을 ML 훈련에서 **모든 소프트웨어 프로젝트**로 일반화하여, 자동 평가 harness 생성, journal 기반 crash recovery, 다중 도메인 템플릿 지원, 자기 진화 전략 발전을 갖춘 Claude Code 플러그인으로 패키징했습니다.
+### Deep Suite 마켓플레이스 (권장)
 
-### 하네스 엔지니어링에서의 역할
+```bash
+# Claude Code
+/plugin marketplace add Sungmin-Cho/claude-deep-suite
+/plugin install deep-evolve@Sungmin-Cho-claude-deep-suite
 
-deep-evolve는 표준 [Harness Engineering](https://martinfowler.com/articles/harness-engineering.html) 프레임워크 **밖에서** 동작합니다 — 측정 기반 실험 루프를 통해 코드를 반복적으로 개선하는 자율 실험 프로토콜입니다. 프레임워크가 일반 개발 과정에서의 안내와 감지에 집중하는 반면, deep-evolve는 어떤 가이드나 센서도 제안하지 않을 개선점을 자동화된 실험으로 발견하는 보완적 접근법입니다. [Deep Suite](https://github.com/Sungmin-Cho/claude-deep-suite) 생태계의 일부이지만 자체적인 실험→평가→유지/폐기 사이클을 따릅니다.
-
-v2.0의 Outer Loop로 deep-evolve는 한 단계 더 나아갑니다: 대상 코드뿐 아니라 실험을 이끄는 **전략** 자체를 진화시키고, 수렴이 감지되면 **평가 harness** 자체를 확장할 수도 있습니다. 이 3계층 자기 진화(파라미터 → 전략 텍스트 → 평가 확장)는 시스템을 자체 개선 프로세스를 개선하는 진정한 메타 옵티마이저로 만듭니다.
-
-## 3.2.0 신규 기능
-
-`evolve-receipt.json`과 `evolve-insights.json` 두 산출물을 모두 M3
-cross-plugin envelope 컨트랙트로 emit하도록 전환한 minor 릴리스. 새 emit은
-suite 전역 envelope(`schema_version: "1.0"` + `envelope` + `payload`)으로
-wrap되며 3.2.0 이전 receipt는 fall-through로 그대로 읽힌다.
-`session.yaml` 스키마 변경 없음 — v3.1.x 세션은 그대로 resume된다. 주요 변경:
-
-- **M3 envelope wrap** — `evolve-receipt`과 `evolve-insights`에 `producer`,
-  `producer_version`, `artifact_kind`, ULID `run_id`, RFC 3339
-  `generated_at`, `git.{head,branch,dirty}`,
-  `provenance.{source_artifacts,tool_versions}` 필드 추가. Schema와 helper
-  모듈은 suite spec
-  ([`claude-deep-suite/docs/envelope-migration.md`](https://github.com/Sungmin-Cho/claude-deep-suite/blob/main/docs/envelope-migration.md))
-  과 1:1 mirror.
-- **deep-review → deep-evolve chain** —
-  `evolve-receipt.envelope.parent_run_id`가 소비된
-  `recurring-findings.envelope.run_id`로 자동 chain 되어 M4 telemetry의
-  cross-plugin trace 재구성을 가능하게 한다. `evolve-insights`(multi-source
-  aggregator)는 `parent_run_id`를 omit하고 각 source 경로를
-  `provenance.source_artifacts[]`에 기록한다.
-- **Atomic write** — wrap helper가 unique temp 경로에 쓴 뒤 canonical
-  output으로 `rename`. 동시 finisher · mid-write 중단 시에도 downstream
-  parser가 truncated JSON을 만나지 않는다.
-- **Reader 측 envelope 인식** — `init.md` Stage 3.5가 recurring-findings
-  envelope을 감지(bash-only fast path + jq identity guard)하고
-  `payload.findings`를 unwrap, `envelope.run_id`를
-  `session.yaml.cross_plugin`에 기록하여 completion 단계의 chain에
-  사용한다. `session-helper.sh`의 receipt reader
-  (`cmd_append_meta_archive_local`, `cmd_render_inherited_context`)는
-  3-way identity check가 포함된 공유 `_RECEIPT_QUERY_BASE` jq 식을 사용.
-- **Self-test validator** — zero-dep `scripts/validate-envelope-emit.js`가
-  suite-side schema를 mirror (additionalProperties strict, ULID/SemVer
-  2.0.0/RFC 3339/kebab-case 정규식,
-  `schema.name === artifact_kind` identity check). `envelope-emit.test.js`
-  와 `envelope-chain.test.js`에 70개 테스트 포함.
-
-전체 목록은 [CHANGELOG.ko.md](./CHANGELOG.ko.md) 참고.
-
-## 3.1.1 신규 기능
-
-v3.1.0 런타임 가드를 강화한 패치 릴리스. 프로토콜·세션 스키마 변경 없음
-— `session.yaml.deep_evolve_version`은 `"3.1.0"` 그대로이고 기존 세션은
-변경 없이 resume. 주요 변경:
-
-- **강화된 `seal_prepare_read` 가드** — `protect-readonly.sh`가 Bash 측
-  `prepare.py` / `prepare-protocol.md` read (`cat`, `less`, `tee -a`,
-  `perl -i` 등)도 deny-by-default 매칭으로 차단. `python prepare.py`
-  실행만 예외 허용. Per-seed `program.md`
-  (`worktrees/seed_*/program.md`)도 세션 루트 `program.md`와 동일한
-  META_MODE 게이트 적용.
-- **견고해진 scheduler signals** — `scheduler-signals.py`가 이전 헬퍼의
-  legacy `status`-key journal 이벤트를 인식, inline `q`가 없는 `kept`
-  이벤트는 `evaluated`-event score lookup으로 fallback, boolean의
-  numeric 강제 변환 차단, fairness reset 후 kill/grow 결정용
-  `experiments_used_this_epoch` per-seed 신호 추가.
-- **타이트해진 baseline + status 집계** — `baseline-select.py`의
-  § 8.2 5.b non-quarantine 필터가 `status == "killed_shortcut_quarantine"`
-  도 거부. `status-dashboard.py`는 terminal `kept`/`discarded` 이벤트만
-  `(seed_id, experiment_id)`로 dedup하여 카운팅 — `evaluated`와 후속
-  terminal 이벤트가 공존할 때의 중복 카운팅 제거.
-- **견고해진 kill 이벤트 필드** — `session-helper.sh`가 `seed_killed`
-  이벤트를 null / 비-string `condition` 허용으로 파싱, `killed_reason`
-  (raw condition)과 `killed_reasoning`(자유 텍스트) 분리, 옵션
-  `final_q` / `experiments_used` 보존.
-- **Partial-parse 안전성** — `templates/prepare-stdout-parse.py`가
-  stdout에 선언된 메트릭이 누락되면 score를 `0.0`으로 collapse — 이전엔
-  `score <= 0` ceiling 분기에서 `2.0` (무한 개선)을 부여하던 partial-parse
-  실패를 수정.
-- **매니페스트 drift 테스트** — 신규 `test_package_manifest.py`가
-  `package.json` / `plugin.json` / `SKILL.md` / `HELPER_VERSION`
-  동기화 단언; 신규 `test_v31_protect_readonly.py` (119줄)가 강화된
-  가드를 광범위하게 커버.
-
-전체 목록은 [CHANGELOG.ko.md](./CHANGELOG.ko.md) 참고.
-
-## 3.1.0 신규 기능
-
-Virtual parallel N-seed 탐색. 각 세션이 N=1..9개의 독립 seed worktree에서
-병렬 실행 (블록 단위 실험 조정, Q3 AI 판단 block ∈ {1,2,3,5,8}). 공유
-forum을 통한 seed 간 관찰, 다음 블록을 어느 seed가 받을지 결정하는
-적응형 스케줄러.
-
-- **Per-seed worktree 격리** — `.deep-evolve/<sid>/seeds/<seed_id>/worktree/`
-  하위 N개 seed worktree (T2 worktree manager). Coordinator가 prose
-  contract로 subagent 발화; per-seed inner loop는 기존 코드 경로 그대로
-  + journal 이벤트에 `seed_id` 주입.
-- **β/γ seed 구분** — β (init 시 의도적 모호 방향, A.3에서 1회 생성),
-  γ (세션 중 fairness floor/scheduler signal에 의한 AI 재생성,
-  `grow_then_schedule` 결정 시). 두 종류 모두 동일 seed schema 공유,
-  `seed_origin ∈ {β, γ}`로만 구별.
-- **적응형 스케줄러** — `scheduler-decide.py`가
-  `{schedule, kill_then_schedule, grow_then_schedule}` 중 하나 반환.
-  Per-seed signals (Q, in_flight_block, borrows_received MIN-wins,
-  last_keep_age) + session-wide signals (P3 floor, fairness deficit)이
-  AI 판단에 입력. Helper가 JSON schema + `REQUIRED_BY_DECISION` 검증 +
-  isinstance-not-bool 숫자 가드 강제.
-- **Active borrow 교환** — Seed 간 관찰 통로
-  `.deep-evolve/<sid>/forum.jsonl` (append-only, flock 보호). 2단계 borrow
-  lifecycle: `borrow_planned` (journal-side, Step 5.f intent marker) →
-  `cross_seed_borrow` (forum-side, 실제 차용이 kept commit에서 실행될 때
-  발행) — `borrow_abandoned`는 실행되지 않고 stale로 남은 planned 이벤트를
-  정리하는 janitor 마커. Borrow preflight에서 P2 flagged 필터 + P3 floor +
-  (borrower, source_commit) per-쌍 dedup 강제. `borrows_received`는
-  MIN-wins로 fairness 신호 제공.
-- **세션 종료 synthesis + cascade fallback** — Synthesis worktree에서
-  모든 seed 브랜치 통합. AI 병합 계획이 Q 회귀 시 5.a preferred-baseline
-  → 5.b non-quarantine → 5.c best-effort → 5.d no-baseline 순으로 폴백
-  (§ 8.2). 각 branch마다 `generate-fallback-note.py`가 구조화된 설명 발행.
-- **Init + resume + meta-archive schema_v4** — A.1.6에서 AI가
-  (project_type, eval_parallelizability) 기반으로 `n_suggested` 분류.
-  A.2.6 AskUserQuestion으로 N 확정 (`--no-parallel`/`--n-min`/`--n-max`
-  env var 존중). Resume 시 yaml/journal drift는 prefer-journal SOT로
-  복원 (Step 3.5.b). Meta-archive entry는 schema_version=4에 `virtual_parallel`
-  블록 추가; v2/v3/v4가 4-arm version gate로 공존. Section F가 v3 entry는
-  270일 prune (v2의 180일 룰과 평행).
-- **CLI 표면** — `--no-parallel`은 N=1 강제; `--n-min=<k>` / `--n-max=<k>`로
-  AI의 N 결정 범위 좁힘 (N_MIN ≤ N_MAX 교차 불변식 강제, 위반 시 rc=2);
-  `--kill-seed=<id>`는 `kill_requests.jsonl`에 pending 항목 기록 후 다음
-  scheduler turn에서 AskUserQuestion 확정; `--status` 서브커맨드는 per-seed
-  대시보드 출력 (§ 13.1).
-
-참고: Wen et al. 2026 (AAR 기반, v3.0에서 유지); v3.1은 AAR Inner/Outer
-Loop를 virtual-parallel 탐색으로 확장.
-
-## 3.0.0 신규 기능
-
-AAR 논문에서 영감 받은 4개 동작 레이어를 Inner/Outer Loop에 추가. v3 세션에서만
-활성화 — v2.2.2 세션은 기존 코드 경로 그대로 유지.
-
-- **Idea-category entropy 추적** — 10 카테고리 taxonomy + Outer Loop마다
-  Shannon entropy 계산. Tier 1 overlay로 탐험 collapse 방지.
-- **Legibility Gate** — 모든 `kept` 이벤트에 rationale 강제. Flagged keep은
-  빈값 또는 description과 동일 시 discard로 전환.
-- **Shortcut Detector** — 작은 코드 변경으로 큰 score jump 발생 시 flag.
-  누적 3회 시 Section D prepare 확장 강제 발화, flagged commit의 diff를
-  기반으로 한 adversarial scenarios로 재생성.
-- **Diagnose-and-Retry** — crash / severe drop / 에러 키워드 시 1회 복구
-  재시도. 세션 상한 10회. Per-experiment 재시도 journal replay로 1회 강제.
-
-참고: Wen et al. 2026, "Automated Weak-to-Strong Researcher" (Anthropic Alignment Science Blog).
-
-## 자기 진화 실험 루프 (v2.0)
-
-v2.0은 시스템이 대상 코드뿐 아니라 실험을 이끄는 **전략** 자체를 진화시키는 자기 진화 아키텍처를 도입합니다.
-
-### 2계층 구조: Outer Loop + Inner Loop
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Outer Loop (전략 진화)                                      │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │  strategy.yaml: 진화 가능한 전략 파라미터              │    │
-│  │  (mutation_rate, idea_bank, focus_areas, ...)       │    │
-│  └───────────────────┬─────────────────────────────────┘    │
-│                      ▼                                      │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │  Inner Loop (실험 실행)                               │    │
-│  │  현재 전략으로 N회 실험 실행                            │    │
-│  │  → Q(v) 메타 메트릭 측정                               │    │
-│  └───────────────────┬─────────────────────────────────┘    │
-│                      ▼                                      │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │  전략 평가 & 진화                                     │    │
-│  │  Q(v) = (best_score - baseline) / experiments_used  │    │
-│  │  → 다음 outer 반복을 위해 strategy.yaml 변이           │    │
-│  └─────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
+# Codex
+codex plugin install deep-evolve
 ```
 
-- **Inner Loop**: 기존 실험 사이클 — 코드 수정, 평가, 유지/폐기. 이제 `strategy.yaml` 파라미터에 의해 구동됩니다.
-- **Outer Loop**: 전략 자체를 진화시킵니다. 각 inner loop 에포크 후 **Q(v)**(개선 속도)를 측정하고 전략 파라미터를 변이시켜 더 나은 실험 접근법을 탐색합니다.
+### 단독 설치
 
-### 3계층 자기 진화
-
-deep-evolve는 세 가지 계층에서 동시에 진화합니다:
-
-| 계층 | 파일 | 진화 대상 | 방법 |
-|------|------|----------|------|
-| **파라미터** | `strategy.yaml` | 변이율, 집중 영역, 아이디어 뱅크 | Outer Loop가 에포크마다 변이 |
-| **전략 텍스트** | `program.md` | 에이전트 지침, 실험 접근법 | Meta Analysis가 수렴 시 자동 개정 |
-| **평가** | `prepare.py` | 시나리오, 난이도, 커버리지 | Section D가 고원에서 자동 트리거 |
-
-### 전략 & 코드 아카이브 (Stepping Stones)
-
-새로운 최고 Q(v)를 달성한 모든 전략은 **stepping stone**으로 아카이브됩니다:
-
-- **전략 아카이브**: Q(v) 점수와 계보가 포함된 `strategy.yaml` 스냅샷을 저장합니다. 새 전략은 최신 것뿐 아니라 고성능 부모에서 육성됩니다.
-- **코드 아카이브**: 이름이 지정된 git 브랜치(`archive/<name>`)가 최고 점수 코드 상태를 보존합니다. 새 전략 방향이 실패하면 아카이브된 상태로 되돌아갈 수 있습니다.
-- **아이디어 앙상블**: 각 실험은 점수가 매겨지고 순위가 매겨진 여러 후보 아이디어에서 선택합니다. 아이디어 생성의 단일 실패점을 방지합니다.
-
-### 크로스 프로젝트 전이
-
-한 프로젝트에서 잘 작동한 전략은 다른 프로젝트로 전이할 수 있습니다:
-
-- **메타 아카이브** (`~/.claude/deep-evolve/meta-archive.jsonl`): 모든 프로젝트에 걸친 검증된 전략의 공유, flock 보호 아카이브입니다.
-- 새 프로젝트를 시작할 때, deep-evolve는 프로젝트 도메인 유사성으로 필터링된 메타 아카이브에서 초기 전략을 씨앗으로 사용합니다.
-- 성공한 전략은 각 세션 후 메타 아카이브에 기여됩니다.
-
-### 크로스 플러그인 피드백 (v2.1)
-
-deep-evolve는 deep-suite 내 다른 플러그인과 양방향 데이터를 교환한다:
-
-**내보내기 (Producer):**
-- `evolve-receipt.json` → deep-dashboard가 수집하여 effectiveness 점수에 evolve 차원 반영
-- `evolve-insights.json` → deep-work Phase 1 Research에서 참고 context로 소비
-- merge/PR 전 deep-review 트리거 제안 (APPROVE/REQUEST_CHANGES/FAILURE 처리)
-
-**소비 (Consumer):**
-- `.deep-review/recurring-findings.json` → init Stage 3.5에서 읽어 실험 방향 조향 (prepare.py 시나리오 + program.md + strategy.yaml 가중치 조정)
-
-### 세션 관리 (v2.2)
-
-deep-evolve는 `.deep-evolve/<session-id>/` 네임스페이스에서 세션을 관리하며, 모든 실험 데이터를 세션 간 보존합니다.
-
-- **세션 생명주기 (v2.2.2)**: `initializing` (baseline 측정/writeback) → `active` (inner loop) → `paused` (outer loop 실행 중) → `active` → `completed` / `aborted`.
-- **재개 (Resume)**: 언제든 중단하세요. `/deep-evolve`를 다시 실행하면 활성 세션을 감지하고, 무결성 검사(브랜치 정렬, dirty tree, orphan 실험)를 수행한 후 이어서 진행합니다. Outer Loop 재개는 **phase 단위 idempotent**: 각 sub-step이 journal 이벤트(`outer_loop`, `strategy_update`, `strategy_judgment`, `notable_marked`, `program_skip`)로 식별되며, 이미 완료된 단계는 스킵됩니다 (v2.2.2).
-- **Baseline 계약 (v2.2.2)**: minimize 방향 메트릭은 init 중 writeback되어 모든 세션에서 `session.yaml.metric.baseline == 1.0`이 보장됩니다. 모든 하류 비교(`improvement_pct`, Q(v) `normalized_delta`, archive 점수)가 공통 스케일을 공유합니다.
-- **이력 (History)**: `/deep-evolve history`로 현재 프로젝트의 모든 세션을 조회합니다. 실험 횟수, keep rate, Q 궤적, score 개선을 한눈에 확인할 수 있습니다.
-- **세션 계보 (Lineage)**: 새 세션은 완료된 세션을 이어받아 최종 전략, 프로그램, notable keep을 시작 컨텍스트로 상속합니다. Inherited Context(전략 패턴, 주목할 발견, 선행 세션의 교훈)가 새 세션의 `program.md`에 자동 삽입됩니다. `/deep-evolve history --lineage`로 계보를 확인할 수 있습니다.
-
-## 방법론
-
-### 중요한 세 가지 파일
-
-autoresearch 방법론은 엄격한 관심사 분리를 중심으로 합니다:
-
-```
-┌─────────────────────────────────────────────────────┐
-│  평가 harness  — 고정된 평가 인프라                    │
-│                  Ground truth. 실험 중                │
-│                  에이전트가 절대 수정하지 않음.           │
-│                                                     │
-│  두 가지 형태:                                        │
-│  • prepare.py          — CLI 명령으로 메트릭 획득      │
-│  • prepare-protocol.md — MCP/도구 기반 평가 프로토콜   │
-├─────────────────────────────────────────────────────┤
-│  target files  — 개선 대상 코드                       │
-│                  모든 것이 수정 가능:                   │
-│                  아키텍처, 파라미터, 로직,               │
-│                  패턴 — 메트릭을 올바른 방향으로          │
-│                  움직이는 모든 것.                      │
-├─────────────────────────────────────────────────────┤
-│  program.md    — 에이전트를 위한 지침                   │
-│                  목표, 제약, 실험 전략을 정의.           │
-│                  "Research org code" — 사람은           │
-│                  코드가 아닌 프로세스를 프로그래밍.        │
-└─────────────────────────────────────────────────────┘
+```bash
+/plugin marketplace add Sungmin-Cho/claude-deep-evolve
+/plugin install deep-evolve@Sungmin-Cho-claude-deep-evolve
 ```
 
-### 실험 루프
-
-각 실험은 동일한 사이클을 따릅니다. 에이전트는 허락을 구하지 않고 중단될 때까지 자율적으로 실행됩니다.
-
-```
-    ┌──────────────┐
-    │  아이디어 선정  │ ← 이전 keep/discard 이력에서 학습
-    └──────┬───────┘
-           ▼
-    ┌──────────────┐
-    │  코드 수정     │ ← 커밋당 하나의 아이디어, target 파일만
-    └──────┬───────┘
-           ▼
-    ┌──────────────┐
-    │    평가       │ ← prepare.py 실행, score 획득
-    └──────┬───────┘
-           ▼
-    ┌──────────────┐
-    │    비교       │ ← Score가 개선되었는가?
-    └──┬───────┬───┘
-       │       │
-      예      아니오
-       │       │
-       ▼       ▼
-    ┌──────┐ ┌──────────┐
-    │ 유지  │ │  폐기     │ ← git reset --hard HEAD~1
-    └──┬───┘ └────┬─────┘
-       │          │
-       └────┬─────┘
-            ▼
-    ┌──────────────┐
-    │    반복       │ ← 목표 달성 또는 감소 수익까지
-    └──────────────┘
-```
-
-### 하나의 메트릭, 하나의 진실
-
-모든 실험은 단일 복합 점수로 판단됩니다. 모호함이 없습니다:
-
-- **Score 개선** → 아무리 작아도 변경 유지
-- **Score 동일 또는 하락** → 아무리 영리한 아이디어였어도 폐기
-- **Crash** → 폐기, 실패 기록, 다음으로 이동
-
-메트릭은 측정 가능한 무엇이든 될 수 있습니다: validation loss, 테스트 통과율, Sharpe ratio, 시나리오 커버리지. 중요한 것은 **실험 중에 고정**되어 있다는 것 — 움직이는 표적을 최적화할 수 없습니다.
-
-### 간결함 기준
-
-동일 조건이라면 더 단순한 것이 좋습니다. 복잡성을 추가하는 작은 개선은 가치가 없습니다. 반대로 코드를 제거하고 동일하거나 더 나은 결과를 얻는 것은 훌륭한 성과 — 단순화 승리입니다.
-
-> 0.001 개선에 20줄의 해킹 코드? 아마 가치 없음.
-> 코드 삭제로 0.001 개선? 반드시 유지.
-> ~0 개선이지만 훨씬 단순한 코드? 유지.
-
-### 감소 수익
-
-실험은 자연스럽게 감소 수익 곡선을 따릅니다:
-
-```
-Score
-  ▲
-  │    ╱──────────────────  ← 고원 (수렴)
-  │   ╱
-  │  ╱    ← 급격한 개선
-  │ ╱
-  │╱
-  └──────────────────────► 실험 횟수
-```
-
-deep-evolve는 이를 자동으로 감지합니다. 최근 10회 실험에서 개선이 없으면: 계속할지, 평가 harness를 더 어려운 시나리오로 확장할지, 여기서 멈출지 물어봅니다.
-
-### 이력에서 학습
-
-에이전트는 매 실험 전 `results.tsv`를 읽습니다. 무엇이 효과가 있었고 없었는지 학습합니다:
-
-```
-commit   score      status    description
-abc1234  0.921053   keep      perl -pi -e 파일 쓰기 패턴 추가
-def5678  0.921053   discard   node -e safe 패턴 축소 (단독으로 불충분)
-ghi9012  0.973684   keep      런타임 언어 파일 쓰기 패턴 추가
-```
-
-폐기된 접근법은 반복하지 않습니다. 에이전트는 축적된 증거를 기반으로 전략을 진화시킵니다.
-
-## deep-evolve 작동 방식
-
-### 1. 프로젝트 분석
-
-`/deep-evolve`를 실행하면 플러그인이 프로젝트를 5단계로 정밀 분석합니다:
-
-1. **구조 스캔** — 파일 트리, 언어, 프레임워크, 진입점
-2. **의존성 & 도구** — 패키지 매니저, 테스트 프레임워크, 린터, CI/CD
-3. **코드 심층 분석** — 모든 대상 파일을 완전히 읽고 아키텍처 이해
-4. **메트릭 검증** — 실제로 평가 명령 실행, 출력 파싱, 시간 측정
-5. **확인** — 사용자에게 분석 결과 제시 후 진행
-
-추측 금지 — 모든 판단은 실제 파일 읽기에 근거합니다.
-
-### 2. 평가 Harness 생성
-
-분석을 기반으로 프로젝트에 맞는 평가 harness를 생성합니다:
-
-**CLI 모드** (`prepare.py`):
-
-| 도메인 신호 | 템플릿 | 예시 |
-|---|---|---|
-| stdout에 파싱 가능한 메트릭 | stdout-parse | ML 훈련 (val_bpb), 백테스팅 (Sharpe ratio) |
-| 테스트 프레임워크 감지 | test-runner | jest, pytest, vitest, cargo test, go test |
-| 코드 품질 / 패턴 목표 | scenario-based | 플러그인 hook, 보안 패턴, lint 규칙 |
-
-**프로토콜 모드** (`prepare-protocol.md`):
-
-| 도메인 신호 | 평가 도구 | 예시 |
-|---|---|---|
-| 게임 엔진 프로젝트 | MCP 서버 | Unity 리플레이 검증, Unreal 자동화 |
-| GUI/데스크톱 앱 | 브라우저/앱 자동화 | UI 상태 검증, 접근성 테스트 |
-| 외부 런타임 의존 | MCP/HTTP 호출 | 데이터 파이프라인, 하드웨어 테스트 |
-
-두 모드 모두 동일한 `score: X.XXXXXX` 형식으로 출력하여 실험 루프가 도메인 독립적으로 작동합니다.
-
-### 3. 자율 실험 루프
-
-루프는 현재 Claude Code 세션에서 실행됩니다. 각 실험은:
-- 상태를 원자적으로 journal에 기록 (crash-safe recovery)
-- 전용 branch에서 커밋 (main은 깨끗하게 유지)
-- 매 rollback 전 branch와 worktree 안전성 검증
-
-### 4. 세션 간 재개
-
-언제든 중단하세요. 나중에 `/deep-evolve`를 다시 실행하면 활성 세션을 감지하고, 진행 상황을 보여주고, 중단된 곳에서 이어갑니다. journal 기반 상태 머신이 crash 후에도 작업 손실을 방지합니다.
-
-### 5. 완료 보고서
-
-완료 시 deep-evolve는 보고서를 생성합니다:
-- 실험 통계와 score 변화
-- 평가 harness 버전별 감소 수익 곡선
-- 영향도순 핵심 발견 사항
-- 폐기된 실험에서 얻은 교훈
-
-그 후 선택: main에 merge, PR 생성, branch 유지, 또는 폐기?
+저장소에는 Claude Code manifest(`.claude-plugin/plugin.json`)와 Codex 네이티브 manifest(`.codex-plugin/plugin.json`)가 함께 포함됩니다. Codex 프로젝트 가이드는 [`AGENTS.md`](AGENTS.md)를 참조하세요. Claude Code에서는 [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)가 필요합니다.
 
 ## 빠른 시작
 
@@ -418,75 +46,115 @@ ghi9012  0.973684   keep      런타임 언어 파일 쓰기 패턴 추가
 # 새 세션 시작 (대화형 목표/대상 선택)
 /deep-evolve
 
-# 50회 실험 실행
+# 이번 배치에서 N개 실험 실행
 /deep-evolve 50
 
 # 특정 목표로 시작
-/deep-evolve "val_bpb 최소화"
+/deep-evolve "minimize val_bpb"
 
 # 중단된 세션 재개
 /deep-evolve resume
 
-# 세션 이력 조회
+# 세션 이력 / lineage tree 보기
 /deep-evolve history
-
-# lineage tree 표시
 /deep-evolve history --lineage
 
-# v3.1.0 — virtual parallel 탐색
-/deep-evolve --no-parallel               # N=1 강제 (단일 seed 모드)
-/deep-evolve --n-min=2 --n-max=5         # AI N 결정 범위 좁힘
-/deep-evolve --kill-seed=<seed_id>       # 세션 중 seed 종료
-/deep-evolve --status                    # Per-seed 대시보드
+# Virtual parallel 탐색
+/deep-evolve --no-parallel               # 단일 seed 강제 (N=1)
+/deep-evolve --n-min=2 --n-max=5         # AI의 N 결정 범위 좁히기
+/deep-evolve --kill-seed=<seed_id>       # 세션 중 seed 은퇴
+/deep-evolve --status                    # per-seed 대시보드 (읽기 전용)
 ```
+
+Codex / Copilot CLI / Gemini CLI / Agent SDK 호출자는 동일 워크플로우를 `Skill({ skill: "deep-evolve:deep-evolve", args: "…" })`로 호출합니다.
+
+## 방법론
+
+### 중요한 세 가지 파일
+
+방법론은 엄격한 관심사 분리를 중심으로 합니다:
+
+- **평가 harness** — 고정된 ground truth. 실험 중 에이전트가 절대 수정하지 않습니다. 두 형태: `prepare.py`(CLI 기반 메트릭) 또는 `prepare-protocol.md`(MCP/도구 기반 프로토콜).
+- **대상 파일** — 개선 대상 코드. 아키텍처, 파라미터, 로직, 패턴 등 메트릭을 올바른 방향으로 움직이는 모든 것이 대상.
+- **`program.md`** — 에이전트 지침: 목표, 제약, 실험 전략. 인간은 코드가 아닌 프로세스를 프로그래밍합니다.
+
+### 실험 루프
+
+각 실험은 동일 사이클을 따르며, 중단될 때까지 자율적으로 진행됩니다: 아이디어 선택(이전 keep/discard 이력 학습) → 코드 수정(커밋당 1 아이디어, 대상 파일만) → 평가(harness 실행, score 획득) → 비교 → score가 개선되면 **keep**, 아니면 **discard**(`git reset --hard HEAD~1`). 목표 달성 또는 수익 감소까지 반복.
+
+### 하나의 메트릭, 하나의 진실
+
+모든 실험은 단일 합성 score로 판단되어 모호성을 제거합니다:
+
+- **score 개선** → 아무리 작아도 keep.
+- **score 동일 또는 악화** → 아무리 영리한 아이디어여도 discard.
+- **crash** → discard, 실패 기록, 다음으로.
+
+메트릭은 측정 가능한 어떤 것이든 가능합니다 — validation loss, test pass rate, Sharpe ratio, 시나리오 커버리지 — 단 **실험 중 고정**되어야 합니다. 움직이는 목표는 최적화할 수 없습니다.
+
+### 간결함 기준
+
+다른 조건이 같다면 단순한 쪽이 낫습니다. 추한 복잡성을 더하는 작은 개선은 가치가 없고, 동등하거나 더 나은 결과를 내며 코드를 제거하는 것은 승리입니다.
+
+> 20줄의 hacky 코드를 더하는 0.001 개선? 아마 가치 없음.
+> 코드를 삭제하는 0.001 개선? 반드시 keep.
+> 개선은 ~0이지만 훨씬 단순한 코드? Keep.
+
+### 감소 수익
+
+실험은 감소 수익 곡선을 따릅니다. deep-evolve는 이를 자동 감지합니다: 최근 10개 실험이 개선을 내지 못하면 계속할지, 더 어려운 시나리오로 평가 harness를 확장할지, 멈출지 묻습니다.
+
+### 자기 진화
+
+deep-evolve는 대상 코드만 개선하는 것이 아니라, 개선하는 프로세스 자체를 세 계층에서 진화시킵니다:
+
+| 계층 | 파일 | 진화 대상 | 방법 |
+|---|---|---|---|
+| 파라미터 | `strategy.yaml` | mutation rate, focus areas, idea bank | Outer Loop가 epoch마다 변이 |
+| 전략 텍스트 | `program.md` | 에이전트 지침, 실험 접근법 | 수렴 시 자동 개정 |
+| 평가 | `prepare.py` | 시나리오, 난이도, 커버리지 | plateau 시 자동 트리거 |
+
+**Inner Loop**는 현재 `strategy.yaml`로 실험을 실행하고, **Outer Loop**는 각 epoch 후 개선 속도 Q(v)를 측정하여 전략을 변이시킵니다. 우수 전략은 stepping stone으로, 코드 상태는 이름 지정 git 브랜치로 아카이브되며, 검증된 전략은 flock 보호 공유 meta-archive를 통해 프로젝트 간 전이됩니다.
+
+### Virtual parallel 탐색
+
+한 세션은 N=1–9개 독립 seed worktree를 적응형 스케줄러로 병렬 실행할 수 있습니다. seed들은 공유 forum을 통해 서로를 관찰하고 유망한 아이디어를 차용하며, 세션 종료 시 synthesis가 per-seed 결과를 cascade-fallback baseline 선택으로 단일 best 브랜치에 병합합니다.
+
+## deep-evolve 작동 방식
+
+1. **프로젝트 분석** — 5단계 심층 분석(구조 스캔, 의존성/도구, 코드 심층 읽기, 실제 eval 명령 실행을 통한 메트릭 검증, 확인). 모든 판단은 실제 파일 읽기에 근거합니다.
+2. **평가 harness 생성** — deep-evolve가 CLI 또는 프로토콜 모드로 프로젝트에 맞춘 harness를 생성합니다. 두 모드 모두 동일한 `score: X.XXXXXX` 형식을 출력하여 루프를 도메인 독립적으로 만듭니다.
+3. **자율 실험 루프** — 현재 세션에서 실행되며, state를 원자적으로 journaling(crash-safe)하고, 전용 브랜치에 커밋하며, 모든 롤백 전 브랜치/worktree 안전성을 검증합니다.
+4. **세션 간 재개** — 언제든 중단하고 `/deep-evolve`를 다시 실행하면 활성 세션을 감지하고 integrity check 후 이어서 진행합니다.
+5. **완료 보고서** — 실험 통계, score 진행, 핵심 발견, 폐기 실험에서의 교훈을 제공한 뒤 main 병합 / PR 생성 / 브랜치 유지 / 폐기를 묻습니다.
 
 ## 지원 도메인
 
-### CLI 모드 (prepare.py)
+**CLI 모드 (`prepare.py`):**
 
-| 도메인 | 평가기 | 메트릭 예시 |
-|--------|--------|------------|
-| ML / 학습 | stdout 메트릭 파싱 | val_bpb, loss, accuracy, perplexity |
-| 테스팅 | 테스트 통과율 + 커버리지 | jest, pytest, vitest, cargo test, go test |
-| 코드 품질 | 커스텀 테스트 시나리오 | 보안 패턴, hook 신뢰성, lint 규칙 |
-| 전략 최적화 | 백테스트 결과 | Sharpe ratio, max drawdown, composite score |
+| 도메인 | 평가자 | 예시 메트릭 |
+|---|---|---|
+| ML / 훈련 | stdout 메트릭 파싱 | val_bpb, loss, accuracy, perplexity |
+| 테스트 | test pass rate + coverage | jest, pytest, vitest, cargo test, go test |
+| 코드 품질 | 커스텀 test 시나리오 | 보안 패턴, hook 신뢰성, lint 규칙 |
+| 전략 최적화 | 백테스트 결과 | Sharpe ratio, max drawdown, 합성 score |
 
-### 프로토콜 모드 (prepare-protocol.md)
+**프로토콜 모드 (`prepare-protocol.md`):**
 
-| 도메인 | 평가 도구 | 메트릭 예시 |
-|--------|----------|------------|
-| 게임 엔진 | Unity MCP, Unreal MCP | 리플레이 정확도, 프레임 타임, 테스트 통과율 |
-| GUI 앱 | 브라우저/앱 자동화 | UI 상태 일치율, 접근성 점수 |
-| 외부 시스템 | MCP/HTTP 호출 | API 정확도, 파이프라인 성공률 |
+| 도메인 | 평가 도구 | 예시 메트릭 |
+|---|---|---|
+| 게임 엔진 | Unity / Unreal MCP | replay accuracy, frame time, test pass rate |
+| GUI 앱 | 브라우저/앱 자동화 | UI state match rate, accessibility score |
+| 외부 시스템 | MCP/HTTP 호출 | API accuracy, pipeline success rate |
 
-프로토콜 모드는 CLI로 평가할 수 없는 프로젝트에서 MCP 서버, 브라우저 자동화, 외부 API 등을 통해 평가합니다. 프로젝트 분석 시 적절한 모드가 자동 추천됩니다.
+프로토콜 모드는 CLI로 평가할 수 없는 프로젝트(게임 엔진, GUI 앱, 외부 런타임 의존성)를 평가합니다. 적절한 모드는 프로젝트 분석 중 자동으로 추천됩니다.
 
-## 설치
+## 링크
 
-### 사전 요구사항
-
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI 설치 및 설정 완료
-
-### Deep Suite 마켓플레이스 (권장)
-
-```bash
-# 1. 마켓플레이스 추가
-/plugin marketplace add Sungmin-Cho/claude-deep-suite
-
-# 2. 플러그인 설치
-/plugin install deep-evolve@Sungmin-Cho-claude-deep-suite
-```
-
-### 단독 설치
-
-```bash
-# 1. 이 레포를 마켓플레이스로 추가
-/plugin marketplace add Sungmin-Cho/claude-deep-evolve
-
-# 2. 설치
-/plugin install deep-evolve@Sungmin-Cho-claude-deep-evolve
-```
+- [변경 이력](CHANGELOG.ko.md) ([English](CHANGELOG.md)) — 릴리스 이력
+- [Deep Suite 마켓플레이스](https://github.com/Sungmin-Cho/claude-deep-suite)
+- [기여 가이드](CONTRIBUTING.md) · [보안 정책](SECURITY.md)
 
 ## 라이선스
 
-MIT
+[MIT](LICENSE)

@@ -4,7 +4,9 @@ Autonomous Experimentation Protocol for goal-driven, measured improvement
 loops. The repo remains Claude Code compatible and now carries Codex-native
 plugin metadata beside the Claude manifest.
 
-Current version: 3.4.2.
+To check the current version: `jq -r .version .claude-plugin/plugin.json`. For version history, see [`CHANGELOG.md`](CHANGELOG.md) / [`CHANGELOG.ko.md`](CHANGELOG.ko.md).
+
+> 📄 **Docs maintenance**: this repo's documentation follows `docs/DOCS_RULE.md` (local maintainer guide — single-source-of-truth rules for README / CHANGELOG / this file).
 
 ## Runtime Surfaces
 
