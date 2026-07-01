@@ -25,7 +25,7 @@ deep-evolve는 Andrej Karpathy의 [autoresearch](https://github.com/karpathy/aut
 ```bash
 # Claude Code
 /plugin marketplace add Sungmin-Cho/claude-deep-suite
-/plugin install deep-evolve@Sungmin-Cho-claude-deep-suite
+/plugin install deep-evolve@claude-deep-suite
 
 # Codex
 codex plugin install deep-evolve
