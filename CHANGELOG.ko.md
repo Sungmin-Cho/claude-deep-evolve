@@ -5,6 +5,15 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)를 따르며,
 [유의적 버전](https://semver.org/spec/v2.0.0.html)을 준수합니다.
 
+## [3.4.3] — 2026-07-07 (stagnation 감지 복원 + coordinator 종료조건 경화)
+
+### Fixed
+
+- **stagnation 감지가 조용히 비활성화돼 있던 문제.** outer-loop이 `q_history`를 flat 최상위 경로에서 읽었지만 journal은 이를 `outer_loop.q_history` 아래에 중첩 저장하므로, stagnation 검사가 항상 빈 history를 보고 한 번도 발화하지 않았습니다. 이제 중첩 경로에서 읽습니다(malformed / `Q` 누락 엔트리는 skip).
+- `coordinator` § 8.1 종료 조건을 프롬프트 해석에 의존하지 않고 결정론적으로 인라인화하여, 루프가 자신의 정지 조건을 인식하지 못하던 liveness 갭을 닫았습니다.
+- `coordinator`의 hook/script 호출이 이제 `${CLAUDE_PLUGIN_ROOT}` 경로를 인용하여, 공백이 포함된 plugin root에서도 `hooks/scripts/*` 호출이 깨지지 않습니다.
+- `evolve-receipt` payload가 이제 필수 `session_id` 필드를 담습니다(이전에는 누락되어 emit 시 스키마 검증에 실패).
+
 ## [3.4.2] — 2026-05-18 (Codex 네이티브 플러그인 manifest 및 AGENTS 가이드)
 
 ### 추가

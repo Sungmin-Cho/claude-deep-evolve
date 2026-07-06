@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.3] — 2026-07-07 (stagnation detection restore + coordinator termination hardening)
+
+### Fixed
+
+- **Stagnation detection was silently disabled.** The outer-loop read `q_history` from a flat top-level path, but the journal nests it under `outer_loop.q_history`, so the stagnation check always saw an empty history and never fired. It now reads from the nested path (malformed / missing-`Q` entries are skipped).
+- `coordinator` § 8.1 termination conditions are now inlined deterministically instead of relying on prompt interpretation, closing a liveness gap where the loop could fail to recognize its own stop condition.
+- `coordinator` hook/script invocations now quote `${CLAUDE_PLUGIN_ROOT}` paths, so a plugin root containing spaces no longer breaks `hooks/scripts/*` calls.
+- `evolve-receipt` payloads now carry the required `session_id` field (previously omitted, which failed schema validation on emit).
+
 ## [3.4.2] — 2026-05-18 (Codex-native plugin manifest and AGENTS guide)
 
 ### Added
