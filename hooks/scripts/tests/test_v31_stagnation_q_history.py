@@ -172,3 +172,21 @@ def test_all_entries_missing_Q_is_zero(tmp_path):
         {"generation": 2, "epoch": 1},
     ]
     assert _run_block(_write_session_raw(tmp_path, entries).parent) == 0
+
+
+def test_malformed_trailing_entry_can_overcount(tmp_path):
+    """Counterexample to "skip is always conservative": if the MOST-RECENT entry
+    is malformed but was actually a new best, dropping it is NOT conservative —
+    it over-counts and can spuriously fire stagnation. gen1-4 form a 3-streak;
+    a malformed gen5 (whose true value would be a new best, e.g. 1.0, and would
+    reset the streak to 0 if recorded) is skipped → the older streak survives →
+    count stays 3. Asserts the CURRENT skip behavior as-is (behavior unchanged;
+    this pins the corruption-only edge documented in the block comment)."""
+    entries = [
+        {"generation": 1, "Q": 0.80, "epoch": 1},
+        {"generation": 2, "Q": 0.50, "epoch": 1},
+        {"generation": 3, "Q": 0.40, "epoch": 1},
+        {"generation": 4, "Q": 0.30, "epoch": 1},
+        {"generation": 5, "epoch": 1},   # malformed; true value would be a new best
+    ]
+    assert _run_block(_write_session_raw(tmp_path, entries).parent) == 3
