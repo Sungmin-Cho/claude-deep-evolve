@@ -108,6 +108,7 @@ Generate `$SESSION_ROOT/evolve-receipt.json` as an **M3 envelope-wrapped artifac
   "version": "<session.yaml.deep_evolve_version>",                        // string — MUST match session's recorded version (not hardcoded). v3.1 sessions emit "3.1.0"; v3.0.x sessions continuing to complete emit "3.0.0"; v2 sessions continuing to complete emit "2.2.2".
   "receipt_schema_version": 2,                                           // number
   "timestamp": "<ISO 8601 now>",                                         // string
+  "session_id": "<session.yaml.session_id>",                             // string (minLength 1) — REQUIRED by suite evolve-receipt v1.0 payload schema. Mirrors the envelope-level --session-id injected at wrap time (see § Envelope wrap).
   "goal": "<session.yaml.goal>",                                         // string
   "eval_mode": "<session.yaml.eval_mode>",                               // string: cli | protocol
   "experiments": {
