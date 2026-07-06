@@ -612,18 +612,22 @@ across resume / replay.
 Compute the rolling credit:
 
 ```bash
-# Derive consecutive_no_improve explicitly from session.yaml.q_history — same
-# source the v2/v3 base stagnation check uses. Bash would silently treat an
+# Derive consecutive_no_improve explicitly from session.yaml.outer_loop.q_history
+# — same source the v2/v3 base stagnation check uses. q_history is nested under
+# `outer_loop` (see Step 6.5.2 above, init.md, SKILL.md) and each element is a
+# `{generation, Q, epoch}` dict, so we read the nested list and project the Q
+# floats before the best/consecutive comparison. Bash would silently treat an
 # unbound name as 0 in $(( )) arithmetic below, so we bind it here and
 # defensively assert via ${...:?} that the shell-out succeeded. Matches the
 # aff23c9 / T20 rc-propagation contract: no silent T14-class masking.
 consecutive_no_improve=$(python3 -c "
 import yaml
 d = yaml.safe_load(open('$SESSION_ROOT/session.yaml')) or {}
-q_history = d.get('q_history', [])
+q_history = (d.get('outer_loop') or {}).get('q_history', [])
+qs = [e['Q'] for e in q_history if isinstance(e, dict) and 'Q' in e]
 count = 0
-best = max(q_history) if q_history else float('-inf')
-for q in reversed(q_history):
+best = max(qs) if qs else float('-inf')
+for q in reversed(qs):
     if q < best:
         count += 1
     else:
