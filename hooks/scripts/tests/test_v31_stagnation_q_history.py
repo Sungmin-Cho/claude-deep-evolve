@@ -134,3 +134,41 @@ def test_nested_read_ignores_bogus_top_level_q_history(tmp_path):
     reads the real nested stagnation data and returns 3."""
     _write_session(tmp_path, [0.80, 0.50, 0.40, 0.30], extra_top_level=[])
     assert _run_block(tmp_path) == 3
+
+
+# ---------- malformed-entry tolerance (missing Q) ----------
+
+def _write_session_raw(tmp_path: Path, raw_entries) -> Path:
+    """Write a session.yaml with arbitrary (possibly malformed) q_history
+    entries, to exercise the `'Q' in e` skip filter."""
+    content = {
+        "session_id": "stagnation-fixture",
+        "deep_evolve_version": "3.1.0",
+        "outer_loop": {"generation": len(raw_entries), "q_history": raw_entries},
+    }
+    path = tmp_path / "session.yaml"
+    path.write_text(yaml.safe_dump(content))
+    return path
+
+
+def test_missing_Q_entry_skipped_without_crash(tmp_path):
+    """A malformed entry lacking 'Q' is skipped (not a crash on max()/comparison
+    of a dict). Best (0.8) at gen 1, malformed gen 2, then 0.5 / 0.4 → the two
+    well-formed lower gens count → 2. Documents the intentional skip: without it,
+    max() over dicts / the mixed comparison would raise."""
+    entries = [
+        {"generation": 1, "Q": 0.80, "epoch": 1},
+        {"generation": 2, "epoch": 1},              # malformed: no Q → skipped
+        {"generation": 3, "Q": 0.50, "epoch": 1},
+        {"generation": 4, "Q": 0.40, "epoch": 1},
+    ]
+    assert _run_block(_write_session_raw(tmp_path, entries).parent) == 2
+
+
+def test_all_entries_missing_Q_is_zero(tmp_path):
+    """If every entry is malformed, qs is empty → count == 0, no crash."""
+    entries = [
+        {"generation": 1, "epoch": 1},
+        {"generation": 2, "epoch": 1},
+    ]
+    assert _run_block(_write_session_raw(tmp_path, entries).parent) == 0

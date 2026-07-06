@@ -624,6 +624,10 @@ consecutive_no_improve=$(python3 -c "
 import yaml
 d = yaml.safe_load(open('$SESSION_ROOT/session.yaml')) or {}
 q_history = (d.get('outer_loop') or {}).get('q_history', [])
+# Each entry is a {generation, Q, epoch} dict written at Step 6.5.2. Entries
+# missing 'Q' are malformed (corruption — Q is always written) and are skipped
+# defensively; this undercounts conservatively (delays stagnation at worst,
+# never false-fires it), keeping the block deterministic on well-formed state.
 qs = [e['Q'] for e in q_history if isinstance(e, dict) and 'Q' in e]
 count = 0
 best = max(qs) if qs else float('-inf')
