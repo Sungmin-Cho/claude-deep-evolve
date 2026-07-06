@@ -503,10 +503,13 @@ def test_coordinator_errexit_safe_pattern_documented():
     present + the legacy bare pattern is absent."""
     coord = ROOT / "skills/deep-evolve-workflow/protocols/coordinator.md"
     rm = coord.read_text(encoding="utf-8")
-    # Errexit-safe pattern: `if validated=$(...)` — captures rc safely
+    # Errexit-safe pattern: `if validated=$(...)` — captures rc safely.
+    # The scheduler-decide.py path is rooted at ${CLAUDE_PLUGIN_ROOT} (S-1 fix);
+    # tolerate the prefix so this test asserts the errexit-safe shape, not the
+    # (now-absolute) path literal.
     import re
     safe_pattern = re.search(
-        r'if\s+validated=\$\(\s*hooks/scripts/scheduler-decide\.py',
+        r'if\s+validated=\$\(\s*(?:\$\{CLAUDE_PLUGIN_ROOT\}/)?hooks/scripts/scheduler-decide\.py',
         rm,
     )
     assert safe_pattern, (
