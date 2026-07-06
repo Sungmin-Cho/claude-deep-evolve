@@ -54,7 +54,7 @@ subagent dispatches receive a stable absolute path (T15c + C-4 fix):
 
 ```bash
 # Resolve once; subagents inherit via prompt-passed arg (T13 helper_path)
-export DEEP_EVOLVE_HELPER_PATH="$(bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh resolve_helper_path)"
+export DEEP_EVOLVE_HELPER_PATH="$(bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh" resolve_helper_path)"
 [ -x "$DEEP_EVOLVE_HELPER_PATH" ] || { echo "helper not executable" >&2; exit 1; }
 ```
 
@@ -69,7 +69,7 @@ Coordinator runs in the main Claude Code session. Per-dispatch pseudocode:
 ```
 while session_active:
   # 1. Collect signals
-  signals = $(${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scheduler-signals.py \
+  signals = $("${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scheduler-signals.py" \
     --session-yaml "$SESSION_ROOT/session.yaml" \
     --journal "$SESSION_ROOT/journal.jsonl" \
     --forum "$SESSION_ROOT/forum.jsonl")
@@ -102,7 +102,7 @@ while session_active:
   # 'var=$(false); echo REACHED'` exits without printing REACHED.
   # The if/else pattern below is errexit-safe — the substitution failure
   # is consumed by the if condition, not propagated to errexit.
-  if validated=$(${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scheduler-decide.py \
+  if validated=$("${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scheduler-decide.py" \
       --decision "$decision" \
       --signals "$signals"); then
     rc=0
@@ -139,9 +139,9 @@ while session_active:
         apply_kill(validated.kill_target)
       dispatch_seed(validated.chosen_seed_id, validated.block_size) ;;
     grow_then_schedule)
-      alloc = $(${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh compute_grow_allocation $pool $current_N)
+      alloc = $("${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh" compute_grow_allocation $pool $current_N)
       if alloc succeeded:
-        create new seed via β growth + ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh create_seed_worktree
+        create new seed via β growth + "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh" create_seed_worktree
         dispatch_seed(new_seed_id, validated.block_size)
       else:
         # insufficient pool; scheduler must chain kill_then_schedule next turn
@@ -150,15 +150,15 @@ while session_active:
   esac
 
   # 7. Post-dispatch: validate worktree (see § Subagent Dispatch below)
-  ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh validate_seed_worktree $chosen_seed_id $pre_dispatch_head
+  "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh" validate_seed_worktree $chosen_seed_id $pre_dispatch_head
 
   # 7.5. Scan for stale borrow_planned events (spec § 7.4 P1, T15b wiring)
-  scan_result=$(python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/borrow-abandoned-scan.py \
+  scan_result=$(python3 "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/borrow-abandoned-scan.py" \
     --journal-path "$SESSION_ROOT/journal.jsonl" \
     --current-block-id "$current_block_id" \
     --staleness-blocks 2)
   for event in $(echo "$scan_result" | jq -c '.abandoned_events[]'); do
-    bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh append_journal_event "$event"
+    bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh" append_journal_event "$event"
   done
 
   # 8. Check for termination triggers — see § 8.1 Termination Conditions below.
@@ -189,7 +189,7 @@ replay-stable predicates rather than an ad-hoc stop.
 
 | # | Condition | Predicate |
 |---|---|---|
-| a | **All seeds killed** | every `session.yaml.virtual_parallel.seeds[].status` starts with `killed_` (no `active` / `completed_early` seed remains). No seed can be scheduled, so the loop cannot make progress. |
+| a | **No schedulable seed remains** | no `session.yaml.virtual_parallel.seeds[].status` equals `active` — every seed is terminal or paused: `killed_<reason>` (incl. `killed_shortcut_quarantine`), `completed_early`, or `quarantined` (the coordinator sets `quarantined` on contamination — see § Post-dispatch validation). Only `active` seeds are schedulable (`scheduler-decide.py` / `scheduler-signals.py` treat `active` as the live status), so once none remain the loop cannot dispatch and makes no progress. This is broader than "all killed": a mix of `completed_early` + `quarantined` seeds with leftover budget would otherwise satisfy neither (a) nor (b) and hang. |
 | b | **Budget exhausted** | `signals.budget_unallocated == 0` **AND** every seed's `remaining_budget` (`allocated_budget - experiments_used`, already surfaced per-seed by `scheduler-signals.py`) is `<= 0`. The shared pool and every per-seed allocation are spent. |
 | c | **Epoch cap reached** | `session.yaml.evaluation_epoch.current >= evaluation_epoch.max_epochs`, **only when** the operator configured `max_epochs`. When the field is absent the epoch cap is inactive (termination falls to a/b/d). |
 | d | **Wall-clock cap reached** | `now − session.yaml.created_at >= wall_clock_cap_minutes`, **only when** the operator configured `wall_clock_cap_minutes`. `created_at` is the same ISO-8601 field completion.md uses for `duration_minutes`. Absent ⇒ inactive. |
@@ -198,13 +198,13 @@ Conditions (a) and (b) are **always active** and derive purely from durable
 session state, so they are deterministic across resume / replay — the same
 scan reproduces the same verdict. Conditions (c) and (d) are
 **operator-configurable caps**: when their config field is unset they never
-fire, and the run terminates on the all-killed / budget floor.
+fire, and the run terminates on the no-active-seed / budget floor.
 
 `termination_trigger` therefore expands to:
 
 ```
 termination_trigger(signals) :=
-     all_seeds_killed(seeds)                            # (a)
+     no_active_seed(seeds)                              # (a) no status == "active"
   or budget_exhausted(budget_unallocated, seeds)        # (b)
   or (max_epochs is set          and epoch   >= max_epochs)           # (c)
   or (wall_clock_cap_minutes set  and elapsed_min >= wall_clock_cap)  # (d)
@@ -251,7 +251,7 @@ contract + post-dispatch validation below.
 ### Post-dispatch validation
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh validate_seed_worktree $k $pre_head
+bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh" validate_seed_worktree $k $pre_head
 if [ $? -ne 0 ]; then
   append journal "worktree_contaminated" event
   set seed.status = "quarantined"

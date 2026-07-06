@@ -72,7 +72,13 @@ def test_coordinator_md_defines_section_8_1_termination():
                   re.DOTALL | re.MULTILINE)
     assert m, "could not extract the § 8.1 section body"
     body = m.group(1)
-    assert "seeds" in body and "killed_" in body, "§ 8.1 missing all-seeds-killed condition"
+    # Condition (a) is "no schedulable (active) seed remains" — it must cover
+    # every non-active status, not just killed_ (liveness-gap fix: a mix of
+    # completed_early + quarantined seeds must still terminate).
+    assert "seeds" in body and "active" in body, "§ 8.1 (a) missing no-active-seed condition"
+    assert "killed_" in body and "completed_early" in body and "quarantined" in body, (
+        "§ 8.1 (a) must cover killed_/completed_early/quarantined, not just killed_"
+    )
     assert "budget" in body, "§ 8.1 missing budget-exhaustion condition"
     assert "max_epochs" in body, "§ 8.1 missing epoch-cap condition"
     assert "wall" in body.lower() and "created_at" in body, "§ 8.1 missing wall-clock cap condition"
