@@ -161,8 +161,10 @@ while session_active:
     bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh append_journal_event "$event"
   done
 
-  # 8. Check for termination triggers (§ 8.1)
-  if termination_trigger: break
+  # 8. Check for termination triggers — see § 8.1 Termination Conditions below.
+  #    termination_trigger is the disjunction (a)|(b)|(c)|(d) defined there,
+  #    evaluated from the `signals` collected in Step 1 plus session.yaml.
+  if termination_trigger(signals): break
 
   # 9. At epoch boundary: run Outer Loop Step 6.5.0 (forum summary + convergence detection)
   if epoch_boundary: run_outer_loop_step_6_5_0()
@@ -170,6 +172,46 @@ while session_active:
 # Session end — invoke synthesis.md protocol
 bash skills/deep-evolve-workflow/protocols/synthesis.md
 ```
+
+## § 8.1 Termination Conditions
+
+The Main Loop's Step 8 `termination_trigger` is the disjunction of the four
+deterministic conditions below. It is evaluated **once per iteration**, after
+the current turn's dispatch + post-dispatch bookkeeping, using the `signals`
+already collected in Step 1 plus authoritative session.yaml fields — no extra
+hidden counters. The loop breaks on the FIRST condition that holds; the order
+does not matter because every branch routes to the same synthesis exit (see
+§ Exit Back to Caller).
+
+This mirrors the Inner Loop's `experiment_count >= max_count` / diminishing-
+returns gate (inner-loop.md § Loop, Step 6.d): a small set of hard,
+replay-stable predicates rather than an ad-hoc stop.
+
+| # | Condition | Predicate |
+|---|---|---|
+| a | **All seeds killed** | every `session.yaml.virtual_parallel.seeds[].status` starts with `killed_` (no `active` / `completed_early` seed remains). No seed can be scheduled, so the loop cannot make progress. |
+| b | **Budget exhausted** | `signals.budget_unallocated == 0` **AND** every seed's `remaining_budget` (`allocated_budget - experiments_used`, already surfaced per-seed by `scheduler-signals.py`) is `<= 0`. The shared pool and every per-seed allocation are spent. |
+| c | **Epoch cap reached** | `session.yaml.evaluation_epoch.current >= evaluation_epoch.max_epochs`, **only when** the operator configured `max_epochs`. When the field is absent the epoch cap is inactive (termination falls to a/b/d). |
+| d | **Wall-clock cap reached** | `now − session.yaml.created_at >= wall_clock_cap_minutes`, **only when** the operator configured `wall_clock_cap_minutes`. `created_at` is the same ISO-8601 field completion.md uses for `duration_minutes`. Absent ⇒ inactive. |
+
+Conditions (a) and (b) are **always active** and derive purely from durable
+session state, so they are deterministic across resume / replay — the same
+scan reproduces the same verdict. Conditions (c) and (d) are
+**operator-configurable caps**: when their config field is unset they never
+fire, and the run terminates on the all-killed / budget floor.
+
+`termination_trigger` therefore expands to:
+
+```
+termination_trigger(signals) :=
+     all_seeds_killed(seeds)                            # (a)
+  or budget_exhausted(budget_unallocated, seeds)        # (b)
+  or (max_epochs is set          and epoch   >= max_epochs)           # (c)
+  or (wall_clock_cap_minutes set  and elapsed_min >= wall_clock_cap)  # (d)
+```
+
+A user-initiated `--finish` (§ Exit Back to Caller) is an orthogonal **manual**
+stop handled there, not a § 8.1 predicate.
 
 ## Subagent Dispatch
 
