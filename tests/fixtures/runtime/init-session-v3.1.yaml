@@ -1,0 +1,81 @@
+session_id: "01J00000000000000000000000"
+deep_evolve_version: "3.1.0"
+status: active
+created_at: "2026-04-25T10:00:00Z"
+goal: "다중 시드 최적화"
+parent_session: null
+program:
+  version: 1
+  history:
+    - version: 1
+      experiments: "0-"
+      keep_rate: null
+      reason: "initial"
+outer_loop:
+  generation: 1
+  interval: 20
+  inner_count: 2
+  auto_trigger: true
+  q_history: [{ generation: 1, Q: 0.42, epoch: 1 }]
+evaluation_epoch:
+  current: 1
+  history:
+    - epoch: 1
+      prepare_version: 1
+      generations: [1]
+      best_Q: 0.42
+lineage: { current_branch: "deep-evolve/session", forked_from: null, previous_branches: [] }
+shortcut: { cumulative_flagged: 0, flagged_since_last_tier3: 0, total_flagged: 0 }
+diagnose_retry: { session_retries_used: 0, gave_up_count: 0 }
+legibility: { missing_rationale_count: 0 }
+entropy: { last_collapse_generation: null }
+metric: { name: "sortino", direction: maximize, baseline: 1.0, current: 1.1, best: 1.2 }
+eval_mode: cli
+virtual_parallel:
+  enabled: true
+  n_current: 2
+  n_initial: 2
+  n_range: { min: 1, max: 9 }
+  project_type: "standard_optimization"
+  eval_parallelizability: "parallel_capable"
+  selection_reason: "서로 다른 가설을 비교"
+  budget_total: 20
+  budget_unallocated: 0
+  synthesis: { budget_allocated: 4, regression_tolerance: 0.05 }
+  seeds:
+    - id: 1
+      status: "active"
+      direction: "피처 엔지니어링"
+      hypothesis: "새 피처가 품질을 높인다"
+      initial_rationale: "independent direction"
+      worktree_path: "worktrees/seed_1"
+      branch: "evolve/01J00000000000000000000000/seed-1"
+      created_at: "2026-04-25T10:00:00Z"
+      created_by: "init_batch"
+      experiments_used: 0
+      keeps: 0
+      borrows_given: 0
+      borrows_received: 0
+      current_q: 0.0
+      allocated_budget: 10
+      killed_at: null
+      killed_reason: null
+    - id: 2
+      status: "active"
+      direction: "노이즈 감소"
+      hypothesis: "필터가 안정성을 높인다"
+      initial_rationale: "independent direction"
+      worktree_path: "worktrees/seed_2"
+      branch: "evolve/01J00000000000000000000000/seed-2"
+      created_at: "2026-04-25T10:00:00Z"
+      created_by: "init_batch"
+      experiments_used: 0
+      keeps: 0
+      borrows_given: 0
+      borrows_received: 0
+      current_q: 0.0
+      allocated_budget: 10
+      killed_at: null
+      killed_reason: null
+  x-host-note: "preserved extension"
+x-session-note: "preserved extension"

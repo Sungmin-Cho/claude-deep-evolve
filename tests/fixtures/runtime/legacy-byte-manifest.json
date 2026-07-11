@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "files": [
+    { "source": "hooks/scripts/tests/fixtures/v3_0_resume_sample/session.yaml", "copy": "legacy/v3_0_resume/session.yaml", "sha256": "c25fceab3b640520e0e114bc14c5a2f94c94adb966758e50f2278f88357ac1a9" },
+    { "source": "hooks/scripts/tests/fixtures/v3_0_resume_sample/strategy.yaml", "copy": "legacy/v3_0_resume/strategy.yaml", "sha256": "3762da5ad327a898ac5cba7b2467d9ced0b7c85a00356bc5b3d8a45f66659317" },
+    { "source": "hooks/scripts/tests/fixtures/v3_0_resume_sample/journal.jsonl", "copy": "legacy/v3_0_resume/journal.jsonl", "sha256": "a20a4719adae92955e7c46d3b300bc9ca3b8e0a8d11021e1483e547906df0a53" },
+    { "source": "hooks/scripts/tests/fixtures/borrow_scenario/session.yaml", "copy": "legacy/borrow/session.yaml", "sha256": "b8d54d9f03d9d3f07ca87035a17338733f5ba90dcc54bfc0e0e7c21c9a067836" },
+    { "source": "hooks/scripts/tests/fixtures/borrow_scenario/journal.jsonl", "copy": "legacy/borrow/journal.jsonl", "sha256": "563c2c7cfd7d2b61b8e08160d497faaf9e7389722714d8aa2f26e20571b135fd" },
+    { "source": "hooks/scripts/tests/fixtures/borrow_scenario/forum.jsonl", "copy": "legacy/borrow/forum.jsonl", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
+    { "source": "hooks/scripts/tests/fixtures/multi_seed_mock/session.yaml", "copy": "legacy/multi_seed/session.yaml", "sha256": "11516e2d1dd0271d6a92676794c552956e8704d8f69f7a29477eb2865cad9e0f" },
+    { "source": "hooks/scripts/tests/fixtures/multi_seed_mock/journal.jsonl", "copy": "legacy/multi_seed/journal.jsonl", "sha256": "d2955b178a9f0669cb0306852b5542d8f48de41f1fafb89d837df60e7e51806a" },
+    { "source": "hooks/scripts/tests/fixtures/multi_seed_mock/forum.jsonl", "copy": "legacy/multi_seed/forum.jsonl", "sha256": "4aa31d1c900c35954a35b294566c49847f2fa009b413b0985896ae05863452a5" },
+    { "source": "hooks/scripts/tests/fixtures/forum_multi_seed/forum.jsonl", "copy": "legacy/multi_seed/standalone-forum.jsonl", "sha256": "995b878b1ae22efb8980a09ad4aae606d6b9bfe1d2340bdd6fb36bcd45ce584e" },
+    { "source": "hooks/scripts/tests/fixtures/kill_scenarios/pool_below_p3/session.yaml", "copy": "legacy/kill/pool_below_p3/session.yaml", "sha256": "37b824bcfc512f6cb1d0a1ab731fcbc07405b6d56947500879c260ba6a641d55" },
+    { "source": "hooks/scripts/tests/fixtures/kill_scenarios/pool_exhausted/session.yaml", "copy": "legacy/kill/pool_exhausted/session.yaml", "sha256": "7c469a386c415e5feaeb1860cee57e6345775992af58dba5ff43e3ce296cbf8f" },
+    { "source": "hooks/scripts/tests/fixtures/kill_scenarios/pool_just_above_p3/session.yaml", "copy": "legacy/kill/pool_just_above_p3/session.yaml", "sha256": "a8b705c3ab181cd5dbd8795710fa1de89453730dc86b2fa21f5ac6a02355d2fd" },
+    { "source": "hooks/scripts/tests/fixtures/kill_scenarios/kill_then_schedule_recipe/session.yaml", "copy": "legacy/kill/kill_then_schedule_recipe/session.yaml", "sha256": "f78cd3cf25d0c1f65e218d1be40b8adb532fb654b93f5224d0191f9c272b9caa" },
+    { "source": "hooks/scripts/tests/fixtures/kill_scenarios/kill_then_schedule_recipe/journal.jsonl", "copy": "legacy/kill/kill_then_schedule_recipe/journal.jsonl", "sha256": "a8bc92e7522741f4efdba117f1ee6513fcd88fb7ad31ebe51c10fa6e266e4be3" }
+  ]
+}

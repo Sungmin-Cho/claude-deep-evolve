@@ -1,0 +1,68 @@
+deep_evolve_version: "3.1.0"
+session_id: "multi_seed_mock_session"
+goal: "5-seed coordination + synthesis test fixture"
+created_at: "2026-04-24T10:00:00Z"
+eval_mode: cli
+metric:
+  name: "sortino"
+  direction: maximize
+  baseline: 1.0
+  current: 1.42
+  best: 1.51
+target_files: ["src/strategy.py"]
+evaluation_epoch:
+  current: 2
+  history:
+    - epoch: 1
+      prepare_version: 1
+      generations: [1]
+      best_Q: 0.42
+virtual_parallel:
+  n_initial: 5
+  n_current: 5
+  project_type: "standard_optimization"
+  eval_parallelizability: "parallel_capable"
+  selection_reason: "ai_suggested_user_confirmed"
+  budget_total: 50
+  budget_unallocated: 22
+  synthesis:
+    budget_allocated: 5
+    regression_tolerance: 0.05
+  seeds:
+    - id: 1
+      direction: "feature engineering 병목"
+      status: "active"
+      allocated_budget: 10
+      experiments_used: 8
+      final_q: 0.42
+      created_at: "2026-04-24T10:00:00Z"
+    - id: 2
+      direction: "signal filtering / 노이즈 감소"
+      status: "active"
+      allocated_budget: 10
+      experiments_used: 6
+      final_q: 0.29
+      created_at: "2026-04-24T10:00:00Z"
+    - id: 3
+      direction: "앙상블 가중치 최적화"
+      status: "active"
+      allocated_budget: 10
+      experiments_used: 10
+      final_q: 0.51
+      created_at: "2026-04-24T10:00:00Z"
+    - id: 4
+      direction: "shortcut detection trial"
+      status: "killed:shortcut_quarantine"
+      allocated_budget: 10
+      experiments_used: 4
+      final_q: 0.95
+      killed_reason: "shortcut_quarantine"
+      killed_at: "2026-04-24T11:30:00Z"
+      created_at: "2026-04-24T10:00:00Z"
+    - id: 5
+      direction: "시간지연 피처"
+      status: "active"
+      allocated_budget: 10
+      experiments_used: 5
+      final_q: 0.18
+      created_at: "2026-04-24T10:00:00Z"

@@ -29,6 +29,6 @@
     "tests/"
   ],
   "scripts": {
-    "test": "node --test tests/envelope-emit.test.js tests/envelope-chain.test.js tests/handoff-roundtrip.test.js tests/protect-readonly-golden.test.js tests/session-recovery.test.js"
+    "test": "node --test tests/*.test.js"
   }
 }
