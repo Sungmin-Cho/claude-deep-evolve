@@ -69,6 +69,57 @@ def _tree_snapshot(root: Path):
     return result
 
 
+def _normalize_jq_diagnostic(text: str):
+    """Canonicalize only the two jq renderer dialects exercised by v3 parity."""
+    index_error = None
+    for key_form in (r'"(?P<key>[^"\n]+)"', r'\("(?P<key>[^"\n]+)"\)'):
+        index_error = re.fullmatch(
+            r'jq: error \(at (?P<path>.+):(?P<line>\d+)\): '
+            r'Cannot index (?P<kind>[A-Za-z]+) with string '
+            f'{key_form}\\n?',
+            text,
+        )
+        if index_error:
+            break
+    if index_error:
+        fields = index_error.groupdict()
+        return (
+            f'jq: error (at {fields["path"]}:{fields["line"]}): '
+            f'Cannot index {fields["kind"]} with string "{fields["key"]}"\n'
+        )
+
+    compile_error = None
+    compile_dialects = (
+        (
+            r'jq: error: (?P<key>[A-Za-z_][A-Za-z0-9_-]*)/0 is not defined '
+            r'at <top-level>, line (?P<line>\d+):\n'
+            r'\{event:\$event, ts:\$ts, session_id:\$sid\}[ \t]+\+ '
+            r'\{\((?P=key)\): \$(?P=key)\}[ \t]*\n'
+            r'jq: (?P<count>\d+) compile error\n?'
+        ),
+        (
+            r'jq: error: (?P<key>[A-Za-z_][A-Za-z0-9_-]*)/0 is not defined '
+            r'at <top-level>, line (?P<line>\d+), column \d+:\n'
+            r'[ \t]+\{event:\$event, ts:\$ts, session_id:\$sid\}[ \t]+\+ '
+            r'\{\((?P=key)\): \$(?P=key)\}[ \t]*\n'
+            r'[ \t]+\^+[ \t]*\n'
+            r'jq: (?P<count>\d+) compile error\n?'
+        ),
+    )
+    for dialect in compile_dialects:
+        compile_error = re.fullmatch(dialect, text)
+        if compile_error:
+            break
+    if compile_error:
+        fields = compile_error.groupdict()
+        return (
+            f'jq: error: {fields["key"]}/0 is not defined at <top-level>, '
+            f'line {fields["line"]}\n'
+            f'jq: {fields["count"]} compile error\n'
+        )
+    return text
+
+
 def _normalize_probe(text: str, root: Path):
     import re
 
@@ -85,7 +136,61 @@ def _normalize_probe(text: str, root: Path):
         "<LEGACY_SESSION>",
         normalized,
     )
-    return normalized
+    return _normalize_jq_diagnostic(normalized)
+
+
+def test_jq_diagnostic_canonicalization_is_narrow_and_semantic():
+    """Portable parity ignores jq renderer drift, not error class/key/path/line."""
+    node_index = (
+        'jq: error (at <PROJECT>/.deep-evolve/sessions.jsonl:1): '
+        'Cannot index array with string "event"\n'
+    )
+    macos_index = (
+        'jq: error (at <PROJECT>/.deep-evolve/sessions.jsonl:1): '
+        'Cannot index array with string ("event")\n'
+    )
+    node_compile = (
+        'jq: error: detail/0 is not defined at <top-level>, line 1:\n'
+        '{event:$event, ts:$ts, session_id:$sid}  + {(detail): $detail}                                             \n'
+        'jq: 1 compile error\n'
+    )
+    macos_compile = (
+        'jq: error: detail/0 is not defined at <top-level>, line 1, column 46:\n'
+        '    {event:$event, ts:$ts, session_id:$sid}  + {(detail): $detail}\n'
+        '                                                 ^^^^^^\n'
+        'jq: 1 compile error\n'
+    )
+
+    assert _normalize_jq_diagnostic(node_index) == _normalize_jq_diagnostic(macos_index)
+    assert _normalize_jq_diagnostic(node_compile) == _normalize_jq_diagnostic(macos_compile)
+    assert 'sessions.jsonl:1' in _normalize_jq_diagnostic(node_index)
+    assert 'array' in _normalize_jq_diagnostic(node_index)
+    assert '"event"' in _normalize_jq_diagnostic(node_index)
+    assert 'detail/0' in _normalize_jq_diagnostic(node_compile)
+    assert 'line 1' in _normalize_jq_diagnostic(node_compile)
+
+    unrelated_key = node_index.replace('"event"', '"status"')
+    unrelated_type = node_index.replace('array', 'object')
+    unrelated_path = node_index.replace('sessions.jsonl:1', 'other.jsonl:1')
+    unrelated_line = node_compile.replace('line 1', 'line 2')
+    unrelated_class = node_compile.replace('is not defined', 'has invalid type')
+    opening_only_index = node_index.replace('string "event"', 'string ("event"')
+    closing_only_index = node_index.replace('string "event"', 'string "event")')
+    column_without_caret = node_compile.replace('line 1:', 'line 1, column 46:')
+    caret_without_column = node_compile.replace(
+        'jq: 1 compile error\n',
+        '                                                 ^^^^^^\n'
+        'jq: 1 compile error\n',
+    )
+    assert _normalize_jq_diagnostic(node_index) != _normalize_jq_diagnostic(unrelated_key)
+    assert _normalize_jq_diagnostic(node_index) != _normalize_jq_diagnostic(unrelated_type)
+    assert _normalize_jq_diagnostic(node_index) != _normalize_jq_diagnostic(unrelated_path)
+    assert _normalize_jq_diagnostic(node_compile) != _normalize_jq_diagnostic(unrelated_line)
+    assert _normalize_jq_diagnostic(node_compile) != _normalize_jq_diagnostic(unrelated_class)
+    assert _normalize_jq_diagnostic(opening_only_index) != _normalize_jq_diagnostic(node_index)
+    assert _normalize_jq_diagnostic(closing_only_index) != _normalize_jq_diagnostic(node_index)
+    assert _normalize_jq_diagnostic(column_without_caret) != _normalize_jq_diagnostic(node_compile)
+    assert _normalize_jq_diagnostic(caret_without_column) != _normalize_jq_diagnostic(node_compile)
 
 
 def _run_compatibility(script: Path, root: Path, args, env):

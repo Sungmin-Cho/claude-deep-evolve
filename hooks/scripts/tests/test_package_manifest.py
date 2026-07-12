@@ -1,13 +1,11 @@
 """npm package manifest hygiene + cross-file version drift guard.
 
-Asserts the four version sources stay in lockstep, as promised in README §
-3.1.1 ("test_package_manifest.py asserts package.json / plugin.json /
-SKILL.md / HELPER_VERSION synchronization"):
+Asserts the supported version sources stay in lockstep:
 
   * package.json                                            → "version"
   * .claude-plugin/plugin.json                              → "version"
   * skills/deep-evolve-workflow/SKILL.md frontmatter        → "version"
-  * hooks/scripts/session-helper.sh                         → HELPER_VERSION
+  * hooks/scripts/deep-evolve-runtime.cjs                  → RUNTIME_VERSION
 
 Drift in any of these caused the v3.3.0–v3.3.2 release-window incident where
 SKILL.md frontmatter advertised v3.2.0 while the plugin manifest had moved on.
@@ -62,16 +60,19 @@ def _read_skill_version() -> str:
     return m.group(1)
 
 
-_HELPER_VERSION_RE = re.compile(r'^HELPER_VERSION="([^"]+)"\s*$', re.MULTILINE)
+_RUNTIME_VERSION_RE = re.compile(
+    r"^const RUNTIME_VERSION = require\('\.\./\.\./package\.json'\)\.version;\s*$",
+    re.MULTILINE,
+)
 
 
-def _read_helper_version() -> str:
-    helper = (ROOT / "hooks" / "scripts" / "session-helper.sh").read_text(
+def _read_runtime_version() -> str:
+    runtime = (ROOT / "hooks" / "scripts" / "deep-evolve-runtime.cjs").read_text(
         encoding="utf-8"
     )
-    m = _HELPER_VERSION_RE.search(helper)
-    assert m, "session-helper.sh must declare HELPER_VERSION=\"X.Y.Z\""
-    return m.group(1)
+    m = _RUNTIME_VERSION_RE.search(runtime)
+    assert m, "deep-evolve-runtime.cjs must declare RUNTIME_VERSION"
+    return _read_package_version()
 
 
 def test_plugin_and_package_versions_match():
@@ -93,11 +94,11 @@ def test_skill_md_version_matches_plugin_manifest():
     )
 
 
-def test_helper_version_matches_plugin_manifest():
+def test_runtime_version_matches_plugin_manifest():
     plugin_v = _read_plugin_manifest_version()
-    helper_v = _read_helper_version()
-    assert helper_v == plugin_v, (
-        f"hooks/scripts/session-helper.sh HELPER_VERSION={helper_v!r} drifted "
+    runtime_v = _read_runtime_version()
+    assert runtime_v == plugin_v, (
+        f"hooks/scripts/deep-evolve-runtime.cjs RUNTIME_VERSION={runtime_v!r} drifted "
         f"from .claude-plugin/plugin.json version={plugin_v!r}; bump "
-        f"HELPER_VERSION whenever the plugin ships."
+        f"RUNTIME_VERSION whenever the plugin ships."
     )

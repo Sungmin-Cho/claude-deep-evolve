@@ -27,6 +27,8 @@ from pathlib import Path
 import pytest
 
 HELPER = Path(__file__).parents[3] / "hooks/scripts/session-helper.sh"
+LEGACY_HELPER = Path(__file__).parents[3] / "legacy/session-helper-v3.4.3.sh"
+RUNTIME = Path(__file__).parents[3] / "hooks/scripts/deep-evolve-runtime.cjs"
 
 
 def _setup_session(tmp_path):
@@ -316,9 +318,14 @@ def test_w6_trace_create_subcommand_invokes_validate_post_dispatch():
     coord = (Path(__file__).parents[3]
              / "skills/deep-evolve-workflow/protocols/coordinator.md")
     helper_text = HELPER.read_text(encoding="utf-8")
+    legacy_text = LEGACY_HELPER.read_text(encoding="utf-8")
+    runtime_text = RUNTIME.read_text(encoding="utf-8")
     coord_text = coord.read_text(encoding="utf-8")
-    assert "create_seed_worktree" in helper_text
-    assert "validate_seed_worktree" in helper_text
+    assert "--legacy-session-helper" in helper_text
+    assert "create_seed_worktree" in runtime_text
+    assert "validate_seed_worktree" in runtime_text
+    assert "create_seed_worktree" in legacy_text
+    assert "validate_seed_worktree" in legacy_text
     # Coordinator references both (T2 design contract)
     assert (
         "create_seed_worktree" in coord_text
