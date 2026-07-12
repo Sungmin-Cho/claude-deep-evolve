@@ -290,6 +290,30 @@ After convergence processing, ask the Adaptive Scheduler whether N should
 change for the NEXT epoch. This is AI-judged; the output feeds
 `session.yaml.virtual_parallel.n_current` via an `n_adjusted` event.
 
+First consume the shared canonical zero-active contract. This guard runs before
+the prompt and before any `budget_total / n_current` calculation:
+
+```bash
+if [ "$VERSION_TIER" = "v3_1_plus" ]; then
+  HELPER_SCRIPTS_DIR="$(dirname "$DEEP_EVOLVE_HELPER_PATH")"
+  if ! ACTIVE_SEED_COUNT=$(python3 "$HELPER_SCRIPTS_DIR/active_seed_state.py" \
+      --session-yaml "$SESSION_ROOT/session.yaml" --count); then
+    echo "error: outer-loop could not read canonical active-seed state" >&2
+    exit 1
+  fi
+  if [ "$ACTIVE_SEED_COUNT" = "0" ]; then
+    echo "zero active seeds: skip adaptive N and continue to the session-end synthesis route" >&2
+    SKIP_ADAPTIVE_N=true
+  else
+    SKIP_ADAPTIVE_N=false
+  fi
+fi
+```
+
+When `SKIP_ADAPTIVE_N=true`, do not issue the following prompt, append
+`n_adjusted`, or execute grow/shrink. Proceed to the 6.5.0 summary gate; the
+coordinator's pre-dispatch zero gate will route directly to synthesis.
+
 Prompt yourself:
 ```
 Current N: {session.yaml.virtual_parallel.n_current}

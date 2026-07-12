@@ -532,6 +532,14 @@ function validateSession(value) {
         throw validationError(`virtual_parallel.${key} must be an integer from 1 to 9`);
       }
     }
+    if (Object.hasOwn(value.virtual_parallel, 'x-active-seed-count')) {
+      if (value.virtual_parallel['x-active-seed-count'] !== 0) {
+        throw validationError('virtual_parallel.x-active-seed-count must be the integer 0');
+      }
+      if (Object.hasOwn(value.virtual_parallel, 'n_current')) {
+        throw validationError('virtual_parallel.x-active-seed-count cannot coexist with n_current');
+      }
+    }
     rejectKnownObject(value.virtual_parallel.n_range, RANGE_KEYS, 'virtual_parallel.n_range');
     rejectKnownObject(value.virtual_parallel.synthesis, SYNTHESIS_KEYS, 'virtual_parallel.synthesis');
     if (value.virtual_parallel.seeds !== undefined) {
@@ -544,6 +552,10 @@ function validateSession(value) {
         if (seed.status !== undefined && (typeof seed.status !== 'string'
           || !/^(?:active|paused|completed|completed_early|killed(?::|_)[A-Za-z0-9_-]+)$/.test(seed.status))) {
           throw validationError(`seed ${index} status is invalid`);
+        }
+        if (Object.hasOwn(value.virtual_parallel, 'x-active-seed-count')
+          && (seed.status === undefined || seed.status === 'active')) {
+          throw validationError(`virtual_parallel.x-active-seed-count requires seed ${index} to have explicit non-active status`);
         }
       }
     }

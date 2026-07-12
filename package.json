@@ -26,6 +26,7 @@
     "hooks/scripts/*.py",
     "hooks/scripts/*.sh",
     "hooks/scripts/*.js",
+    "legacy/session-helper-v3.4.3.sh",
     "scripts/",
     "skills/",
     "templates/",

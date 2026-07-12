@@ -2,7 +2,10 @@
 import os, subprocess
 from pathlib import Path
 
+import pytest
+
 HELPER = Path(__file__).parents[3] / "hooks/scripts/session-helper.sh"
+ORACLE = Path(__file__).parents[3] / "legacy/session-helper-v3.4.3.sh"
 
 
 def test_env_var_takes_precedence(tmp_path):
@@ -68,3 +71,24 @@ def test_env_var_empty_string_falls_back():
     resolved = r.stdout.strip()
     assert resolved.endswith("session-helper.sh")
     assert Path(resolved).is_file()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="frozen Bash oracle is Unix-only")
+def test_valid_env_override_matches_frozen_v343_oracle(tmp_path):
+    """The compatibility-only locator preserves its 3.4.3 env precedence."""
+    fake = tmp_path / "oracle-compatible-helper.sh"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    env = os.environ.copy()
+    env["DEEP_EVOLVE_HELPER_PATH"] = str(fake)
+    wrapper = subprocess.run(
+        ["bash", str(HELPER), "resolve_helper_path"],
+        env=env, capture_output=True, text=True, check=False,
+    )
+    oracle = subprocess.run(
+        ["bash", str(ORACLE), "resolve_helper_path"],
+        env=env, capture_output=True, text=True, check=False,
+    )
+    assert wrapper.returncode == oracle.returncode == 0
+    assert wrapper.stdout == oracle.stdout == f"{fake}\n"
+    assert wrapper.stderr == oracle.stderr

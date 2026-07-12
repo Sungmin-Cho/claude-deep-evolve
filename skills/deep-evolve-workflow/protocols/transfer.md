@@ -168,6 +168,12 @@ If either condition is not met, skip recording.
 
    **New entry format** (append to `~/.claude/deep-evolve/meta-archive.jsonl`):
 
+   The `virtual_parallel` count has exactly one of two shapes: positive sessions
+   contain `n_current` and omit `x-active-seed-count`; canonical zero-active
+   sessions omit `n_current` and contain `"x-active-seed-count": 0`. The writer
+   copies the full validated block, so the zero sentinel is preserved rather
+   than defaulted back to one.
+
    **TEMPLATE — fill placeholders before writing** (I6 note: this is the JSON
    SHAPE only — do NOT copy `<session.yaml.virtual_parallel.*>` literals into
    the actual JSONL output; use the jq construction snippet below instead):
@@ -210,7 +216,7 @@ If either condition is not met, skip recording.
      },
      "virtual_parallel": {
        "n_initial": <session.yaml.virtual_parallel.n_initial>,
-       "n_current": <session.yaml.virtual_parallel.n_current>,
+       "n_current": <session.yaml.virtual_parallel.n_current; positive variant only>,
        "project_type": "<session.yaml.virtual_parallel.project_type>",
        "eval_parallelizability": "<session.yaml.virtual_parallel.eval_parallelizability>",
        "selection_reason": "<session.yaml.virtual_parallel.selection_reason>",
@@ -230,6 +236,9 @@ If either condition is not met, skip recording.
      "transfer_success_rate": null
    }
    ```
+
+   For the zero-active variant, replace the `n_current` member shown above
+   with `"x-active-seed-count": 0`; never emit both members.
 
    **Concrete jq construction** (I3 fix — this is the actual bash that E.0 runs,
    rc-guarded per aff23c9 contract):

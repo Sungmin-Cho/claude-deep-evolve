@@ -12,7 +12,6 @@ const { isPathInside } = require('./runtime-paths.cjs');
 const LOCK_TIMEOUT_MS = 5_000;
 const STALE_LOCK_MS = 30_000;
 const TRANSIENT_WINDOWS_RENAME = new Set(['EPERM', 'EACCES', 'EBUSY']);
-const UNSUPPORTED_FSYNC = new Set(['EINVAL', 'ENOTSUP', 'ENOSYS', 'EPERM', 'EISDIR']);
 const COORDINATION_FILES = new Set([
   'current.json',
   'sessions.jsonl',
@@ -54,10 +53,24 @@ function canonicalJson(value) {
   return JSON.stringify(canonicalize(value));
 }
 
-function fsyncFile(io, fd) {
-  try { io.fsyncSync(fd); }
-  catch (error) {
-    if (!UNSUPPORTED_FSYNC.has(error && error.code)) throw error;
+function fsyncFile(io, fd, {
+  platform = process.platform,
+  sleep = sleepSync,
+  attempts = 10,
+} = {}) {
+  const delays = [10, 20, 40, 80, 120, 150, 180, 200, 200];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      io.fsyncSync(fd);
+      return;
+    } catch (error) {
+      if (platform !== 'win32'
+          || !TRANSIENT_WINDOWS_RENAME.has(error && error.code)
+          || attempt >= attempts - 1) {
+        throw error;
+      }
+      sleep(delays[Math.min(attempt, delays.length - 1)]);
+    }
   }
 }
 
@@ -117,7 +130,7 @@ function atomicWriteFile(filePath, data, {
   try {
     fd = io.openSync(tempPath, 'wx', mode);
     io.writeFileSync(fd, data);
-    fsyncFile(io, fd);
+    fsyncFile(io, fd, { platform, sleep });
     io.closeSync(fd);
     fd = undefined;
     renameWithRetry(tempPath, filePath, { io, platform, sleep });
@@ -566,8 +579,15 @@ function acquireRequiredLocks(stateRoot, relativePaths, options) {
   const handles = [];
   for (const relativePath of [...relativePaths].sort()) {
     const target = coordinationTarget(stateRoot, relativePath);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const handle = acquireDirectoryLock(`${target}.lock`, options);
+    const parent = path.dirname(target);
+    // The project lock already excludes every compliant publisher. When an
+    // optional nested target's parent does not yet exist, place its temporary
+    // file-lock identity at the state root instead of creating a visible empty
+    // namespace merely to host `<target>.lock`.
+    const lockPath = fs.existsSync(parent)
+      ? `${target}.lock`
+      : path.join(stateRoot, `.coordination-path-${sha256(Buffer.from(relativePath))}.lock`);
+    const handle = acquireDirectoryLock(lockPath, options);
     if (handle.ok === false) {
       for (const acquired of handles.reverse()) acquired.release();
       return handle;
@@ -768,6 +788,62 @@ function patchCoordinationFiles(stateRoot, relativePaths, mutator, options = {})
   }
 }
 
+// Task 3 session/history reads occasionally need to reconcile one coordination
+// file while inspecting another (for example, session.yaml status versus the
+// latest sessions.jsonl event). Keep that decision under the same project and
+// file locks used by every other coordination transaction. The second callback
+// argument distinguishes a missing optional path from a present zero-byte file.
+// A replacement may cover a subset of the locked names, so callers can lock an
+// absent potential participant without accidentally creating it. Returning
+// null is a true read-only path: recovery still runs, but no replacement/temp/
+// marker is created.
+function mutateCoordinationFiles(stateRoot, relativePaths, mutator, options = {}) {
+  if (typeof mutator !== 'function') throw new TypeError('mutateCoordinationFiles requires a mutator');
+  const names = [...new Set(relativePaths)].sort();
+  for (const name of names) coordinationTarget(stateRoot, name);
+  const projectHandle = acquireDirectoryLock(path.join(stateRoot, '.coordination-lock'), options);
+  if (projectHandle.ok === false) throw Object.assign(new Error('coordination lock held'), { code: 'lock_held' });
+  let fileHandles = [];
+  try {
+    const recovery = recoverTransactionsUnlocked(stateRoot, projectHandle, options);
+    if (!recovery.ok) throw Object.assign(new Error(recovery.error.message), { code: recovery.error.code, rc: 2 });
+    fileHandles = acquireRequiredLocks(stateRoot, names, options);
+    if (fileHandles.ok === false) throw Object.assign(new Error('file lock held'), { code: 'lock_held' });
+    const current = {};
+    const exists = {};
+    for (const name of names) {
+      try {
+        current[name] = fs.readFileSync(coordinationTarget(stateRoot, name), 'utf8');
+        exists[name] = true;
+      }
+      catch (error) {
+        if (error && error.code === 'ENOENT') {
+          current[name] = '';
+          exists[name] = false;
+        }
+        else throw error;
+      }
+    }
+    const replacements = mutator(Object.freeze({ ...current }), Object.freeze({
+      exists: Object.freeze({ ...exists }),
+    }));
+    if (replacements === null) return { changed: false, files: current };
+    if (!replacements || typeof replacements !== 'object' || Array.isArray(replacements)) {
+      throw new TypeError('coordination mutator must return an object or null');
+    }
+    const replacementNames = Object.keys(replacements);
+    if (replacementNames.length === 0 || replacementNames.some((name) => !names.includes(name))) {
+      throw new Error('coordination mutator must replace one or more locked files');
+    }
+    const result = commitLocked(stateRoot, replacements, projectHandle, { ...options, fileHandles });
+    if (!result.ok) throw Object.assign(new Error(result.error.message), { code: result.error.code, rc: result.rc });
+    return { changed: true, files: { ...current, ...replacements } };
+  } finally {
+    if (Array.isArray(fileHandles)) releaseHandles(fileHandles);
+    projectHandle.release();
+  }
+}
+
 function projectStateRootFor(sessionPath) {
   let current = path.dirname(path.resolve(sessionPath));
   for (;;) {
@@ -784,17 +860,26 @@ function sessionRelativePath(sessionPath, stateRoot) {
   return relativeCoordinationPath(stateRoot, target);
 }
 
+// Canonical storage validates the actual object. Legacy-shape tolerance is
+// deliberately confined to the compatibility-only session.read boundary in
+// deep-evolve-runtime.cjs; no canonical reader or mutator validates a projected
+// object and then returns or persists different bytes.
+function validateStoredSession(value) {
+  validateSession(value);
+  return value;
+}
+
 function readSession(sessionPath, options = {}) {
   const stateRoot = options.stateRoot || projectStateRootFor(sessionPath);
   const relative = sessionRelativePath(sessionPath, stateRoot);
   const text = readCoordinationFiles(stateRoot, [relative], options)[relative];
   if (text === '') throw Object.assign(new Error('session file missing'), { code: 'session_missing' });
   const value = parseStateDocument(text, { sourcePath: sessionPath });
-  return validateSession(value);
+  return validateStoredSession(value);
 }
 
 function writeSession(sessionPath, value, options = {}) {
-  validateSession(value);
+  validateStoredSession(value);
   const stateRoot = options.stateRoot || projectStateRootFor(sessionPath);
   const relative = sessionRelativePath(sessionPath, stateRoot);
   const result = commitCoordinationTransaction(stateRoot, { [relative]: serializeStateDocument(value) }, options);
@@ -810,12 +895,12 @@ function patchSession(sessionPath, mutator, options = {}) {
   const stateRoot = options.stateRoot || projectStateRootFor(sessionPath);
   const relative = sessionRelativePath(sessionPath, stateRoot);
   const initialText = readCoordinationFiles(stateRoot, [relative], options)[relative];
-  validateSession(parseStateDocument(initialText, { sourcePath: sessionPath }));
+  validateStoredSession(parseStateDocument(initialText, { sourcePath: sessionPath }));
   let next;
   patchCoordinationFiles(stateRoot, [relative], (files) => {
-    const current = validateSession(parseStateDocument(files[relative], { sourcePath: sessionPath }));
+    const current = validateStoredSession(parseStateDocument(files[relative], { sourcePath: sessionPath }));
     next = mutator(current);
-    validateSession(next);
+    validateStoredSession(next);
     return { [relative]: serializeStateDocument(next) };
   }, options);
   return next;
@@ -832,6 +917,8 @@ module.exports = {
   patchSession,
   commitCoordinationTransaction,
   patchCoordinationFiles,
+  mutateCoordinationFiles,
   readCoordinationFiles,
   recoverTransactions,
+  validateStoredSession,
 };

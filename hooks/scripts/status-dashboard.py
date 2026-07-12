@@ -19,6 +19,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from active_seed_state import active_seed_state, normalized_seed_identity
+
 # I7 fix (deep-review 2026-04-25 plan-stage): defer PyYAML check from
 # module-import to main(), so future unit tests can import this module
 # (e.g., to test _aggregate_journal / _aggregate_forum / _is_int directly)
@@ -169,6 +171,8 @@ def _last_event(events: list[dict]) -> str:
 
 def _render(session: dict, journal: list[dict], forum: list[dict]) -> str:
     vp = session.get("virtual_parallel") or {}
+    active_state = active_seed_state(session)
+    active_count = active_state["active_seed_count"]
     n_current = vp.get("n_current", 1) if _is_int(vp.get("n_current", 1)) else 1
     budget_total = vp.get("budget_total", 0)
     budget_unalloc = vp.get("budget_unallocated", 0)
@@ -194,18 +198,19 @@ def _render(session: dict, journal: list[dict], forum: list[dict]) -> str:
         f"Session {sid} — epoch {epoch_curr}/{epoch_max}, "
         f"budget {budget_used}/{budget_total} used"
     )
+    lines.append(f"Active seeds: {active_count}")
     lines.append("")
-    lines.append("Seeds (borrow recv/given counts):" if n_current > 1 else "Seed:")
+    if active_state["zero_active"]:
+        lines.append("Terminal seeds:")
+    else:
+        lines.append("Seeds (borrow recv/given counts):" if n_current > 1 else "Seed:")
     seeds = vp.get("seeds") or []
     if not isinstance(seeds, list):
         seeds = []
     for s in seeds:
         if not isinstance(s, dict):
             continue
-        sid_k = s.get("id")
-        if not _is_int(sid_k):
-            continue
-        sid_k = int(sid_k)
+        sid_k = normalized_seed_identity(s)
         direction = (s.get("direction") or "").strip()
         status = (s.get("status") or "").strip() or "active"
         final_q = s.get("final_q", s.get("q"))
@@ -257,7 +262,12 @@ def main() -> int:
     journal = _iter_jsonl(Path(args.journal))
     forum = _iter_jsonl(Path(args.forum))
 
-    sys.stdout.write(_render(session, journal, forum))
+    try:
+        rendered = _render(session, journal, forum)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    sys.stdout.write(rendered)
     return 0
 
 

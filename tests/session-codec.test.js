@@ -162,6 +162,45 @@ test('session and strategy validation enforce known shapes while preserving x-* 
   assert.throws(() => validateSession({ ...session, metric: { ...session.metric, surprise: true } }), /unknown.*metric.*surprise/i);
   assert.throws(() => validateSession({ ...session, program: { ...session.program, surprise: true } }), /unknown.*program.*surprise/i);
   assert.throws(() => validateSession({ ...session, virtual_parallel: { ...session.virtual_parallel, n_current: 10 } }), /n_current/i);
+
+  const zeroActive = structuredClone(session);
+  delete zeroActive.virtual_parallel.n_current;
+  zeroActive.virtual_parallel['x-active-seed-count'] = 0;
+  zeroActive.virtual_parallel.seeds = zeroActive.virtual_parallel.seeds.map((seed) => ({
+    ...seed,
+    status: 'completed_early',
+  }));
+  assert.strictEqual(validateSession(zeroActive), zeroActive,
+    'the exact zero-active sentinel is strict canonical state');
+  for (const invalidMarker of ['0', false, 1, -1]) {
+    assert.throws(() => validateSession({
+      ...zeroActive,
+      virtual_parallel: {
+        ...zeroActive.virtual_parallel,
+        'x-active-seed-count': invalidMarker,
+      },
+    }), /x-active-seed-count/i, `invalid zero-active marker ${JSON.stringify(invalidMarker)}`);
+  }
+  assert.throws(() => validateSession({
+    ...zeroActive,
+    virtual_parallel: { ...zeroActive.virtual_parallel, n_current: 1 },
+  }), /x-active-seed-count.*n_current|n_current.*x-active-seed-count/i,
+  'zero-active sentinel and positive n_current must not coexist');
+  assert.throws(() => validateSession({
+    ...zeroActive,
+    virtual_parallel: {
+      ...zeroActive.virtual_parallel,
+      seeds: [{ ...zeroActive.virtual_parallel.seeds[0], status: 'active' }],
+    },
+  }), /x-active-seed-count.*active|active.*x-active-seed-count/i,
+  'zero-active sentinel cannot coexist with an active seed');
+  const missingStatusSeed = { ...zeroActive.virtual_parallel.seeds[0] };
+  delete missingStatusSeed.status;
+  assert.throws(() => validateSession({
+    ...zeroActive,
+    virtual_parallel: { ...zeroActive.virtual_parallel, seeds: [missingStatusSeed] },
+  }), /x-active-seed-count.*status|status.*x-active-seed-count/i,
+  'zero-active sentinel requires explicit terminal statuses');
   assert.throws(() => validateSession({
     ...session,
     virtual_parallel: {

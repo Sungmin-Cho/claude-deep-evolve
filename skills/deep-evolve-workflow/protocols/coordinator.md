@@ -74,6 +74,13 @@ while session_active:
     --journal "$SESSION_ROOT/journal.jsonl" \
     --forum "$SESSION_ROOT/forum.jsonl")
 
+  # Canonical zero-active gate. It MUST run before kill handling, any AI
+  # decision, validation, or dispatch. A terminal-only session proceeds
+  # directly to synthesis without selecting a historical seed.
+  if signals.active_seed_count == 0:
+    termination_reason = "no_active_seed"
+    break  # loop exit invokes synthesis.md below
+
   # 2. Check for pending kill requests from user
   if kill_requests.jsonl has pending entry:
     AskUserQuestion "Confirm kill seed_k?"

@@ -44,30 +44,37 @@ Then resolve the helper-scripts directory (C-1 fix: `$DEEP_EVOLVE_HELPER_PATH` i
 HELPER_SCRIPTS_DIR="$(dirname "$DEEP_EVOLVE_HELPER_PATH")"
 ```
 
-The N=1 short-circuit (spec § 8.5) is checked BEFORE Step 1 to skip
-the multi-seed sequence entirely:
+The canonical N=0 and N=1 short-circuits are checked BEFORE Step 1. The
+shared `active_seed_state.py` reader recognizes strict
+`x-active-seed-count: 0` (with absent `n_current`) and the read-only legacy
+`n_current: 0` compatibility spelling. N=0 is evaluated first so a terminal
+session can never fall through to the N=1 seed-selection branch:
 
 ```bash
-if ! N_CURRENT=$(python3 -c '
-import yaml, sys
-with open(sys.argv[1]) as f:
-    s = yaml.safe_load(f)
-print(s.get("virtual_parallel", {}).get("n_current", 1))
-' "$SESSION_ROOT/session.yaml"); then
-  echo "synthesis.md Step 0: failed to read N_CURRENT from session.yaml" >&2
+if ! N_CURRENT=$(python3 "$HELPER_SCRIPTS_DIR/active_seed_state.py" \
+    --session-yaml "$SESSION_ROOT/session.yaml" --count); then
+  echo "synthesis.md Step 0: failed to read canonical active seed count" >&2
   exit 1
 fi
 
-if [ "$N_CURRENT" = "1" ]; then
+if [ "$N_CURRENT" = "0" ]; then
+  # No active baseline exists. Skip Steps 1-6 and route to the explicit
+  # no-active/no-baseline completion branch before considering N=1.
+  goto_n0_branch=true
+  goto_n1_branch=false
+elif [ "$N_CURRENT" = "1" ]; then
   # Single-seed session: emit minimal report + synthesis_commit event,
   # skip Steps 2-6, jump directly to Step 7 (session_summary).
+  goto_n0_branch=false
   goto_n1_branch=true
 else
+  goto_n0_branch=false
   goto_n1_branch=false
 fi
 ```
 
-When `goto_n1_branch=true`: skip to **§ N=1 Short-Circuit** below.
+When `goto_n0_branch=true`: skip to **§ N=0 / No-active Short-Circuit**
+below. When `goto_n1_branch=true`: skip to **§ N=1 Short-Circuit** below.
 Otherwise proceed to Step 1.
 
 ## Step 1 — Collect final state (coordinator, no AI)
@@ -655,6 +662,48 @@ $([ "$FALLBACK_TRIGGERED" = "true" ] && echo "- [Fallback rationale](fallback_no
 EOM
 ```
 
+## § N=0 / No-active Short-Circuit
+
+When `N_CURRENT == 0`, the coordinator entered this branch before Step 1.
+There is no schedulable baseline, so it does not invoke `baseline-select.py`,
+create a synthesis worktree, or choose any historical terminal seed:
+
+```bash
+mkdir -p "$SESSION_ROOT/completion"
+if ! python3 "$HELPER_SCRIPTS_DIR/cross-seed-audit.py" \
+    --forum "$SESSION_ROOT/forum.jsonl" \
+    --journal "$SESSION_ROOT/journal.jsonl" \
+    --output "$SESSION_ROOT/completion/cross_seed_audit.md"; then
+  echo "synthesis.md § N=0: cross-seed-audit.py failed" >&2
+  exit 1
+fi
+
+SYNTHESIS_OUTCOME="no_baseline"
+FALLBACK_TRIGGERED=true
+FINAL_BRANCH="main"
+SYNTHESIS_Q=0
+BASELINE_Q=0
+CHOSEN_SEED_ID=null
+BASELINE_REASONING='{"tier":"no_active","reason":"no active seed remains"}'
+SYNTHESIS_HEAD=$(git rev-parse "$FINAL_BRANCH" 2>/dev/null || echo "")
+
+(unset SEED_ID; bash "$DEEP_EVOLVE_HELPER_PATH" \
+  append_journal_event "$(jq -cn \
+    --arg branch "$FINAL_BRANCH" \
+    --arg commit "$SYNTHESIS_HEAD" \
+    '{event: "synthesis_commit",
+      branch: $branch,
+      commit: $commit,
+      synthesis_q: 0,
+      baseline_q: 0,
+      baseline_seed_id: null,
+      baseline_selection_reasoning: {tier: "no_active", reason: "no active seed remains"},
+      fallback_triggered: true,
+      synthesis_outcome: "no_baseline"}')")
+
+# Continue to Step 7 (session_summary.md) with N_CURRENT=0.
+```
+
 ## § N=1 Short-Circuit (spec § 8.5)
 
 When `N_CURRENT == 1`, the coordinator entered this branch from the
@@ -675,22 +724,28 @@ if ! python3 "$HELPER_SCRIPTS_DIR/cross-seed-audit.py" \
   exit 1
 fi
 
-# Steps 4-6 — skipped entirely
-SYNTHESIS_OUTCOME="skipped_n1"
-FALLBACK_TRIGGERED=false
-FINAL_BRANCH="evolve/${SESSION_ID}/seed-1"
-if ! SYNTHESIS_Q=$(python3 -c '
-import yaml, sys
-with open(sys.argv[1]) as f:
-    s = yaml.safe_load(f) or {}
-seeds = s.get("virtual_parallel", {}).get("seeds", [])
-print(seeds[0].get("final_q", 0.0) if seeds else 0.0)
-' "$SESSION_ROOT/session.yaml"); then
-  echo "synthesis.md § N=1 Short-Circuit: failed to read SYNTHESIS_Q from session.yaml" >&2
+# Steps 4-6 — skipped entirely. Resolve the actual sole schedulable seed via
+# the shared compatibility reader; array position and literal seed 1 are never
+# identity authorities.
+if ! SINGLE_ACTIVE_JSON=$(python3 "$HELPER_SCRIPTS_DIR/active_seed_state.py" \
+    --session-yaml "$SESSION_ROOT/session.yaml" --single-json); then
+  echo "synthesis.md § N=1 Short-Circuit: failed to resolve sole active seed" >&2
   exit 1
 fi
+if ! CHOSEN_SEED_ID=$(printf '%s' "$SINGLE_ACTIVE_JSON" | jq -er \
+    '.seed_id | select(type == "number" and floor == . and . > 0)'); then
+  echo "synthesis.md § N=1 Short-Circuit: invalid sole active seed id" >&2
+  exit 1
+fi
+if ! SYNTHESIS_Q=$(printf '%s' "$SINGLE_ACTIVE_JSON" | jq -er \
+    '.final_q | select(type == "number")'); then
+  echo "synthesis.md § N=1 Short-Circuit: invalid sole active seed Q" >&2
+  exit 1
+fi
+SYNTHESIS_OUTCOME="skipped_n1"
+FALLBACK_TRIGGERED=false
+FINAL_BRANCH="evolve/${SESSION_ID}/seed-${CHOSEN_SEED_ID}"
 BASELINE_Q="$SYNTHESIS_Q"
-CHOSEN_SEED_ID=1
 
 # W-5 fix: spec § 9.2 line 888 lists `commit` as a required seed_killed
 # / synthesis_commit field. The N=1 short-circuit must include it.
@@ -702,7 +757,7 @@ SYNTHESIS_HEAD=$(git rev-parse "$FINAL_BRANCH" 2>/dev/null || echo "")
     --arg branch "$FINAL_BRANCH" \
     --arg commit "$SYNTHESIS_HEAD" \
     --argjson sq "$SYNTHESIS_Q" \
-    --argjson bid 1 \
+    --argjson bid "$CHOSEN_SEED_ID" \
     '{event: "synthesis_commit",
       branch: $branch,
       commit: $commit,

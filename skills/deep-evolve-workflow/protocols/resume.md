@@ -585,6 +585,20 @@ export VERSION_TIER
 
 Then route based on `session.yaml.status` ⨯ `VERSION_TIER`:
 
+For `v3_1_plus`, resolve the same canonical active-seed contract used by the
+status, scheduler, and synthesis paths before choosing a re-entry target:
+
+```bash
+if [ "$VERSION_TIER" = "v3_1_plus" ]; then
+  HELPER_SCRIPTS_DIR="$(dirname "$DEEP_EVOLVE_HELPER_PATH")"
+  if ! ACTIVE_SEED_COUNT=$(python3 "$HELPER_SCRIPTS_DIR/active_seed_state.py" \
+      --session-yaml "$SESSION_ROOT/session.yaml" --count); then
+    echo "error: resume could not read canonical active-seed state" >&2
+    exit 1
+  fi
+fi
+```
+
 If `session.yaml.status == paused`:
   → A crash occurred during an Outer Loop run (see `inner-loop.md` Step 6.5, which wraps
     Outer Loop in `mark_session_status paused/active`). Read `protocols/outer-loop.md`
@@ -597,7 +611,12 @@ If `session.yaml.status == paused`:
 
 If `session.yaml.status == active`:
 
-- **`VERSION_TIER == v3_1_plus`** → **Read `protocols/coordinator.md`** (resume the
+- **`VERSION_TIER == v3_1_plus` and `ACTIVE_SEED_COUNT == 0`** → **Read
+  `protocols/synthesis.md`** immediately. Do not re-enter the coordinator: its
+  AI decision and dispatch surfaces have no valid seed to select.
+
+- **`VERSION_TIER == v3_1_plus` and `ACTIVE_SEED_COUNT > 0`** → **Read
+  `protocols/coordinator.md`** (resume the
   multi-seed coordinator. Coordinator's main loop is journal-event idempotent;
   `scheduler-signals.py` synthesizes `in_flight_block` from journal so resume
   detects partially-dispatched seeds and skips already-completed blocks. Step 3.5
