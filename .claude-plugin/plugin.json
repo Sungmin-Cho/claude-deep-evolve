@@ -7,6 +7,7 @@
   },
   "repository": "https://github.com/Sungmin-Cho/claude-deep-evolve",
   "license": "MIT",
+  "hooks": "./hooks/hooks.claude.json",
   "keywords": [
     "autonomous",
     "experiment",

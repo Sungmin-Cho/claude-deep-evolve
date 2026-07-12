@@ -1,0 +1,6 @@
+{
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Add File: {{SESSION_ROOT}}/worktrees/seed_2/program.md\n+seed program\n*** Delete File: {{SESSION_ROOT}}/strategy.yaml\n*** End Patch"
+  }
+}

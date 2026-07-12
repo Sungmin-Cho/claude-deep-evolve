@@ -3,8 +3,8 @@
 // tests/protect-readonly-golden.test.js — M5.5 #3 hook golden test
 // (deep-evolve side).
 //
-// **Goal**: pin protect-readonly.sh's stdout JSON + exit code on a fixture
-// corpus so the contract (decision + reason regex match) is regression-
+// **Goal**: pin the shared Node hook's host-valid exit channel on a fixture
+// corpus so the contract (exit code + stderr reason) is regression-
 // protected across the representative tool × session-state × meta-mode
 // combinations. Adding a new scenario = adding a `<name>.input.json` +
 // `<name>.expected.json` pair under `tests/fixtures/golden/`. The loader
@@ -12,7 +12,7 @@
 //
 // Spec: claude-deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-tests-handoff.md §2 #3
 // Pattern reference: claude-deep-work tests/phase-guard-golden.test.js
-// (PR #29). Same loader shape, adapted for protect-readonly.sh's
+// (PR #29). Same loader shape, adapted for the shared Node hook's
 // `.deep-evolve/<session_id>/` state convention instead of deep-work's
 // `.claude/deep-work.<sid>.md` frontmatter.
 //
@@ -26,7 +26,6 @@ const path = require('node:path');
 
 const {
   runProtectReadonly,
-  parseGuardOutput,
 } = require('../hooks/scripts/test-helpers/run-protect-readonly');
 
 const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'golden');
@@ -79,11 +78,16 @@ function writeSessionState(tmpRoot, state) {
     JSON.stringify({ session_id: sessionId }),
   );
 
-  // session.yaml — status field controls active-experiment detection
+  // session.yaml — a minimal valid active-state document controls detection.
   const status = state.status || 'active';
   fs.writeFileSync(
     path.join(sessionRoot, 'session.yaml'),
-    `status: ${status}\n`,
+    `${JSON.stringify({
+      session_id: sessionId,
+      deep_evolve_version: '3.4.3',
+      status,
+      created_at: '2026-07-10T00:00:00Z',
+    }, null, 2)}\n`,
   );
 
   // Realize the protected files so fixtures can reference them as bash targets
@@ -91,6 +95,7 @@ function writeSessionState(tmpRoot, state) {
   // string equality, so creation is optional — but cheap and matches the
   // pytest helper.
   if (state.create_protected !== false) {
+    fs.writeFileSync(path.join(sessionRoot, 'prepare.cjs'), 'process.stdout.write("score: 1\\n");\n');
     fs.writeFileSync(path.join(sessionRoot, 'prepare.py'), 'SECRET = 1\n');
     fs.writeFileSync(path.join(sessionRoot, 'prepare-protocol.md'), 'SECRET\n');
     fs.writeFileSync(path.join(sessionRoot, 'program.md'), 'program\n');
@@ -171,28 +176,14 @@ describe('protect-readonly golden fixtures (M5.5 #3)', () => {
           `exit code mismatch in ${name}: status=${result.status} stdout=${result.stdout} stderr=${result.stderr}`,
         );
 
-        if (expected.decision || expected.reason_match) {
-          const parsed = parseGuardOutput(result.stdout);
-          assert.ok(
-            parsed,
-            `expected JSON decision in stdout for ${name}; got: ${result.stdout}`,
-          );
-          if (expected.decision) {
-            assert.equal(
-              parsed.decision,
-              expected.decision,
-              `decision mismatch in ${name}`,
-            );
-          }
+        if (expected.exit_code === 2) {
+          assert.equal(result.stdout, '', `block fixtures must keep stdout empty in ${name}`);
+          if (expected.decision) assert.equal(expected.decision, 'block', name);
           if (expected.reason_match) {
-            assert.ok(
-              typeof parsed.reason === 'string' && parsed.reason.length > 0,
-              `expected reason text in ${name}; got ${JSON.stringify(parsed)}`,
-            );
-            assert.match(parsed.reason, new RegExp(expected.reason_match));
+            assert.match(result.stderr, new RegExp(expected.reason_match));
           }
         } else {
-          // Allow path: protect-readonly.sh emits no stdout, just exit 0.
+          assert.equal(result.stderr, '', `allow fixtures must keep stderr empty in ${name}`);
           assert.equal(
             result.stdout.trim(),
             '',

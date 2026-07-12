@@ -18,7 +18,6 @@
     "metric-driven"
   ],
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Deep Evolve",
     "shortDescription": "Goal-driven autonomous experiment loops",
