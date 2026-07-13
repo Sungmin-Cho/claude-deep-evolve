@@ -11,13 +11,25 @@ const { parseStateDocument } = require('../hooks/scripts/runtime/session-codec.c
 
 const RUNTIME = path.resolve(__dirname, '..', 'hooks', 'scripts', 'deep-evolve-runtime.cjs');
 const FIXTURE_ROOT = path.join(__dirname, 'fixtures', 'runtime');
+const START_FIXTURE = JSON.parse(fs.readFileSync(
+  path.join(FIXTURE_ROOT, 'session-start-v3.5.json'),
+  'utf8',
+));
 const { dispatch, main } = require(RUNTIME);
 let requestCounter = 0;
+
+function startInitialState(initializationId = '01J00000000000000000000000') {
+  const initialState = structuredClone(START_FIXTURE.initial_state);
+  initialState.initialization_id = initializationId;
+  return initialState;
+}
 
 function makeProject(label = 'project with spaces') {
   const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'evolve-session-'));
   const root = path.join(outer, label);
   fs.mkdirSync(path.join(root, '.deep-evolve'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'index.js'), 'module.exports = 1;\n');
   return { outer, root: fs.realpathSync(root) };
 }
 
@@ -47,11 +59,15 @@ function writeCurrent(projectRoot, sessionId) {
 }
 
 function request(projectRoot, operation, payload = {}) {
+  const normalizedPayload = operation === 'session.start'
+    && !Object.prototype.hasOwnProperty.call(payload, 'initial_state')
+    ? { ...payload, initial_state: startInitialState() }
+    : payload;
   return {
     schema_version: '1.0',
     operation,
     context: { project_root: projectRoot },
-    payload,
+    payload: normalizedPayload,
   };
 }
 
@@ -426,14 +442,16 @@ function crashStartSession(projectRoot, crashAt, goal = 'Recoverable Start') {
     "const root=process.argv[2];",
     "const crashAt=process.argv[3];",
     "const goal=process.argv[4];",
+    "const initialState=JSON.parse(process.argv[5]);",
     "const request={schema_version:'1.0',operation:'session.start',",
-    "context:{project_root:root},payload:{goal}};",
+    "context:{project_root:root},payload:{goal,initial_state:initialState}};",
     "const response=runtime.dispatch(request,{",
     "now:()=>Date.parse('2026-07-12T12:34:56Z'),",
     "coordinationOptions:{crashAt,crashExitCode:86}});",
     "process.stdout.write(JSON.stringify(response));",
   ].join('');
-  return spawnSync(process.execPath, ['-e', script, RUNTIME, projectRoot, crashAt, goal], {
+  return spawnSync(process.execPath, ['-e', script, RUNTIME, projectRoot, crashAt, goal,
+    JSON.stringify(startInitialState())], {
     encoding: 'utf8',
     timeout: 15_000,
   });
@@ -721,8 +739,18 @@ test('session.start crash reservations retry to one deterministic unsuffixed nam
         now: fixedNow,
       });
       assert.equal(next.ok, true, `${crashAt}/next: ${JSON.stringify(next)}`);
-      assert.equal(next.result.session_id, `${expectedId}-2`,
-        `${crashAt}: a completed retry left a stale reservation that was adopted again`);
+      assert.equal(next.result.session_id, expectedId,
+        `${crashAt}: an exact initialization replay drifted to a new namespace`);
+      assert.equal(next.result.replayed, true,
+        `${crashAt}: an exact initialization replay was not reported as replayed`);
+
+      const distinct = dispatch(request(root, 'session.start', {
+        goal: 'Recoverable Start',
+        initial_state: startInitialState('01J00000000000000000000001'),
+      }), { now: fixedNow });
+      assert.equal(distinct.ok, true, `${crashAt}/distinct: ${JSON.stringify(distinct)}`);
+      assert.equal(distinct.result.session_id, `${expectedId}-2`,
+        `${crashAt}: a distinct initialization did not receive collision suffix authority`);
     } finally {
       fs.rmSync(outer, { recursive: true, force: true });
     }
@@ -813,6 +841,52 @@ test('legacy and canonical start routes share registry collision and pending-rec
       assert.deepEqual(records.filter((event) => event.event === 'created')
         .map((event) => event.session_id), [sessionId]);
     } finally { fs.rmSync(outer, { recursive: true, force: true }); }
+  }
+});
+
+test('legacy start cannot adopt reservation evidence that lacks canonical initial state', () => {
+  const { outer, root } = makeProject('legacy reservation requires initialization');
+  try {
+    const seeded = seedCommittedPrivateStart(root, {
+      sessionId: '2026-07-12_legacy-needs-initialization',
+      goal: 'Legacy Needs Initialization',
+      children: ['runs', 'code-archive', 'strategy-archive', 'meta-analyses'],
+    });
+    const before = snapshotTree(seeded.stateRoot);
+    const result = captureLegacyMain(
+      root,
+      ['start_new_session', seeded.goal],
+      { dependencies: { now: () => Date.parse('2026-07-12T12:34:56Z') } },
+    );
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /requires canonical initial_state/);
+    assert.deepEqual(snapshotTree(seeded.stateRoot), before,
+      'legacy recovery refusal must preserve all reservation and registry evidence');
+  } finally {
+    fs.rmSync(outer, { recursive: true, force: true });
+  }
+});
+
+test('canonical recovery preserves and rejects a third digest in legacy reservation evidence', () => {
+  const { outer, root } = makeProject('legacy reservation third digest');
+  try {
+    const seeded = seedCommittedPrivateStart(root, {
+      sessionId: '2026-07-12_legacy-third-digest',
+      goal: 'Legacy Third Digest',
+      children: ['runs', 'code-archive', 'strategy-archive', 'meta-analyses'],
+    });
+    fs.writeFileSync(path.join(seeded.privateRoot, 'session.yaml'), 'foreign-state-digest\n');
+    const before = snapshotTree(seeded.stateRoot);
+    const result = dispatch(request(root, 'session.start', { goal: seeded.goal }), {
+      now: () => Date.parse('2026-07-12T12:34:56Z'),
+    });
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.exitCode, 2);
+    assert.equal(result.error.code, 'start_state_ambiguous');
+    assert.deepEqual(snapshotTree(seeded.stateRoot), before,
+      'third-digest rejection must preserve every legacy reservation byte');
+  } finally {
+    fs.rmSync(outer, { recursive: true, force: true });
   }
 });
 

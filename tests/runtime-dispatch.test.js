@@ -8,6 +8,10 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const RUNTIME = path.resolve(__dirname, '..', 'hooks', 'scripts', 'deep-evolve-runtime.cjs');
+const START_FIXTURE = JSON.parse(fs.readFileSync(
+  path.join(__dirname, 'fixtures', 'runtime', 'session-start-v3.5.json'),
+  'utf8',
+));
 const {
   OPERATIONS,
   LEGACY_ROUTES,
@@ -328,6 +332,44 @@ test('rejects malformed, prototype-bearing, and unknown request fields', () => {
     accessorRequest.payload = accessorPayload;
     assert.equal(dispatch(accessorRequest).ok, false);
     assert.equal(getterCalls, 0, 'validation must reject accessors without invoking them');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('canonical session.start exposes only the required atomic initialization payload', () => {
+  const root = tempProject();
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'index.js'), 'module.exports = 1;\n');
+  const initialState = structuredClone(START_FIXTURE.initial_state);
+  try {
+    const unknown = dispatch(request(root, 'session.start', {
+      goal: 'dispatcher start',
+      initial_state: initialState,
+      caller_session_id: 'forbidden',
+    }));
+    assert.equal(unknown.ok, false);
+    assert.equal(unknown.exitCode, 2);
+    assert.equal(unknown.error.code, 'unknown_payload_field');
+
+    const missing = dispatch(request(root, 'session.start', { goal: 'dispatcher start' }));
+    assert.equal(missing.ok, false);
+    assert.equal(missing.exitCode, 2);
+    assert.equal(missing.error.code, 'initial_state_required');
+    assert.deepEqual(fs.readdirSync(path.join(root, '.deep-evolve')), ['.runtime-requests'],
+      'rejected dispatcher payloads must not reserve or publish a session');
+
+    const started = dispatch(request(root, 'session.start', {
+      goal: 'dispatcher start',
+      initial_state: initialState,
+    }), { now: () => Date.parse('2026-07-13T12:34:56Z') });
+    assert.equal(started.ok, true, JSON.stringify(started));
+    assert.deepEqual(Object.keys(started.result).sort(), [
+      'initialization_id', 'replayed', 'session', 'session_id', 'session_root', 'session_sha256',
+    ]);
+    assert.equal(started.result.initialization_id, initialState.initialization_id);
+    assert.equal(started.result.session.status, 'initializing');
+    assert.equal(started.result.session.session_id, started.result.session_id);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

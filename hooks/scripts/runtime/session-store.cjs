@@ -21,6 +21,7 @@ const COORDINATION_FILES = new Set([
   'forum.jsonl',
   'kill_queue.jsonl',
   'kill_requests.jsonl',
+  'results.tsv',
 ]);
 
 function sleepSync(ms) {

@@ -10,6 +10,10 @@ const {
   serializeStateDocument,
 } = require('./runtime/session-codec.cjs');
 const {
+  buildInitialSession,
+  validateInitialStateSpec,
+} = require('./runtime/session-transitions.cjs');
+const {
   atomicWriteFile,
   mutateCoordinationFiles,
   patchSession,
@@ -659,6 +663,17 @@ const START_CHILD_DIRECTORIES = Object.freeze([
 const START_RESERVATION_FILE = '.start-reservation.json';
 const START_PUBLICATION_FILE = '.start-publication.json';
 const START_FINALIZATION_FILE = '.start-finalized.json';
+const START_STATE_FILE = '.start-state.commit.json';
+const CANONICAL_SESSION_VERSION = '3.5.0';
+const RESULTS_V3_HEADER = 'commit\tscore\tstatus\tcategory\tscore_delta\tloc_delta\tflagged\trationale\tdescription\n';
+const START_STATE_FILES = Object.freeze([
+  'session.yaml',
+  'journal.jsonl',
+  'forum.jsonl',
+  'kill_queue.jsonl',
+  'kill_requests.jsonl',
+  'results.tsv',
+]);
 
 function canonicalStartValue(value) {
   if (Array.isArray(value)) return value.map(canonicalStartValue);
@@ -684,11 +699,14 @@ function startCommitMarker(value) {
   };
 }
 
-function startRequestDigest(goal, parent) {
-  return `sha256:${crypto.createHash('sha256').update(JSON.stringify({
+function startRequestDigest(goal, parent, initialState = undefined) {
+  const request = {
     goal,
     parent_session_id: parent,
-  })).digest('hex')}`;
+  };
+  if (initialState !== undefined) request.initial_state = canonicalStartValue(initialState);
+  return `sha256:${crypto.createHash('sha256')
+    .update(JSON.stringify(canonicalStartValue(request))).digest('hex')}`;
 }
 
 function startReservationDirectory(stateRoot) {
@@ -816,6 +834,7 @@ function readStartReservation(stateRoot, markerPath) {
   );
   if (typeof marker.session_id !== 'string'
       || typeof marker.request_digest !== 'string'
+      || !/^sha256:[a-f0-9]{64}$/.test(marker.request_digest)
       || typeof marker.reservation_nonce !== 'string'
       || !/^[a-f0-9]{32,}$/.test(marker.reservation_nonce)
       || !plainObject(marker.namespace_identity)
@@ -824,6 +843,16 @@ function readStartReservation(stateRoot, markerPath) {
       || !Array.isArray(marker.expected_children)
       || marker.expected_children.join('\0') !== START_CHILD_DIRECTORIES.join('\0')) {
     throw operatorError('start_reservation_invalid', `invalid start reservation: ${markerPath}`);
+  }
+  const hasInitializationId = Object.hasOwn(marker, 'initialization_id');
+  const hasInitialStateDigest = Object.hasOwn(marker, 'initial_state_digest');
+  if (hasInitializationId !== hasInitialStateDigest
+      || (hasInitializationId
+        && (typeof marker.initialization_id !== 'string'
+          || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(marker.initialization_id)
+          || typeof marker.initial_state_digest !== 'string'
+          || !/^sha256:[a-f0-9]{64}$/.test(marker.initial_state_digest)))) {
+    throw operatorError('start_reservation_invalid', `invalid canonical start reservation: ${markerPath}`);
   }
   ensureSessionId(marker.session_id, 'start reservation session_id');
   return marker;
@@ -880,6 +909,8 @@ function inspectStartNamespace(stateRoot, marker) {
     START_RESERVATION_FILE,
     START_PUBLICATION_FILE,
     START_FINALIZATION_FILE,
+    START_STATE_FILE,
+    ...START_STATE_FILES,
   ]);
   let namespaceMarkerPath = null;
   for (const name of fs.readdirSync(root)) {
@@ -916,6 +947,21 @@ function inspectStartNamespace(stateRoot, marker) {
           `start publication is not a private file: ${candidate}`);
       }
       readStartPublication(stateRoot, root, marker);
+      continue;
+    }
+    if (name === START_STATE_FILE) {
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        throw operatorError('start_state_ambiguous',
+          `start state marker is not a private file: ${candidate}`);
+      }
+      readStartStateCommit(stateRoot, root, marker);
+      continue;
+    }
+    if (START_STATE_FILES.includes(name)) {
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        throw operatorError('start_state_ambiguous',
+          `canonical start state entry is not a private file: ${candidate}`);
+      }
       continue;
     }
     if (!stat.isDirectory() || stat.isSymbolicLink() || fs.readdirSync(candidate).length !== 0) {
@@ -1074,6 +1120,248 @@ function writeExclusiveStartMarker(markerPath, marker) {
     throw operatorError('start_reservation_install_failed',
       'cannot persist the exclusive public namespace marker');
   }
+}
+
+function readStableStartFile(stateRoot, filePath) {
+  assertStartPathComponents(stateRoot, filePath);
+  let descriptor;
+  try {
+    const lexical = fs.lstatSync(filePath, { bigint: true });
+    if (!lexical.isFile() || lexical.isSymbolicLink()) {
+      throw operatorError('start_state_ambiguous',
+        `canonical start state must be a regular non-symlink file: ${filePath}`);
+    }
+    const physical = fs.realpathSync(filePath);
+    if (!isPathInside(stateRoot, physical)) {
+      throw operatorError('start_state_ambiguous',
+        `canonical start state escaped its state root: ${filePath}`);
+    }
+    descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    const before = fs.fstatSync(descriptor, { bigint: true });
+    if (before.dev !== lexical.dev || before.ino !== lexical.ino) {
+      throw operatorError('start_state_ambiguous',
+        `canonical start state changed before read: ${filePath}`);
+    }
+    const bytes = fs.readFileSync(descriptor);
+    const after = fs.fstatSync(descriptor, { bigint: true });
+    if (before.dev !== after.dev || before.ino !== after.ino
+        || before.size !== after.size || before.mtimeNs !== after.mtimeNs) {
+      throw operatorError('start_state_ambiguous',
+        `canonical start state changed during read: ${filePath}`);
+    }
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    return bytes;
+  } finally {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch {}
+    }
+  }
+}
+
+function writeExclusiveStartStateFile(stateRoot, filePath, bytes) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(filePath, 'wx', 0o600);
+    fs.writeFileSync(descriptor, bytes);
+    fsyncExclusiveStartMarker(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    syncRenamedDirectoryBestEffort(path.dirname(filePath), process.platform);
+    return { created: true };
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch {}
+    }
+    if (!(error && error.code === 'EEXIST')) {
+      throw operatorError('start_state_install_failed',
+        `cannot persist canonical start state: ${path.basename(filePath)}`);
+    }
+    const existing = readStableStartFile(stateRoot, filePath);
+    if (!existing.equals(bytes)) {
+      throw operatorError('start_state_ambiguous',
+        `canonical start state has a third digest: ${filePath}`);
+    }
+    return { created: false };
+  }
+}
+
+function digestStartBytes(bytes) {
+  return `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+}
+
+function canonicalStartStateFiles(session) {
+  validateStoredSession(session);
+  return new Map([
+    ['session.yaml', Buffer.from(serializeStateDocument(session))],
+    ['journal.jsonl', Buffer.alloc(0)],
+    ['forum.jsonl', Buffer.alloc(0)],
+    ['kill_queue.jsonl', Buffer.alloc(0)],
+    ['kill_requests.jsonl', Buffer.alloc(0)],
+    ['results.tsv', Buffer.from(RESULTS_V3_HEADER)],
+  ]);
+}
+
+function readStartStateCommit(stateRoot, privateRoot, reservation) {
+  const markerPath = path.join(privateRoot, START_STATE_FILE);
+  if (!fs.existsSync(markerPath)) return null;
+  const record = readStartCommitRecord(
+    stateRoot,
+    markerPath,
+    'deep-evolve-start-state',
+  );
+  if (record.session_id !== reservation.session_id
+      || typeof record.initialization_id !== 'string'
+      || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(record.initialization_id)
+      || typeof record.request_digest !== 'string'
+      || !/^sha256:[a-f0-9]{64}$/.test(record.request_digest)
+      || record.reservation_nonce !== reservation.reservation_nonce
+      || !sameStartNamespaceIdentity(record.namespace_identity, reservation.namespace_identity)
+      || (reservation.initialization_id !== undefined
+        && (record.initialization_id !== reservation.initialization_id
+          || record.request_digest !== reservation.request_digest))
+      || !Array.isArray(record.files)
+      || record.files.length !== START_STATE_FILES.length) {
+    throw operatorError('start_state_ambiguous',
+      `canonical start state marker does not match its reservation: ${markerPath}`);
+  }
+  for (let index = 0; index < START_STATE_FILES.length; index += 1) {
+    const entry = record.files[index];
+    if (!plainObject(entry)
+        || Object.keys(entry).sort().join('\0') !== ['bytes', 'relative_path', 'sha256'].join('\0')
+        || entry.relative_path !== START_STATE_FILES[index]
+        || typeof entry.sha256 !== 'string'
+        || !/^sha256:[a-f0-9]{64}$/.test(entry.sha256)
+        || !Number.isSafeInteger(entry.bytes)
+        || entry.bytes < 0) {
+      throw operatorError('start_state_ambiguous',
+        `canonical start state marker has an invalid file record: ${markerPath}`);
+    }
+  }
+  return record;
+}
+
+function verifyStartStateFiles(stateRoot, privateRoot, record, expectedFiles = null) {
+  for (const entry of record.files) {
+    const bytes = readStableStartFile(stateRoot, path.join(privateRoot, entry.relative_path));
+    if (bytes.length !== entry.bytes || digestStartBytes(bytes) !== entry.sha256) {
+      throw operatorError('start_state_ambiguous',
+        `canonical start state digest changed: ${entry.relative_path}`);
+    }
+    if (expectedFiles && !bytes.equals(expectedFiles.get(entry.relative_path))) {
+      throw operatorError('start_state_ambiguous',
+        `canonical start state does not match the requested projection: ${entry.relative_path}`);
+    }
+  }
+}
+
+function ensureStartTargetContainment(projectRoot, initialState) {
+  for (const relative of initialState.target_files) {
+    let current = projectRoot;
+    for (const component of relative.split('/')) {
+      current = path.join(current, component);
+      let stat;
+      try { stat = fs.lstatSync(current); }
+      catch (error) {
+        if (error && error.code === 'ENOENT') break;
+        throw operatorError('initial_target_path_unreadable',
+          `cannot inspect initial target path: ${relative}`);
+      }
+      if (stat.isSymbolicLink()) {
+        throw operatorError('initial_target_symlink',
+          `initial target path contains a symlink: ${relative}`);
+      }
+      const physical = fs.realpathSync(current);
+      if (!isPathInside(projectRoot, physical)) {
+        throw operatorError('initial_target_path_escape',
+          `initial target path escapes the project root: ${relative}`);
+      }
+    }
+  }
+}
+
+function ensureCanonicalStartState(project, reservation, privateRoot, request, options = {}, {
+  verifyFiles = true,
+} = {}) {
+  if (reservation.initialization_id !== undefined
+      && reservation.initialization_id !== request.initializationId) {
+    throw operatorError('initialization_id_conflict',
+      'start reservation initialization_id conflicts with the canonical request');
+  }
+  if (reservation.initial_state_digest !== undefined
+      && reservation.initial_state_digest !== request.initialStateDigest) {
+    throw operatorError('initialization_id_conflict',
+      'start reservation initial_state digest conflicts with the canonical request');
+  }
+  const session = buildInitialSession({
+    sessionId: reservation.session_id,
+    goal: request.goal,
+    parent: request.parent,
+    initialState: request.initialState,
+    createdAt: reservation.created_at,
+    runtimeVersion: CANONICAL_SESSION_VERSION,
+  });
+  const expectedFiles = canonicalStartStateFiles(session);
+  let record = readStartStateCommit(project.stateRoot, privateRoot, reservation);
+  if (record) {
+    if (record.initialization_id === request.initializationId
+        && record.request_digest !== request.requestDigest) {
+      throw operatorError('initialization_id_conflict',
+        'initialization_id was already bound to different canonical input');
+    }
+    if (record.initialization_id !== request.initializationId
+        || record.request_digest !== request.requestDigest) {
+      throw operatorError('start_state_ambiguous',
+        'canonical start state marker conflicts with the requested initialization');
+    }
+    if (verifyFiles) verifyStartStateFiles(project.stateRoot, privateRoot, record, expectedFiles);
+    return { record, session, files: expectedFiles, created: false };
+  }
+
+  if (!sameStartNamespaceIdentity(startNamespaceIdentity(privateRoot), reservation.namespace_identity)) {
+    throw operatorError('start_state_ambiguous',
+      'reserved namespace identity changed before state publication');
+  }
+  for (const [name, bytes] of expectedFiles) {
+    writeExclusiveStartStateFile(project.stateRoot, path.join(privateRoot, name), bytes);
+    invokeStartPhase(options, `after-start-state-file:${name}`, {
+      sessionId: reservation.session_id,
+      privateRoot,
+      relativePath: name,
+    });
+  }
+  const marker = startCommitMarker({
+    kind: 'deep-evolve-start-state',
+    session_id: reservation.session_id,
+    initialization_id: request.initializationId,
+    request_digest: request.requestDigest,
+    reservation_nonce: reservation.reservation_nonce,
+    namespace_identity: reservation.namespace_identity,
+    files: [...expectedFiles].map(([relativePath, bytes]) => ({
+      relative_path: relativePath,
+      sha256: digestStartBytes(bytes),
+      bytes: bytes.length,
+    })),
+  });
+  const markerPath = path.join(privateRoot, START_STATE_FILE);
+  try {
+    writeExclusiveStartMarker(markerPath, marker);
+  } catch (error) {
+    if (!fs.existsSync(markerPath)) throw error;
+    const raced = readStartStateCommit(project.stateRoot, privateRoot, reservation);
+    if (!raced || raced.marker_checksum !== marker.marker_checksum) {
+      throw operatorError('start_state_ambiguous',
+        'canonical start state marker was occupied by a foreign record');
+    }
+  }
+  invokeStartPhase(options, 'after-start-state-marker', {
+    sessionId: reservation.session_id,
+    privateRoot,
+    markerPath,
+  });
+  record = readStartStateCommit(project.stateRoot, privateRoot, reservation);
+  verifyStartStateFiles(project.stateRoot, privateRoot, record, expectedFiles);
+  return { record, session, files: expectedFiles, created: true };
 }
 
 function startFinalizationPath(privateRoot) {
@@ -1302,6 +1590,10 @@ function installCommittedStartNamespaceExclusive(stateRoot, marker, inspected, o
     sidecarPath: sidecars[0],
   });
 
+  if (typeof options.preparePrivate === 'function') {
+    options.preparePrivate(privateRoot, marker);
+  }
+
   invokeStartPhase(options, 'before-start-public-recovery-install', {
     sessionId: marker.session_id,
     privateRoot,
@@ -1364,7 +1656,9 @@ function reservationSidecarCandidates(stateRoot, marker) {
   return fs.existsSync(normal) ? [normal] : [];
 }
 
-function recoverStartReservations(project, files, requestDigest, options = {}) {
+function recoverStartReservations(project, files, request, options = {}, {
+  legacyCollisionSemantics = false,
+} = {}) {
   const directory = ensureStartReservationDirectory(project.stateRoot);
   if (!directory) return null;
   let names;
@@ -1419,21 +1713,119 @@ function recoverStartReservations(project, files, requestDigest, options = {}) {
       && record.session_id === marker.session_id);
     const located = locateStartNamespace(project.stateRoot, marker);
     const finalizedRecord = readStartFinalization(project.stateRoot, located.root, marker);
+    const stateRecord = readStartStateCommit(project.stateRoot, located.root, marker);
+    if (stateRecord && !finalizedRecord) {
+      verifyStartStateFiles(project.stateRoot, located.root, stateRecord);
+    }
+    const markerInitializationId = marker.initialization_id
+      || (stateRecord && stateRecord.initialization_id)
+      || null;
+    let matches = marker.request_digest === request.requestDigest;
+    if (legacyCollisionSemantics && stateRecord && !finalizedRecord) {
+      const sessionPath = path.join(located.root, 'session.yaml');
+      const pendingSession = validateStoredSession(parseStateDocument(
+        readStableStartFile(project.stateRoot, sessionPath).toString('utf8'),
+        { sourcePath: sessionPath },
+      ));
+      assertSessionIdentity(pendingSession, marker.session_id);
+      const pendingParent = pendingSession.parent_session === null
+        ? null
+        : pendingSession.parent_session.id;
+      matches = pendingSession.goal === request.goal && pendingParent === request.parent;
+    } else if (!legacyCollisionSemantics) {
+      if (markerInitializationId === request.initializationId
+          && stateRecord && stateRecord.request_digest !== request.requestDigest) {
+        throw operatorError('initialization_id_conflict',
+          'initialization_id was already committed with different canonical input');
+      }
+      if (markerInitializationId === request.initializationId
+          && marker.initialization_id
+          && marker.request_digest !== request.requestDigest) {
+        throw operatorError('initialization_id_conflict',
+          'initialization_id was already reserved with different canonical input');
+      }
+      if (markerInitializationId === request.initializationId
+          && marker.initial_state_digest
+          && marker.initial_state_digest !== request.initialStateDigest) {
+        throw operatorError('initialization_id_conflict',
+          'initialization_id was already reserved with a different initial_state digest');
+      }
+      const exactCanonical = markerInitializationId === request.initializationId
+        && (marker.request_digest === request.requestDigest
+          || (stateRecord && stateRecord.request_digest === request.requestDigest));
+      const legacyUpgrade = markerInitializationId === null
+        && marker.request_digest === request.legacyRequestDigest;
+      matches = exactCanonical || legacyUpgrade;
+      if (markerInitializationId !== null
+          && markerInitializationId !== request.initializationId
+          && !created && !finalizedRecord) {
+        throw operatorError('start_reservation_pending',
+          `a different start reservation is pending: ${marker.session_id}`);
+      }
+    }
+    if (legacyCollisionSemantics && matches && !stateRecord) {
+      throw operatorError('legacy_start_requires_initialization',
+        `legacy start reservation requires canonical initial_state: ${marker.session_id}`);
+    }
     if (finalizedRecord) {
       inspectFinalizedStartNamespace(project.stateRoot, marker);
       if (!created) {
         throw operatorError('start_reservation_ambiguous',
           `finalized start reservation has no registry event: ${marker.session_id}`);
       }
+      if (matches) {
+        if (adopted) {
+          throw operatorError('start_reservation_ambiguous',
+            'multiple matching finalized start reservations exist');
+        }
+        let startState = null;
+        if (!legacyCollisionSemantics) {
+          startState = ensureCanonicalStartState(
+            project,
+            marker,
+            located.root,
+            request,
+            options,
+            { verifyFiles: false },
+          );
+        }
+        adopted = {
+          session_id: marker.session_id,
+          session_root: path.join(project.stateRoot, marker.session_id),
+          private_root: located.root,
+          marker,
+          start_state: startState,
+          needs_commit: false,
+          replayed: true,
+        };
+      }
       continue;
     }
     const inspected = inspectStartNamespace(project.stateRoot, marker);
     if (created) {
+      if (!stateRecord && !matches) {
+        throw operatorError('start_reservation_pending',
+          `an initialized state is required before finalizing reservation: ${marker.session_id}`);
+      }
       const canAdopt = !adopted
-        && marker.request_digest === requestDigest
+        && matches
         && pointer && pointer.session_id === marker.session_id;
+      let startState = null;
       const committedNamespace = ensureCommittedStartNamespace(
-        project.stateRoot, marker, options,
+        project.stateRoot,
+        marker,
+        canAdopt && !legacyCollisionSemantics ? {
+          ...options,
+          preparePrivate(privateRoot) {
+            startState = ensureCanonicalStartState(
+              project,
+              marker,
+              privateRoot,
+              request,
+              options,
+            );
+          },
+        } : options,
       );
       finalizeStartReservation(
         project.stateRoot,
@@ -1446,11 +1838,13 @@ function recoverStartReservations(project, files, requestDigest, options = {}) {
         session_root: committedNamespace.root,
         private_root: committedNamespace.privateRoot,
         marker,
+        start_state: startState,
         needs_commit: false,
+        replayed: true,
       };
       continue;
     }
-    if (marker.request_digest !== requestDigest) {
+    if (!matches) {
       throw operatorError('start_reservation_pending',
         `a different start reservation is pending: ${marker.session_id}`);
     }
@@ -1458,15 +1852,31 @@ function recoverStartReservations(project, files, requestDigest, options = {}) {
       throw operatorError('start_reservation_ambiguous',
         'multiple matching uncommitted start reservations exist');
     }
+    let startState = null;
     const preparedNamespace = ensureCommittedStartNamespace(
-      project.stateRoot, marker, options,
+      project.stateRoot,
+      marker,
+      legacyCollisionSemantics ? options : {
+        ...options,
+        preparePrivate(privateRoot) {
+          startState = ensureCanonicalStartState(
+            project,
+            marker,
+            privateRoot,
+            request,
+            options,
+          );
+        },
+      },
     );
     adopted = {
       session_id: marker.session_id,
       session_root: preparedNamespace.root,
       private_root: preparedNamespace.privateRoot,
       marker,
+      start_state: startState,
       needs_commit: true,
+      replayed: false,
     };
   }
   return adopted;
@@ -1482,21 +1892,54 @@ function startSession(project, payload, dependencies = {}, { legacyCollisionSema
   const parent = payload.parent_session_id === undefined
     ? null
     : ensureSessionId(payload.parent_session_id, 'payload.parent_session_id');
+  let initialState = null;
+  if (!legacyCollisionSemantics) {
+    if (!Object.hasOwn(payload, 'initial_state')) {
+      throw operatorError('initial_state_required', 'payload.initial_state is required');
+    }
+    try { initialState = validateInitialStateSpec(payload.initial_state); }
+    catch (error) {
+      throw operatorError(error && error.code ? error.code : 'initial_state_invalid',
+        error && error.message ? error.message : 'payload.initial_state is invalid');
+    }
+    ensureStartTargetContainment(project.projectRoot, initialState);
+  }
   const timestamp = isoNow(dependencies);
-  const requestDigest = startRequestDigest(goal, parent);
+  const requestDigest = startRequestDigest(
+    goal,
+    parent,
+    legacyCollisionSemantics ? undefined : initialState,
+  );
+  const startRequest = {
+    goal,
+    parent,
+    initialState,
+    initializationId: initialState && initialState.initialization_id,
+    initialStateDigest: initialState && digestStartBytes(Buffer.from(JSON.stringify(
+      canonicalStartValue(initialState),
+    ))),
+    requestDigest,
+    legacyRequestDigest: startRequestDigest(goal, parent),
+  };
   const coordinationOptions = legacyCoordinationOptions(dependencies);
   let sessionId;
   let root;
   let privateRoot;
   let reservation;
+  let startState = null;
+  let replayed = false;
   let adopted = null;
   mutateCoordinationFiles(project.stateRoot, ['current.json', 'sessions.jsonl'], (files) => {
-    adopted = recoverStartReservations(project, files, requestDigest, coordinationOptions);
+    adopted = recoverStartReservations(project, files, startRequest, coordinationOptions, {
+      legacyCollisionSemantics,
+    });
     if (adopted) {
       sessionId = adopted.session_id;
       root = adopted.session_root;
       privateRoot = adopted.private_root;
       reservation = adopted.marker;
+      startState = adopted.start_state;
+      replayed = adopted.replayed === true;
       if (!adopted.needs_commit) return null;
     } else {
       if (legacyCollisionSemantics) {
@@ -1538,6 +1981,10 @@ function startSession(project, payload, dependencies = {}, { legacyCollisionSema
           reservation_nonce: reservationNonce,
           namespace_identity: namespaceIdentity,
           expected_children: START_CHILD_DIRECTORIES,
+          ...(!legacyCollisionSemantics ? {
+            initialization_id: initialState.initialization_id,
+            initial_state_digest: startRequest.initialStateDigest,
+          } : {}),
         });
         writeExclusiveStartMarker(
           startReservationSidecar(project.stateRoot, sessionId, reservationNonce), reservation,
@@ -1553,6 +2000,13 @@ function startSession(project, payload, dependencies = {}, { legacyCollisionSema
         invokeStartPhase(coordinationOptions, 'after-start-children', {
           sessionId, root: privateRoot, publicRoot: root,
         });
+        startState = ensureCanonicalStartState(
+          project,
+          reservation,
+          privateRoot,
+          startRequest,
+          coordinationOptions,
+        );
         if (!sameStartNamespaceIdentity(startNamespaceIdentity(privateRoot), namespaceIdentity)) {
           throw operatorError('start_reservation_ambiguous',
             `private session namespace changed during install: ${privateRoot}`);
@@ -1596,8 +2050,36 @@ function startSession(project, payload, dependencies = {}, { legacyCollisionSema
   }, coordinationOptions);
   if (reservation && privateRoot) {
     finalizeStartReservation(project.stateRoot, reservation, privateRoot, root);
+    invokeStartPhase(coordinationOptions, 'after-start-finalization', {
+      sessionId,
+      privateRoot,
+      publicRoot: root,
+    });
   }
-  return { session_id: sessionId, session_root: root };
+  if (legacyCollisionSemantics) return { session_id: sessionId, session_root: root };
+  if (!startState) {
+    startState = ensureCanonicalStartState(
+      project,
+      reservation,
+      privateRoot,
+      startRequest,
+      coordinationOptions,
+      { verifyFiles: !replayed },
+    );
+  }
+  const sessionBytes = readStableStartFile(project.stateRoot, path.join(privateRoot, 'session.yaml'));
+  const session = validateStoredSession(parseStateDocument(sessionBytes.toString('utf8'), {
+    sourcePath: path.join(privateRoot, 'session.yaml'),
+  }));
+  assertSessionIdentity(session, sessionId);
+  return {
+    session_id: sessionId,
+    session_root: root,
+    session,
+    session_sha256: digestStartBytes(sessionBytes),
+    initialization_id: initialState.initialization_id,
+    replayed,
+  };
 }
 
 function updateSessionStatus(project, sessionId, status, eventKind, dependencies = {}, extras = {}) {
@@ -2681,7 +3163,7 @@ const HANDLERS = Object.freeze({
     return { result: operationList(project, payload), warnings: [] };
   },
   'session.start': (request, project, dependencies) => {
-    const payload = payloadFor(request, ['goal', 'parent_session_id']);
+    const payload = payloadFor(request, ['goal', 'parent_session_id', 'initial_state']);
     return { result: startSession(project, payload, dependencies), warnings: [] };
   },
   'session.mark-status': (request, project, dependencies) => {

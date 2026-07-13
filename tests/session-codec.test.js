@@ -10,9 +10,14 @@ const {
   validateSession,
   validateStrategy,
 } = require('../hooks/scripts/runtime/session-codec.cjs');
+const { buildInitialSession } = require('../hooks/scripts/runtime/session-transitions.cjs');
 
 const root = path.resolve(__dirname, '..');
 const fixtureRoot = path.join(__dirname, 'fixtures', 'runtime');
+const startFixture = JSON.parse(fs.readFileSync(
+  path.join(fixtureRoot, 'session-start-v3.5.json'),
+  'utf8',
+));
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -220,6 +225,101 @@ test('session and strategy validation enforce known shapes while preserving x-* 
     ...strategy,
     idea_selection: { ...strategy.idea_selection, mystery: true },
   }), /unknown.*idea_selection.*mystery/i);
+});
+
+test('strict v3.5 sessions enforce complete metric, epoch, counter, seed, and budget invariants', () => {
+  const initial = buildInitialSession({
+    sessionId: '2026-07-13_codec-contract',
+    goal: 'strict codec contract',
+    parent: null,
+    initialState: structuredClone(startFixture.initial_state),
+    createdAt: '2026-07-13T12:34:56Z',
+    runtimeVersion: '3.5.0',
+  });
+  assert.strictEqual(validateSession(initial), initial);
+
+  const active = structuredClone(initial);
+  active.status = 'active';
+  active.metric = { ...active.metric, baseline: 1, current: 1, best: 1 };
+  assert.strictEqual(validateSession(active), active);
+
+  const cases = [
+    ['partial metric authority', () => {
+      const value = structuredClone(active);
+      delete value.metric.best;
+      return value;
+    }, /baseline.*current.*best|baseline, current, and best/],
+    ['activation without metric authority', () => {
+      const value = structuredClone(initial);
+      value.status = 'active';
+      return value;
+    }, /required before activation/],
+    ['experiment counter drift', () => {
+      const value = structuredClone(initial);
+      value.experiments.total = 1;
+      return value;
+    }, /terminal experiment counters/],
+    ['epoch pointer drift', () => {
+      const value = structuredClone(initial);
+      value.evaluation_epoch.current = 2;
+      return value;
+    }, /current.*history/],
+    ['non-canonical target path', () => {
+      const value = structuredClone(initial);
+      value.target_files = ['src/../outside.js'];
+      return value;
+    }, /normalized project-relative paths/],
+    ['duplicate seed identity', () => {
+      const value = structuredClone(initial);
+      value.virtual_parallel.seeds = [
+        { id: 1, status: 'active', allocated_budget: 3 },
+        { id: 1, status: 'paused', allocated_budget: 3 },
+      ];
+      value.virtual_parallel.n_current = 1;
+      delete value.virtual_parallel['x-active-seed-count'];
+      value.virtual_parallel.budget_unallocated = 24;
+      return value;
+    }, /identities.*unique/],
+    ['active count drift', () => {
+      const value = structuredClone(initial);
+      value.virtual_parallel.seeds = [{ id: 1, status: 'active', allocated_budget: 3 }];
+      value.virtual_parallel.n_current = 2;
+      delete value.virtual_parallel['x-active-seed-count'];
+      value.virtual_parallel.budget_unallocated = 27;
+      return value;
+    }, /n_current.*active seeds/],
+    ['allocation equation drift', () => {
+      const value = structuredClone(initial);
+      value.virtual_parallel.seeds = [{ id: 1, status: 'active', allocated_budget: 3 }];
+      value.virtual_parallel.n_current = 1;
+      delete value.virtual_parallel['x-active-seed-count'];
+      return value;
+    }, /allocated plus unallocated/],
+    ['legacy virtual spelling', () => {
+      const value = structuredClone(initial);
+      value.virtual_parallel.N = 1;
+      return value;
+    }, /unknown virtual_parallel key N/],
+    ['legacy parent projection', () => {
+      const value = structuredClone(initial);
+      value.parent_session = {
+        id: 'parent-1',
+        inherited_at: '2026-07-13T12:34:56Z',
+        parent_receipt_schema_version: '1.0',
+      };
+      return value;
+    }, /unknown parent_session key parent_receipt_schema_version/],
+    ['per-seed budget floor', () => {
+      const value = structuredClone(initial);
+      value.total_budget = 2;
+      value.virtual_parallel.budget_total = 2;
+      value.virtual_parallel.budget_unallocated = 2;
+      return value;
+    }, /per-seed floor/],
+  ];
+  for (const [label, makeValue, pattern] of cases) {
+    assert.throws(() => validateSession(makeValue()), pattern, label);
+  }
 });
 
 test('serialization is deterministic pretty JSON with one trailing newline', () => {
