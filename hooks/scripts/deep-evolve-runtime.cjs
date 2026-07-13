@@ -10,8 +10,34 @@ const {
   serializeStateDocument,
 } = require('./runtime/session-codec.cjs');
 const {
+  FULL_COMMIT,
+  appendOperationReceipt,
+  appendTypedEventAndReceipt,
+  applyBaseline,
+  applyCompletion,
+  applyEvaluatorExpansion,
+  applyExperiment,
+  assertRepairableProjection,
   buildInitialSession,
+  findOperationReceipt,
+  installProjection,
+  isStrictSessionVersion,
+  parseResultsTsv,
+  parseStrictJsonl,
+  projectionFromVirtual,
+  projectionSha256,
+  reduceVirtualProjection,
+  requestSha256,
+  requireDigest: requireAuthorityDigest,
+  requireOperationId,
+  resultRowForExperiment,
+  serializeResultRow,
+  sessionNonProjectionSha256,
+  transitionError,
+  validateBeta,
+  validateExperiment,
   validateInitialStateSpec,
+  validateTransferPatch,
 } = require('./runtime/session-transitions.cjs');
 const {
   atomicWriteFile,
@@ -24,6 +50,7 @@ const {
   validateCommitMarker,
   validateStoredSession,
   withDirectoryLock,
+  sha256Digest,
 } = require('./runtime/session-store.cjs');
 const {
   appendJsonl: appendJournalJsonl,
@@ -33,6 +60,7 @@ const {
   queueKill,
   queueUserKill,
   drainKillQueue,
+  assertGenericEventAllowed,
 } = require('./runtime/journal-store.cjs');
 const {
   entropy,
@@ -103,6 +131,9 @@ const OPERATIONS = Object.freeze([
   'session.render-inherited-context',
   'session.lineage-tree',
   'session.patch',
+  'session.record-baseline',
+  'session.finish-experiment',
+  'session.record-evaluator-expansion',
   'session.complete',
   'virtual.init',
   'virtual.append-seed',
@@ -2846,13 +2877,15 @@ function parseCompatibleSessionText(text, sourcePath, expectedSessionId) {
 function readNamespaceSession(project, sessionId, { compatibility = false } = {}) {
   const info = sessionInfo(project, sessionId, { requireDirectory: true });
   let session;
+  let sessionText;
   mutateCoordinationFiles(project.stateRoot, [info.relativeSession], (files) => {
+    sessionText = files[info.relativeSession];
     session = compatibility
-      ? parseCompatibleSessionText(files[info.relativeSession], info.sessionPath, info.sessionId)
-      : assertSessionIdentity(parseSessionText(files[info.relativeSession], info.sessionPath), info.sessionId);
+      ? parseCompatibleSessionText(sessionText, info.sessionPath, info.sessionId)
+      : assertSessionIdentity(parseSessionText(sessionText, info.sessionPath), info.sessionId);
     return null;
   });
-  return { info, session };
+  return { info, session, sessionText };
 }
 
 function readCurrentNamespaceSessionCompatibility(project) {
@@ -2867,6 +2900,7 @@ function readCurrentNamespaceSessionCompatibility(project) {
   }
   const info = sessionInfo(project, hintedPointer.session_id);
   let session;
+  let sessionText;
   mutateCoordinationFiles(
     project.stateRoot,
     ['current.json', info.relativeSession],
@@ -2884,11 +2918,656 @@ function readCurrentNamespaceSessionCompatibility(project) {
         }
         throw businessError('session_yaml_missing', `session dir exists but session.yaml missing: ${info.sessionRoot}`);
       }
-      session = parseCompatibleSessionText(files[info.relativeSession], info.sessionPath, info.sessionId);
+      sessionText = files[info.relativeSession];
+      session = parseCompatibleSessionText(sessionText, info.sessionPath, info.sessionId);
       return null;
     },
   );
-  return { info, session };
+  return { info, session, sessionText };
+}
+
+function requireExactPayload(payload, keys, label = 'payload') {
+  const expected = new Set(keys);
+  for (const key of expected) {
+    if (!Object.hasOwn(payload, key)) {
+      throw operatorError('missing_payload_field', `${label}.${key} is required`);
+    }
+  }
+  rejectUnknownKeys(payload, expected, label, 'unknown_payload_field');
+  return payload;
+}
+
+function transitionOptions(dependencies = {}) {
+  const explicit = plainObject(dependencies.transactionOptions)
+    ? dependencies.transactionOptions : {};
+  return {
+    ...explicit,
+    ...(dependencies.crashAt === undefined ? {} : { crashAt: dependencies.crashAt }),
+    ...(dependencies.onTransitionPhase === undefined
+      ? {} : { onPhase: dependencies.onTransitionPhase }),
+    ...(dependencies.platform === undefined ? {} : { platform: dependencies.platform }),
+    ...(dependencies.io === undefined ? {} : { io: dependencies.io }),
+    ...(dependencies.sleep === undefined ? {} : { sleep: dependencies.sleep }),
+  };
+}
+
+function authorityDigests(files, relative) {
+  return {
+    session_sha256: sha256Digest(Buffer.from(files[relative.session])),
+    journal_sha256: sha256Digest(Buffer.from(files[relative.journal])),
+    results_sha256: sha256Digest(Buffer.from(files[relative.results])),
+    ...(relative.forum === undefined ? {} : {
+      forum_sha256: sha256Digest(Buffer.from(files[relative.forum])),
+    }),
+  };
+}
+
+function requireCas(payload, actual, names) {
+  for (const name of names) {
+    const payloadKey = `expected_${name}_sha256`;
+    requireAuthorityDigest(payload[payloadKey], `payload.${payloadKey}`);
+    const actualKey = `${name}_sha256`;
+    if (payload[payloadKey] !== actual[actualKey]) {
+      throw businessError('stale_preimage', `${name} preimage is stale`, {
+        expected: payload[payloadKey],
+        actual: actual[actualKey],
+      });
+    }
+  }
+}
+
+function typedPaths(info, { forum = false, registry = false } = {}) {
+  return {
+    session: info.relativeSession,
+    journal: relativeSessionSibling(info, 'journal.jsonl'),
+    results: relativeSessionSibling(info, 'results.tsv'),
+    ...(forum ? { forum: relativeSessionSibling(info, 'forum.jsonl') } : {}),
+    ...(registry ? { registry: 'sessions.jsonl' } : {}),
+  };
+}
+
+function requireStrictTypedSession(files, relative, info) {
+  const session = assertSessionIdentity(
+    parseSessionText(files[relative.session], info.sessionPath),
+    info.sessionId,
+  );
+  if (!isStrictSessionVersion(session.deep_evolve_version)) {
+    throw operatorError('typed_transition_requires_v35', 'typed transition requires a v3.5 session');
+  }
+  return session;
+}
+
+function replayResult(found, { journalDigest = true } = {}) {
+  const result = structuredClone(found.receipt.result);
+  if (journalDigest) result.journal_sha256 = found.journal_sha256;
+  result.replayed = true;
+  return result;
+}
+
+function stableRegularFile(root, relativePath, expectedDigest, label) {
+  requireAuthorityDigest(expectedDigest, `${label}.sha256`);
+  if (typeof relativePath !== 'string' || relativePath.length === 0
+      || path.isAbsolute(relativePath) || relativePath.includes('\0')
+      || relativePath.includes('\\')) {
+    throw operatorError('artifact_path_invalid', `${label} path must be normalized and relative`);
+  }
+  const segments = relativePath.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    throw operatorError('artifact_path_invalid', `${label} path contains an unsafe segment`);
+  }
+  let current = root;
+  let expectedTarget;
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    let stat;
+    try { stat = fs.lstatSync(current, { bigint: true }); }
+    catch (error) {
+      if (error && error.code === 'ENOENT') throw operatorError('artifact_missing', `${label} is missing`);
+      throw error;
+    }
+    if (stat.isSymbolicLink()) throw operatorError('artifact_path_symlink', `${label} contains a symlink`);
+    expectedTarget = stat;
+  }
+  const target = path.join(root, ...segments);
+  if (!isPathInside(root, target)) throw operatorError('artifact_path_escape', `${label} escapes session root`);
+  if (!expectedTarget || !expectedTarget.isFile()) {
+    throw operatorError('artifact_not_regular', `${label} must be a regular file`);
+  }
+  let physicalBefore;
+  try { physicalBefore = fs.realpathSync(target); }
+  catch { throw operatorError('artifact_missing', `${label} cannot be resolved`); }
+  if (!isPathInside(root, physicalBefore)) {
+    throw operatorError('artifact_path_escape', `${label} resolves outside session root`);
+  }
+  let descriptor;
+  try {
+    descriptor = fs.openSync(target,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  } catch (error) {
+    if (error && new Set(['ELOOP', 'EMLINK']).has(error.code)) {
+      throw operatorError('artifact_path_symlink', `${label} became a symlink`);
+    }
+    throw error;
+  }
+  let before;
+  let after;
+  let bytes;
+  try {
+    before = fs.fstatSync(descriptor, { bigint: true });
+    if (!before.isFile()) throw operatorError('artifact_not_regular', `${label} must be a regular file`);
+    bytes = fs.readFileSync(descriptor);
+    after = fs.fstatSync(descriptor, { bigint: true });
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  let pathAfter;
+  let physicalAfter;
+  try {
+    pathAfter = fs.lstatSync(target, { bigint: true });
+    physicalAfter = fs.realpathSync(target);
+  } catch {
+    throw operatorError('artifact_changed_during_read', `${label} changed during stable read`);
+  }
+  if (pathAfter.isSymbolicLink() || !isPathInside(root, physicalAfter)
+      || physicalBefore !== physicalAfter
+      || expectedTarget.dev !== before.dev || expectedTarget.ino !== before.ino
+      || expectedTarget.size !== before.size || expectedTarget.mtimeNs !== before.mtimeNs
+      || expectedTarget.ctimeNs !== before.ctimeNs
+      || pathAfter.dev !== after.dev || pathAfter.ino !== after.ino
+      || pathAfter.size !== after.size || pathAfter.mtimeNs !== after.mtimeNs
+      || pathAfter.ctimeNs !== after.ctimeNs
+      || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
+      || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
+    throw operatorError('artifact_changed_during_read', `${label} changed during stable read`);
+  }
+  const actual = sha256Digest(bytes);
+  if (actual !== expectedDigest) {
+    throw operatorError(label.startsWith('harness') ? 'harness_identity_mismatch'
+      : 'artifact_digest_mismatch', `${label} digest does not match`, { expected: expectedDigest, actual });
+  }
+  return { path: target, bytes, sha256: actual };
+}
+
+function validateHarnessIdentity(info, identity) {
+  requirePlainObject(identity, 'harness_identity');
+  rejectUnknownKeys(identity, new Set(['prepare_sha256', 'config_sha256']), 'harness_identity');
+  for (const key of ['prepare_sha256', 'config_sha256']) {
+    if (!Object.hasOwn(identity, key)) throw operatorError('missing_payload_field', `harness_identity.${key} is required`);
+    requireAuthorityDigest(identity[key], `harness_identity.${key}`);
+  }
+  const prepare = stableRegularFile(info.sessionRoot, 'prepare.cjs', identity.prepare_sha256,
+    'harness prepare.cjs');
+  const configFile = stableRegularFile(info.sessionRoot, 'prepare.config.json', identity.config_sha256,
+    'harness prepare.config.json');
+  let config;
+  try { config = JSON.parse(configFile.bytes.toString('utf8')); }
+  catch { throw operatorError('harness_config_invalid', 'prepare.config.json is not valid JSON'); }
+  requirePlainObject(config, 'prepare.config.json');
+  return { identity: structuredClone(identity), prepare, configFile, config };
+}
+
+function normalizeBaseline(session, payload, harness) {
+  for (const key of ['raw_score', 'normalized_score']) {
+    if (typeof payload[key] !== 'number' || !Number.isFinite(payload[key])) {
+      throw operatorError('invalid_field_type', `payload.${key} must be a finite number`);
+    }
+  }
+  if (harness.config.metric_direction !== session.metric.direction) {
+    throw operatorError('harness_direction_mismatch', 'harness direction differs from session metric');
+  }
+  if (session.metric.direction === 'maximize') {
+    if (!Object.is(payload.raw_score, payload.normalized_score)) {
+      throw operatorError('baseline_normalization_mismatch', 'maximize baseline must preserve raw score');
+    }
+  } else {
+    if (!Number.isFinite(harness.config.baseline_score)
+        || !Object.is(harness.config.baseline_score, payload.raw_score)
+        || Math.abs(payload.normalized_score - 1) > Number.EPSILON * 8) {
+      throw operatorError('baseline_normalization_mismatch',
+        'minimize baseline must bind raw baseline and normalize to 1');
+    }
+  }
+}
+
+function operationPatchStrict(project, payload, dependencies = {}) {
+  requireExactPayload(payload, [
+    'session_id', 'operation_id', 'expected_session_sha256',
+    'expected_journal_sha256', 'path', 'value',
+  ]);
+  const sessionId = ensureSessionId(payload.session_id);
+  requireOperationId(payload.operation_id, 'payload.operation_id');
+  if (payload.path !== '/transfer') {
+    throw operatorError('patch_path_not_allowed', `patch path is not allowed: ${String(payload.path)}`);
+  }
+  const transfer = validateTransferPatch(payload.value);
+  const info = sessionInfo(project, sessionId, { requireDirectory: true });
+  const relative = typedPaths(info);
+  const requestDigest = requestSha256('session.patch', payload);
+  let result;
+  let replayed = false;
+  const outcome = mutateCoordinationFiles(
+    project.stateRoot,
+    Object.values(relative),
+    (files) => {
+      const current = requireStrictTypedSession(files, relative, info);
+      const found = findOperationReceipt(files[relative.journal], payload.operation_id,
+        'session.patch', requestDigest);
+      if (found) {
+        result = replayResult(found);
+        replayed = true;
+        return null;
+      }
+      const before = authorityDigests(files, relative);
+      requireCas(payload, before, ['session', 'journal']);
+      const events = parseStrictJsonl(files[relative.journal]).map((entry) => entry.value);
+      if (current.status !== 'initializing'
+          || events.some((event) => event.event === 'baseline_recorded')) {
+        throw operatorError('patch_lifecycle_closed', 'transfer may be patched only before baseline activation');
+      }
+      const now = isoNow(dependencies);
+      const next = structuredClone(current);
+      next.transfer = transfer === null ? null : { ...transfer, adopted_at: now };
+      validateStoredSession(next);
+      const sessionText = serializeStateDocument(next);
+      const event = {
+        event: 'transfer_adopted',
+        operation_id: payload.operation_id,
+        transfer: structuredClone(next.transfer),
+        ts: now,
+      };
+      const core = {
+        session: structuredClone(next),
+        session_sha256: sha256Digest(Buffer.from(sessionText)),
+      };
+      const appended = appendTypedEventAndReceipt(files[relative.journal], event, {
+        operation: 'session.patch',
+        operationId: payload.operation_id,
+        requestDigest,
+        prior: before,
+        postSessionSha256: core.session_sha256,
+        postResultsSha256: before.results_sha256,
+        postNonProjectionSha256: sessionNonProjectionSha256(next),
+        result: core,
+        ts: now,
+      });
+      result = { ...core, replayed: false };
+      return {
+        [relative.session]: sessionText,
+        [relative.journal]: appended.journalText,
+      };
+    },
+    transitionOptions(dependencies),
+  );
+  if (!replayed) result.journal_sha256 = sha256Digest(Buffer.from(outcome.files[relative.journal]));
+  return { result, warnings: [] };
+}
+
+function operationRecordBaseline(project, payload, dependencies = {}) {
+  requireExactPayload(payload, [
+    'session_id', 'operation_id', 'expected_session_sha256',
+    'expected_journal_sha256', 'raw_score', 'normalized_score', 'harness_identity',
+  ]);
+  const sessionId = ensureSessionId(payload.session_id);
+  requireOperationId(payload.operation_id, 'payload.operation_id');
+  const info = sessionInfo(project, sessionId, { requireDirectory: true });
+  const relative = typedPaths(info, { registry: true });
+  const requestDigest = requestSha256('session.record-baseline', payload);
+  let result;
+  let replayed = false;
+  const outcome = mutateCoordinationFiles(project.stateRoot, Object.values(relative), (files) => {
+    const current = requireStrictTypedSession(files, relative, info);
+    const found = findOperationReceipt(files[relative.journal], payload.operation_id,
+      'session.record-baseline', requestDigest);
+    if (found) {
+      result = replayResult(found);
+      replayed = true;
+      return null;
+    }
+    const before = authorityDigests(files, relative);
+    requireCas(payload, before, ['session', 'journal']);
+    const harness = validateHarnessIdentity(info, payload.harness_identity);
+    normalizeBaseline(current, payload, harness);
+    parseResultsTsv(files[relative.results]);
+    parseJsonl(files[relative.registry], 'sessions.jsonl');
+    const now = isoNow(dependencies);
+    const applied = applyBaseline(current, payload, now);
+    validateStoredSession(applied.session);
+    const sessionText = serializeStateDocument(applied.session);
+    const core = {
+      session: structuredClone(applied.session),
+      session_sha256: sha256Digest(Buffer.from(sessionText)),
+    };
+    const appended = appendTypedEventAndReceipt(files[relative.journal], applied.event, {
+      operation: 'session.record-baseline', operationId: payload.operation_id, requestDigest,
+      prior: before,
+      postSessionSha256: core.session_sha256,
+      postResultsSha256: before.results_sha256,
+      postNonProjectionSha256: sessionNonProjectionSha256(applied.session),
+      result: core,
+      ts: now,
+    });
+    result = { ...core, replayed: false };
+    return {
+      [relative.session]: sessionText,
+      [relative.journal]: appended.journalText,
+      [relative.registry]: appendJsonLine(files[relative.registry], {
+        event: 'status_change', ts: now, session_id: sessionId, status: 'active',
+      }),
+    };
+  }, transitionOptions(dependencies));
+  if (!replayed) result.journal_sha256 = sha256Digest(Buffer.from(outcome.files[relative.journal]));
+  return { result, warnings: [] };
+}
+
+function gitLiteral(cwd, args, dependencies = {}, label = 'git') {
+  const result = (dependencies.spawnSync || spawnSync)('git', ['-C', cwd, ...args], {
+    encoding: 'utf8',
+    shell: false,
+  });
+  if (!result || typeof result.status !== 'number' || result.status !== 0) {
+    const stderr = result && result.stderr ? String(result.stderr).trim() : '';
+    throw businessError('git_identity_mismatch', `${label} failed${stderr ? `: ${stderr}` : ''}`);
+  }
+  return String(result.stdout || '').trim();
+}
+
+function verifyExperimentGit(project, info, seed, experiment, dependencies = {}) {
+  const expectedWorktree = path.join(info.sessionRoot, 'worktrees', `seed_${seed.id}`);
+  if (path.resolve(seed.worktree_path) !== path.resolve(expectedWorktree)) {
+    throw operatorError('seed_worktree_identity_mismatch', 'canonical seed worktree path is inconsistent');
+  }
+  const validated = validateSeedWorktree({
+    ...task5WorktreeOptions(project, info, dependencies),
+    seedId: seed.id,
+  });
+  if (validated.worktree_path !== expectedWorktree || validated.branch !== seed.branch) {
+    throw businessError('worktree_branch_mismatch', 'seed worktree branch differs from canonical state');
+  }
+  const pre = gitLiteral(expectedWorktree,
+    ['rev-parse', '--verify', `${experiment.pre_commit}^{commit}`], dependencies,
+    'verify experiment pre-commit');
+  const commit = gitLiteral(expectedWorktree,
+    ['rev-parse', '--verify', `${experiment.commit}^{commit}`], dependencies,
+    'verify experiment commit');
+  if (pre !== experiment.pre_commit || commit !== experiment.commit) {
+    throw operatorError('git_identity_mismatch', 'Git resolved a non-identical commit object');
+  }
+  const ancestry = (dependencies.spawnSync || spawnSync)('git', [
+    '-C', expectedWorktree, 'merge-base', '--is-ancestor', experiment.pre_commit, experiment.commit,
+  ], { encoding: 'utf8', shell: false });
+  if (!ancestry || ancestry.status !== 0) {
+    if (ancestry && ancestry.status === 1) {
+      throw businessError('git_ancestry_mismatch', 'experiment commit is not a descendant of pre-commit');
+    }
+    throw businessError('git_identity_mismatch', 'Git ancestry verification failed');
+  }
+  const expectedHead = experiment.status === 'kept' ? experiment.commit : experiment.pre_commit;
+  if (validated.head !== expectedHead) {
+    throw businessError('worktree_head_mismatch',
+      `seed worktree HEAD ${validated.head} differs from terminal ${expectedHead}`);
+  }
+}
+
+function operationFinishExperiment(project, payload, dependencies = {}) {
+  requireExactPayload(payload, [
+    'session_id', 'operation_id', 'expected_session_sha256',
+    'expected_journal_sha256', 'expected_forum_sha256', 'expected_results_sha256',
+    'seed_id', 'experiment',
+  ]);
+  const sessionId = ensureSessionId(payload.session_id);
+  requireOperationId(payload.operation_id, 'payload.operation_id');
+  const seedId = requireInteger(payload.seed_id, 'payload.seed_id', { min: 1 });
+  const experiment = validateExperiment(payload.experiment);
+  const info = sessionInfo(project, sessionId, { requireDirectory: true });
+  const relative = typedPaths(info, { forum: true });
+  const requestDigest = requestSha256('session.finish-experiment', payload);
+  let result;
+  let replayed = false;
+  const outcome = mutateCoordinationFiles(project.stateRoot, Object.values(relative), (files) => {
+    const current = requireStrictTypedSession(files, relative, info);
+    const found = findOperationReceipt(files[relative.journal], payload.operation_id,
+      'session.finish-experiment', requestDigest);
+    if (found) {
+      result = replayResult(found);
+      replayed = true;
+      return null;
+    }
+    const before = authorityDigests(files, relative);
+    requireCas(payload, before, ['session', 'journal', 'forum', 'results']);
+    const journalEntries = parseStrictJsonl(files[relative.journal]);
+    const events = journalEntries.map((entry) => entry.value);
+    const resultRows = parseResultsTsv(files[relative.results]);
+    requireCurrentProjection(current, events, resultRows);
+    if (events.some((event) => new Set(['kept', 'discarded', 'failed']).has(event.event)
+      && event.id === experiment.id)) {
+      throw operatorError('experiment_already_terminal', `experiment ${experiment.id} is already terminal`);
+    }
+    const seed = current.virtual_parallel.seeds.find((entry) => entry.id === seedId);
+    if (!seed || seed.status !== 'active') {
+      throw businessError('seed_not_active', `seed ${seedId} is missing or terminal`);
+    }
+    const expectedDelta = experiment.normalized_score - current.metric.current;
+    if (Math.abs(experiment.score_delta - expectedDelta) > 1e-12) {
+      throw operatorError('score_delta_mismatch', 'experiment.score_delta differs from canonical current score');
+    }
+    verifyExperimentGit(project, info, seed, experiment, dependencies);
+    parseJsonl(files[relative.forum], 'forum.jsonl');
+    const now = isoNow(dependencies);
+    const event = {
+      event: experiment.status,
+      operation_id: payload.operation_id,
+      ...structuredClone(experiment),
+      seed_id: seedId,
+      ts: now,
+    };
+    const row = resultRowForExperiment(experiment);
+    const resultsText = `${files[relative.results]}${serializeResultRow(row)}\n`;
+    const projection = reduceVirtualProjection({
+      initialVirtual: current.virtual_parallel,
+      events: [...events, event],
+      resultRows: [...resultRows, row],
+    });
+    const next = applyExperiment(current, payload, event, projection);
+    validateStoredSession(next);
+    const sessionText = serializeStateDocument(next);
+    const forumEvent = experiment.status === 'failed' ? null : {
+      event: experiment.status === 'kept' ? 'experiment_kept' : 'experiment_discarded',
+      operation_id: payload.operation_id,
+      session_id: sessionId,
+      seed_id: seedId,
+      experiment_id: experiment.id,
+      commit: experiment.commit,
+      score_delta: experiment.score_delta,
+      ts: now,
+    };
+    const forumText = forumEvent === null
+      ? files[relative.forum] : appendJsonLine(files[relative.forum], forumEvent);
+    const core = {
+      experiment_id: experiment.id,
+      status: experiment.status,
+      session: structuredClone(next),
+      session_sha256: sha256Digest(Buffer.from(sessionText)),
+      forum_sha256: sha256Digest(Buffer.from(forumText)),
+      results_sha256: sha256Digest(Buffer.from(resultsText)),
+    };
+    const appended = appendTypedEventAndReceipt(files[relative.journal], event, {
+      operation: 'session.finish-experiment', operationId: payload.operation_id, requestDigest,
+      prior: before,
+      postSessionSha256: core.session_sha256,
+      postResultsSha256: core.results_sha256,
+      postNonProjectionSha256: sessionNonProjectionSha256(next),
+      result: core,
+      ts: now,
+    });
+    result = { ...core, replayed: false };
+    return {
+      [relative.session]: sessionText,
+      [relative.journal]: appended.journalText,
+      [relative.forum]: forumText,
+      [relative.results]: resultsText,
+    };
+  }, transitionOptions(dependencies));
+  if (!replayed) result.journal_sha256 = sha256Digest(Buffer.from(outcome.files[relative.journal]));
+  return { result, warnings: [] };
+}
+
+function operationRecordEvaluatorExpansion(project, payload, dependencies = {}) {
+  requireExactPayload(payload, [
+    'session_id', 'operation_id', 'expected_session_sha256',
+    'expected_journal_sha256', 'harness_identity', 'reason', 'trigger_generation',
+  ]);
+  const sessionId = ensureSessionId(payload.session_id);
+  requireOperationId(payload.operation_id, 'payload.operation_id');
+  requireString(payload.reason, 'payload.reason');
+  requireInteger(payload.trigger_generation, 'payload.trigger_generation', { min: 0 });
+  const info = sessionInfo(project, sessionId, { requireDirectory: true });
+  const relative = typedPaths(info);
+  const requestDigest = requestSha256('session.record-evaluator-expansion', payload);
+  let result;
+  let replayed = false;
+  const outcome = mutateCoordinationFiles(project.stateRoot, Object.values(relative), (files) => {
+    const current = requireStrictTypedSession(files, relative, info);
+    const found = findOperationReceipt(files[relative.journal], payload.operation_id,
+      'session.record-evaluator-expansion', requestDigest);
+    if (found) {
+      result = replayResult(found);
+      replayed = true;
+      return null;
+    }
+    const before = authorityDigests(files, relative);
+    requireCas(payload, before, ['session', 'journal']);
+    validateHarnessIdentity(info, payload.harness_identity);
+    parseResultsTsv(files[relative.results]);
+    parseStrictJsonl(files[relative.journal]);
+    const now = isoNow(dependencies);
+    const applied = applyEvaluatorExpansion(current, payload, now);
+    validateStoredSession(applied.session);
+    const sessionText = serializeStateDocument(applied.session);
+    const core = {
+      session: structuredClone(applied.session),
+      session_sha256: sha256Digest(Buffer.from(sessionText)),
+      prepare_version: applied.session.evaluation_epoch.history.at(-1).prepare_version,
+    };
+    const appended = appendTypedEventAndReceipt(files[relative.journal], applied.event, {
+      operation: 'session.record-evaluator-expansion',
+      operationId: payload.operation_id,
+      requestDigest,
+      prior: before,
+      postSessionSha256: core.session_sha256,
+      postResultsSha256: before.results_sha256,
+      postNonProjectionSha256: sessionNonProjectionSha256(applied.session),
+      result: core,
+      ts: now,
+    });
+    result = { ...core, replayed: false };
+    return { [relative.session]: sessionText, [relative.journal]: appended.journalText };
+  }, transitionOptions(dependencies));
+  if (!replayed) result.journal_sha256 = sha256Digest(Buffer.from(outcome.files[relative.journal]));
+  return { result, warnings: [] };
+}
+
+function validateArtifactReference(value, label) {
+  requirePlainObject(value, label);
+  rejectUnknownKeys(value, new Set(['relative_path', 'sha256']), label);
+  if (!Object.hasOwn(value, 'relative_path') || !Object.hasOwn(value, 'sha256')) {
+    throw operatorError('invalid_artifact_reference', `${label} requires relative_path and sha256`);
+  }
+  requireString(value.relative_path, `${label}.relative_path`);
+  requireAuthorityDigest(value.sha256, `${label}.sha256`);
+  return structuredClone(value);
+}
+
+function validateCompletionPayload(info, payload, project, dependencies = {}) {
+  if (!new Set(['merged', 'pr_created', 'kept', 'discarded']).has(payload.outcome)) {
+    throw operatorError('invalid_completion_outcome', 'payload.outcome is invalid');
+  }
+  requireString(payload.final_branch, 'payload.final_branch');
+  if (!FULL_COMMIT.test(payload.final_commit)) {
+    throw operatorError('invalid_commit', 'payload.final_commit must be a full 40/64-hex ID');
+  }
+  const report = validateArtifactReference(payload.report, 'payload.report');
+  const receipt = validateArtifactReference(payload.receipt, 'payload.receipt');
+  stableRegularFile(info.sessionRoot, report.relative_path, report.sha256, 'report artifact');
+  stableRegularFile(info.sessionRoot, receipt.relative_path, receipt.sha256, 'receipt artifact');
+  requirePlainObject(payload.synthesis, 'payload.synthesis');
+  rejectUnknownKeys(payload.synthesis, new Set(['outcome', 'commit']), 'payload.synthesis');
+  if (!Object.hasOwn(payload.synthesis, 'outcome') || !Object.hasOwn(payload.synthesis, 'commit')) {
+    throw operatorError('invalid_synthesis_result', 'payload.synthesis requires outcome and commit');
+  }
+  requireString(payload.synthesis.outcome, 'payload.synthesis.outcome');
+  if (payload.synthesis.commit !== null && !FULL_COMMIT.test(payload.synthesis.commit)) {
+    throw operatorError('invalid_commit', 'payload.synthesis.commit must be null or full hex');
+  }
+  requirePlainObject(payload.final_strategy, 'payload.final_strategy');
+  const resolved = gitLiteral(project.projectRoot,
+    ['rev-parse', '--verify', `refs/heads/${payload.final_branch}^{commit}`], dependencies,
+    'verify final branch');
+  if (resolved !== payload.final_commit) {
+    throw businessError('git_identity_mismatch', 'final branch does not resolve to final_commit');
+  }
+}
+
+function operationCompleteStrict(project, payload, dependencies = {}) {
+  requireExactPayload(payload, [
+    'session_id', 'operation_id', 'expected_session_sha256',
+    'expected_journal_sha256', 'outcome', 'final_branch', 'final_commit', 'report',
+    'receipt', 'synthesis', 'final_strategy',
+  ]);
+  const sessionId = ensureSessionId(payload.session_id);
+  requireOperationId(payload.operation_id, 'payload.operation_id');
+  const info = sessionInfo(project, sessionId, { requireDirectory: true });
+  const relative = typedPaths(info, { registry: true });
+  const requestDigest = requestSha256('session.complete', payload);
+  let result;
+  let replayed = false;
+  const outcome = mutateCoordinationFiles(project.stateRoot, Object.values(relative), (files) => {
+    const current = requireStrictTypedSession(files, relative, info);
+    const found = findOperationReceipt(files[relative.journal], payload.operation_id,
+      'session.complete', requestDigest);
+    if (found) {
+      result = replayResult(found);
+      replayed = true;
+      return null;
+    }
+    const before = authorityDigests(files, relative);
+    requireCas(payload, before, ['session', 'journal']);
+    validateCompletionPayload(info, payload, project, dependencies);
+    parseResultsTsv(files[relative.results]);
+    parseJsonl(files[relative.registry], 'sessions.jsonl');
+    const now = isoNow(dependencies);
+    const applied = applyCompletion(current, payload, now);
+    validateStoredSession(applied.session);
+    const sessionText = serializeStateDocument(applied.session);
+    const core = {
+      session_id: sessionId,
+      status: 'completed',
+      outcome: payload.outcome,
+      session: structuredClone(applied.session),
+      session_sha256: sha256Digest(Buffer.from(sessionText)),
+    };
+    const appended = appendTypedEventAndReceipt(files[relative.journal], applied.event, {
+      operation: 'session.complete', operationId: payload.operation_id, requestDigest,
+      prior: before,
+      postSessionSha256: core.session_sha256,
+      postResultsSha256: before.results_sha256,
+      postNonProjectionSha256: sessionNonProjectionSha256(applied.session),
+      result: core,
+      ts: now,
+    });
+    const registry = appendJsonLine(files[relative.registry], {
+      event: 'finished', ts: now, session_id: sessionId, status: 'completed',
+      outcome: payload.outcome, final_branch: payload.final_branch,
+      final_commit: payload.final_commit,
+    });
+    result = { ...core, replayed: false };
+    return {
+      [relative.session]: sessionText,
+      [relative.journal]: appended.journalText,
+      [relative.registry]: registry,
+    };
+  }, transitionOptions(dependencies));
+  if (!replayed) result.journal_sha256 = sha256Digest(Buffer.from(outcome.files[relative.journal]));
+  return { result, warnings: [] };
 }
 
 function patchSessionWithJournal(project, sessionId, mutator) {
@@ -2924,7 +3603,7 @@ const VIRTUAL_FIELDS = Object.freeze({
   unallocated_pool: (value) => Number.isFinite(value) && value >= 0,
 });
 
-function operationVirtualInit(project, payload) {
+function operationVirtualInitLegacy(project, payload) {
   const sessionId = sessionIdFromPayload(project, payload);
   const analysis = requirePlainObject(payload.analysis, 'payload.analysis');
   rejectUnknownKeys(analysis, new Set(['project_type', 'eval_parallelizability', 'reasoning']), 'analysis');
@@ -2963,7 +3642,7 @@ function operationVirtualInit(project, payload) {
   return { result: { session }, warnings: [] };
 }
 
-function operationVirtualAppend(project, payload, dependencies = {}) {
+function operationVirtualAppendLegacy(project, payload, dependencies = {}) {
   const sessionId = sessionIdFromPayload(project, payload);
   const seedId = requireInteger(payload.seed_id, 'payload.seed_id', { min: 1 });
   const worktreePath = requireString(payload.worktree_path, 'payload.worktree_path');
@@ -3021,7 +3700,7 @@ function operationVirtualAppend(project, payload, dependencies = {}) {
   return { result: { session: patched.session }, warnings: patched.warnings };
 }
 
-function operationVirtualSetField(project, payload) {
+function operationVirtualSetFieldLegacy(project, payload) {
   const sessionId = sessionIdFromPayload(project, payload);
   const key = requireString(payload.key, 'payload.key');
   if (!Object.hasOwn(VIRTUAL_FIELDS, key)) {
@@ -3041,7 +3720,7 @@ function operationVirtualSetField(project, payload) {
   return { result: { session }, warnings: [] };
 }
 
-function operationVirtualRebuild(project, payload) {
+function operationVirtualRebuildLegacy(project, payload) {
   const sessionId = sessionIdFromPayload(project, payload);
   const patched = patchSessionWithJournal(project, sessionId, (session, journalText) => {
     if (!journalText) throw businessError('journal_missing', 'journal.jsonl missing');
@@ -3095,6 +3774,295 @@ function operationVirtualRebuild(project, payload) {
     return { session, warnings };
   });
   return { result: { session: patched.session }, warnings: patched.warnings };
+}
+
+function projectionEquals(left, right) {
+  return projectionSha256(left) === projectionSha256(right);
+}
+
+function requireCurrentProjection(current, events, resultRows) {
+  const derived = reduceVirtualProjection({
+    initialVirtual: current.virtual_parallel,
+    events,
+    resultRows,
+  });
+  const materialized = projectionFromVirtual(current.virtual_parallel);
+  if (!projectionEquals(materialized, derived)) {
+    throw transitionError('virtual_projection_conflict',
+      'materialized virtual projection differs from committed authority');
+  }
+  return derived;
+}
+
+function authenticateSeedWorktree(project, info, payload, dependencies = {}) {
+  const expectedWorktree = path.join(info.sessionRoot, 'worktrees', `seed_${payload.seed_id}`);
+  const expectedBranch = `evolve/${info.sessionId}/seed-${payload.seed_id}`;
+  if (payload.worktree_path !== expectedWorktree || payload.branch !== expectedBranch) {
+    throw operatorError('seed_worktree_identity_mismatch',
+      'seed worktree path and branch must equal their canonical identities');
+  }
+  const validated = validateSeedWorktree({
+    ...task5WorktreeOptions(project, info, dependencies),
+    seedId: payload.seed_id,
+  });
+  if (validated.worktree_path !== payload.worktree_path || validated.branch !== payload.branch) {
+    throw businessError('worktree_branch_mismatch',
+      'seed worktree path or branch differs from canonical state');
+  }
+}
+
+function operationVirtualAppendStrict(project, payload, dependencies = {}) {
+  requireExactPayload(payload, [
+    'session_id', 'operation_id', 'expected_session_sha256',
+    'expected_journal_sha256', 'seed_id', 'worktree_path', 'branch', 'beta',
+    'creation_kind',
+  ]);
+  const sessionId = ensureSessionId(payload.session_id);
+  requireOperationId(payload.operation_id, 'payload.operation_id');
+  if (!Number.isSafeInteger(payload.seed_id) || payload.seed_id < 1 || payload.seed_id > 9) {
+    throw operatorError('invalid_field_type',
+      'payload.seed_id must be a positive safe integer no greater than 9');
+  }
+  requireString(payload.worktree_path, 'payload.worktree_path');
+  requireString(payload.branch, 'payload.branch');
+  const beta = validateBeta(payload.beta);
+  if (!new Set(['initial', 'growth']).has(payload.creation_kind)) {
+    throw operatorError('invalid_creation_kind', 'payload.creation_kind must be initial or growth');
+  }
+  const info = sessionInfo(project, sessionId, { requireDirectory: true });
+  const relative = typedPaths(info);
+  const requestDigest = requestSha256('virtual.append-seed', payload);
+  let result;
+  let replayed = false;
+  const outcome = mutateCoordinationFiles(project.stateRoot, Object.values(relative), (files) => {
+    const current = requireStrictTypedSession(files, relative, info);
+    const found = findOperationReceipt(files[relative.journal], payload.operation_id,
+      'virtual.append-seed', requestDigest);
+    if (found) {
+      result = replayResult(found);
+      replayed = true;
+      return null;
+    }
+    const before = authorityDigests(files, relative);
+    requireCas(payload, before, ['session', 'journal']);
+    const events = parseStrictJsonl(files[relative.journal]).map((entry) => entry.value);
+    const resultRows = parseResultsTsv(files[relative.results]);
+    const currentProjection = requireCurrentProjection(current, events, resultRows);
+    if (currentProjection.seeds.some((seed) => seed.id === payload.seed_id)) {
+      throw operatorError('seed_already_initialized', `seed ${payload.seed_id} is already initialized`);
+    }
+    if (payload.creation_kind === 'initial') {
+      if (current.status !== 'initializing' || payload.seed_id > current.virtual_parallel.n_initial) {
+        throw operatorError('initial_seed_identity_invalid',
+          'initial seed requires initializing lifecycle and an ID in 1..n_initial');
+      }
+    } else if (current.status !== 'active') {
+      throw businessError('growth_seed_lifecycle_invalid', 'growth seed requires active lifecycle');
+    }
+    authenticateSeedWorktree(project, info, payload, dependencies);
+    const activeCount = currentProjection.seeds.filter((seed) => seed.status === 'active').length;
+    let allocation;
+    if (payload.creation_kind === 'initial') {
+      const base = Math.floor(current.virtual_parallel.budget_total
+        / current.virtual_parallel.n_initial);
+      const remainder = current.virtual_parallel.budget_total
+        - base * current.virtual_parallel.n_initial;
+      allocation = base + (payload.seed_id > current.virtual_parallel.n_initial - remainder ? 1 : 0);
+    } else {
+      if (activeCount < 1) {
+        throw businessError('growth_seed_unavailable', 'growth requires at least one active seed');
+      }
+      allocation = Math.max(Math.ceil(currentProjection.budget_unallocated / (2 * activeCount)), 3);
+    }
+    if (currentProjection.budget_unallocated < allocation) {
+      throw businessError('insufficient_budget', 'unallocated budget cannot fund the seed');
+    }
+    const now = isoNow(dependencies);
+    const event = {
+      event: 'seed_initialized',
+      operation_id: payload.operation_id,
+      seed_id: payload.seed_id,
+      creation_kind: payload.creation_kind,
+      direction: beta.direction,
+      hypothesis: beta.hypothesis,
+      initial_rationale: beta.rationale,
+      worktree_path: payload.worktree_path,
+      branch: payload.branch,
+      ts: now,
+      created_by: payload.creation_kind === 'initial' ? 'init_batch' : 'epoch_growth',
+      allocated_budget: allocation,
+    };
+    const projection = reduceVirtualProjection({
+      initialVirtual: current.virtual_parallel,
+      events: [...events, event],
+      resultRows,
+    });
+    const next = structuredClone(current);
+    next.virtual_parallel = installProjection(next.virtual_parallel, projection);
+    validateStoredSession(next);
+    const sessionText = serializeStateDocument(next);
+    const seed = projection.seeds.find((entry) => entry.id === payload.seed_id);
+    const core = {
+      seed: structuredClone(seed),
+      active_seed_count: projection.n_current || 0,
+      budget_unallocated: projection.budget_unallocated,
+      session_sha256: sha256Digest(Buffer.from(sessionText)),
+    };
+    const appended = appendTypedEventAndReceipt(files[relative.journal], event, {
+      operation: 'virtual.append-seed', operationId: payload.operation_id, requestDigest,
+      prior: before,
+      postSessionSha256: core.session_sha256,
+      postResultsSha256: before.results_sha256,
+      postNonProjectionSha256: sessionNonProjectionSha256(next),
+      result: core,
+      ts: now,
+    });
+    result = { ...core, replayed: false };
+    return {
+      [relative.session]: sessionText,
+      [relative.journal]: appended.journalText,
+    };
+  }, transitionOptions(dependencies));
+  if (!replayed) result.journal_sha256 = sha256Digest(Buffer.from(outcome.files[relative.journal]));
+  return { result, warnings: [] };
+}
+
+function lastReceiptNonProjection(entries) {
+  const receipts = entries.map((entry) => entry.value)
+    .filter((event) => event.event === 'operation_receipt');
+  if (receipts.length === 0) return null;
+  const latest = receipts.at(-1);
+  if (!plainObject(latest.post)
+      || typeof latest.post.non_projection_sha256 !== 'string') {
+    throw transitionError('virtual_projection_conflict',
+      'latest operation receipt lacks non-projection authority');
+  }
+  requireAuthorityDigest(latest.post.non_projection_sha256,
+    'operation_receipt.post.non_projection_sha256');
+  return latest.post.non_projection_sha256;
+}
+
+function operationVirtualRebuildStrict(project, payload, dependencies = {}) {
+  requireExactPayload(payload, [
+    'session_id', 'operation_id', 'expected_session_sha256',
+    'expected_journal_sha256', 'expected_results_sha256',
+  ]);
+  const sessionId = ensureSessionId(payload.session_id);
+  requireOperationId(payload.operation_id, 'payload.operation_id');
+  const info = sessionInfo(project, sessionId, { requireDirectory: true });
+  const relative = typedPaths(info);
+  const requestDigest = requestSha256('virtual.rebuild-seeds', payload);
+  let result;
+  let replayed = false;
+  mutateCoordinationFiles(project.stateRoot, Object.values(relative), (files) => {
+    const current = requireStrictTypedSession(files, relative, info);
+    const found = findOperationReceipt(files[relative.journal], payload.operation_id,
+      'virtual.rebuild-seeds', requestDigest);
+    if (found) {
+      result = replayResult(found, { journalDigest: false });
+      replayed = true;
+      return null;
+    }
+    const before = authorityDigests(files, relative);
+    requireCas(payload, before, ['session', 'journal', 'results']);
+    const entries = parseStrictJsonl(files[relative.journal]);
+    const previousNonProjection = lastReceiptNonProjection(entries);
+    if (previousNonProjection !== null
+        && sessionNonProjectionSha256(current) !== previousNonProjection) {
+      throw transitionError('virtual_projection_conflict',
+        'session non-projection state differs from the latest committed receipt');
+    }
+    const resultRows = parseResultsTsv(files[relative.results]);
+    const projection = reduceVirtualProjection({
+      initialVirtual: current.virtual_parallel,
+      events: entries.map((entry) => entry.value),
+      resultRows,
+    });
+    assertRepairableProjection(current.virtual_parallel, projection);
+    const changed = !projectionEquals(projectionFromVirtual(current.virtual_parallel), projection);
+    const next = structuredClone(current);
+    if (changed) next.virtual_parallel = installProjection(next.virtual_parallel, projection);
+    validateStoredSession(next);
+    const sessionText = changed ? serializeStateDocument(next) : files[relative.session];
+    const core = {
+      session: structuredClone(next),
+      session_sha256: sha256Digest(Buffer.from(sessionText)),
+      projection_sha256: projectionSha256(projection),
+      changed,
+    };
+    const now = isoNow(dependencies);
+    const appended = appendOperationReceipt(files[relative.journal], {
+      operation: 'virtual.rebuild-seeds', operationId: payload.operation_id, requestDigest,
+      prior: before,
+      postSessionSha256: core.session_sha256,
+      postResultsSha256: before.results_sha256,
+      postNonProjectionSha256: sessionNonProjectionSha256(next),
+      result: core,
+      ts: now,
+    });
+    result = { ...core, replayed: false };
+    return {
+      ...(changed ? { [relative.session]: sessionText } : {}),
+      [relative.journal]: appended.journalText,
+    };
+  }, transitionOptions(dependencies));
+  return { result, warnings: [] };
+}
+
+function compatibleSessionForDispatch(project, payload) {
+  const sessionId = ensureSessionId(payload.session_id);
+  return readNamespaceSession(project, sessionId, { compatibility: true }).session;
+}
+
+function strictVersionForGenericAppend(info) {
+  let text;
+  try { text = fs.readFileSync(info.sessionPath, 'utf8'); }
+  catch (error) {
+    if (error && error.code === 'ENOENT') {
+      throw businessError('session_missing', `session file missing: ${info.sessionPath}`);
+    }
+    throw error;
+  }
+  const session = parseCompatibleSessionText(text, info.sessionPath, info.sessionId);
+  return isStrictSessionVersion(session.deep_evolve_version);
+}
+
+function operationVirtualInit(project, payload) {
+  const session = compatibleSessionForDispatch(project, payload);
+  if (isStrictSessionVersion(session.deep_evolve_version)) {
+    throw operatorError('legacy_virtual_init_forbidden',
+      'virtual.init is forbidden for v3.5 canonical sessions');
+  }
+  requireExactPayload(payload, ['session_id', 'analysis', 'n_chosen', 'total_budget']);
+  return operationVirtualInitLegacy(project, payload);
+}
+
+function operationVirtualAppend(project, payload, dependencies = {}) {
+  const session = compatibleSessionForDispatch(project, payload);
+  if (isStrictSessionVersion(session.deep_evolve_version)) {
+    return operationVirtualAppendStrict(project, payload, dependencies);
+  }
+  requireExactPayload(payload, ['session_id', 'seed_id', 'worktree_path', 'branch', 'beta']);
+  return operationVirtualAppendLegacy(project, payload, dependencies);
+}
+
+function operationVirtualSetField(project, payload) {
+  const session = compatibleSessionForDispatch(project, payload);
+  if (isStrictSessionVersion(session.deep_evolve_version)) {
+    throw operatorError('legacy_virtual_set_field_forbidden',
+      'virtual.set-field is forbidden for v3.5 canonical sessions');
+  }
+  requireExactPayload(payload, ['session_id', 'key', 'value']);
+  return operationVirtualSetFieldLegacy(project, payload);
+}
+
+function operationVirtualRebuild(project, payload, dependencies = {}) {
+  const session = compatibleSessionForDispatch(project, payload);
+  if (isStrictSessionVersion(session.deep_evolve_version)) {
+    return operationVirtualRebuildStrict(project, payload, dependencies);
+  }
+  requireExactPayload(payload, ['session_id']);
+  return operationVirtualRebuildLegacy(project, payload);
 }
 
 function task5WorktreeOptions(project, info, dependencies = {}) {
@@ -3153,10 +4121,13 @@ const HANDLERS = Object.freeze({
   },
   'session.read': (request, project) => {
     const payload = payloadFor(request, ['session_id']);
-    const { session } = payload.session_id === undefined
+    const { session, sessionText } = payload.session_id === undefined
       ? readCurrentNamespaceSessionCompatibility(project)
       : readNamespaceSession(project, ensureSessionId(payload.session_id), { compatibility: true });
-    return { result: { session }, warnings: [] };
+    return {
+      result: { session, session_sha256: sha256Digest(Buffer.from(sessionText)) },
+      warnings: [],
+    };
   },
   'session.list': (request, project) => {
     const payload = payloadFor(request, ['status']);
@@ -3169,6 +4140,11 @@ const HANDLERS = Object.freeze({
   'session.mark-status': (request, project, dependencies) => {
     const payload = payloadFor(request, ['session_id', 'status']);
     const sessionId = ensureSessionId(payload.session_id);
+    const session = compatibleSessionForDispatch(project, payload);
+    if (isStrictSessionVersion(session.deep_evolve_version)) {
+      throw operatorError('legacy_mark_status_forbidden',
+        'session.mark-status is forbidden for v3.5 canonical sessions');
+    }
     const status = requireString(payload.status, 'payload.status');
     updateSessionStatus(project, sessionId, status, 'status_change', dependencies);
     return { result: { session_id: sessionId, status }, warnings: [] };
@@ -3243,9 +4219,17 @@ const HANDLERS = Object.freeze({
       warnings: [],
     };
   },
-  'session.patch': (request, project) => {
-    const payload = payloadFor(request, ['session_id', 'path', 'value']);
+  'session.patch': (request, project, dependencies) => {
+    const payload = payloadFor(request, [
+      'session_id', 'operation_id', 'expected_session_sha256',
+      'expected_journal_sha256', 'path', 'value',
+    ]);
     const sessionId = ensureSessionId(payload.session_id);
+    const compatible = compatibleSessionForDispatch(project, payload);
+    if (isStrictSessionVersion(compatible.deep_evolve_version)) {
+      return operationPatchStrict(project, payload, dependencies);
+    }
+    requireExactPayload(payload, ['session_id', 'path', 'value']);
     const pointer = requireString(payload.path, 'payload.path');
     const info = sessionInfo(project, sessionId, { requireDirectory: true });
     const session = patchSession(info.sessionPath, (current) => {
@@ -3256,9 +4240,41 @@ const HANDLERS = Object.freeze({
     });
     return { result: { session }, warnings: [] };
   },
+  'session.record-baseline': (request, project, dependencies) => operationRecordBaseline(
+    project,
+    payloadFor(request, [
+      'session_id', 'operation_id', 'expected_session_sha256',
+      'expected_journal_sha256', 'raw_score', 'normalized_score', 'harness_identity',
+    ]),
+    dependencies,
+  ),
+  'session.finish-experiment': (request, project, dependencies) => operationFinishExperiment(
+    project,
+    payloadFor(request, [
+      'session_id', 'operation_id', 'expected_session_sha256',
+      'expected_journal_sha256', 'expected_forum_sha256', 'expected_results_sha256',
+      'seed_id', 'experiment',
+    ]),
+    dependencies,
+  ),
+  'session.record-evaluator-expansion': (request, project, dependencies) => (
+    operationRecordEvaluatorExpansion(project, payloadFor(request, [
+      'session_id', 'operation_id', 'expected_session_sha256',
+      'expected_journal_sha256', 'harness_identity', 'reason', 'trigger_generation',
+    ]), dependencies)
+  ),
   'session.complete': (request, project, dependencies) => {
-    const payload = payloadFor(request, ['session_id', 'outcome']);
+    const payload = payloadFor(request, [
+      'session_id', 'operation_id', 'expected_session_sha256',
+      'expected_journal_sha256', 'outcome', 'final_branch', 'final_commit', 'report',
+      'receipt', 'synthesis', 'final_strategy',
+    ]);
     const sessionId = ensureSessionId(payload.session_id);
+    const compatible = compatibleSessionForDispatch(project, payload);
+    if (isStrictSessionVersion(compatible.deep_evolve_version)) {
+      return operationCompleteStrict(project, payload, dependencies);
+    }
+    requireExactPayload(payload, ['session_id', 'outcome']);
     const outcome = payload.outcome === undefined ? null : requireString(payload.outcome, 'payload.outcome');
     updateSessionStatus(project, sessionId, 'completed', 'finished', dependencies, { outcome });
     return { result: { session_id: sessionId, status: 'completed', outcome }, warnings: [] };
@@ -3266,9 +4282,16 @@ const HANDLERS = Object.freeze({
   'virtual.init': (request, project) => operationVirtualInit(project,
     payloadFor(request, ['session_id', 'analysis', 'n_chosen', 'total_budget'])),
   'virtual.append-seed': (request, project, dependencies) => operationVirtualAppend(project,
-    payloadFor(request, ['session_id', 'seed_id', 'worktree_path', 'branch', 'beta']), dependencies),
-  'virtual.rebuild-seeds': (request, project) => operationVirtualRebuild(project,
-    payloadFor(request, ['session_id'])),
+    payloadFor(request, [
+      'session_id', 'operation_id', 'expected_session_sha256',
+      'expected_journal_sha256', 'seed_id', 'worktree_path', 'branch', 'beta',
+      'creation_kind',
+    ]), dependencies),
+  'virtual.rebuild-seeds': (request, project, dependencies) => operationVirtualRebuild(project,
+    payloadFor(request, [
+      'session_id', 'operation_id', 'expected_session_sha256',
+      'expected_journal_sha256', 'expected_results_sha256',
+    ]), dependencies),
   'virtual.set-field': (request, project) => operationVirtualSetField(project,
     payloadFor(request, ['session_id', 'key', 'value'])),
   'metrics.entropy': (request) => {
@@ -3298,7 +4321,10 @@ const HANDLERS = Object.freeze({
   'coord.append-journal': (request, project, dependencies) => {
     const payload = payloadFor(request, ['session_id', 'event', 'seed_id']);
     const sessionId = ensureSessionId(payload.session_id);
-    sessionInfo(project, sessionId, { requireDirectory: true });
+    const info = sessionInfo(project, sessionId, { requireDirectory: true });
+    if (strictVersionForGenericAppend(info)) {
+      assertGenericEventAllowed('journal', payload.event);
+    }
     const appended = appendJournalJsonl({
       stateRoot: project.stateRoot,
       relativePath: `${sessionId}/journal.jsonl`,
@@ -3312,7 +4338,10 @@ const HANDLERS = Object.freeze({
   'coord.append-forum': (request, project, dependencies) => {
     const payload = payloadFor(request, ['session_id', 'event', 'seed_id']);
     const sessionId = ensureSessionId(payload.session_id);
-    sessionInfo(project, sessionId, { requireDirectory: true });
+    const info = sessionInfo(project, sessionId, { requireDirectory: true });
+    if (strictVersionForGenericAppend(info)) {
+      assertGenericEventAllowed('forum', payload.event);
+    }
     const appended = appendJournalJsonl({
       stateRoot: project.stateRoot,
       relativePath: `${sessionId}/forum.jsonl`,

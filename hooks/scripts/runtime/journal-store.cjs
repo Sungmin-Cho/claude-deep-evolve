@@ -23,6 +23,15 @@ const KILL_CONDITIONS = new Set([
   'budget_exhausted_underperform',
   'user_requested',
 ]);
+const TYPED_JOURNAL_EVENTS = new Set([
+  'transfer_adopted', 'seed_initialized', 'baseline_recorded', 'kept', 'discarded', 'failed',
+  'seed_scheduled', 'seed_block_completed', 'seed_block_failed', 'seed_killed',
+  'outer_loop', 'evaluation_epoch_advanced', 'evaluator_expanded', 'session_completed',
+]);
+const TYPED_FORUM_EVENTS = new Set([
+  'experiment_kept', 'experiment_discarded', 'seed_block_completed',
+  'seed_block_failed', 'seed_killed', 'session_completed',
+]);
 
 function runtimeError(code, message, rc = 2, details) {
   const error = Object.assign(new Error(message), { code, rc });
@@ -42,6 +51,20 @@ function plainObject(value) {
 function requirePlainObject(value, label) {
   if (!plainObject(value)) fail('invalid_object', `${label} must be a plain object`);
   return value;
+}
+
+function assertGenericEventAllowed(kind, event) {
+  requirePlainObject(event, 'event');
+  if (typeof event.event !== 'string' || event.event.length === 0) {
+    fail('invalid_field_type', 'event.event must be a non-empty string');
+  }
+  const protectedSet = kind === 'journal' ? TYPED_JOURNAL_EVENTS
+    : kind === 'forum' ? TYPED_FORUM_EVENTS : null;
+  if (!protectedSet) fail('invalid_event_kind', `unknown generic event kind ${String(kind)}`);
+  if (protectedSet.has(event.event)) {
+    fail('typed_transition_required', `${event.event} is owned by a typed transition`);
+  }
+  return event;
 }
 
 function requireInteger(value, label, { min } = {}) {
@@ -635,6 +658,9 @@ function drainKillQueue({
 }
 
 module.exports = {
+  TYPED_FORUM_EVENTS,
+  TYPED_JOURNAL_EVENTS,
+  assertGenericEventAllowed,
   appendJsonl,
   readJsonl,
   tailJsonl,

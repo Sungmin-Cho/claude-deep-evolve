@@ -33,6 +33,9 @@ const TASK3_OPERATIONS = [
   'session.render-inherited-context',
   'session.lineage-tree',
   'session.patch',
+  'session.record-baseline',
+  'session.finish-experiment',
+  'session.record-evaluator-expansion',
   'session.complete',
   'virtual.init',
   'virtual.append-seed',
@@ -173,7 +176,7 @@ function captureMain(argv, dependencies = {}) {
   }
 }
 
-test('exports the immutable Task 6 registry and runtime version without later operations', () => {
+test('exports the immutable Prerequisite 2 registry and runtime version without later operations', () => {
   const task6HarnessOperations = [
     'harness.generate',
     'harness.migrate-legacy',
@@ -184,6 +187,27 @@ test('exports the immutable Task 6 registry and runtime version without later op
   assert.equal(Object.isFrozen(OPERATIONS), true);
   assert.throws(() => OPERATIONS.push('metrics.entropy'), TypeError);
   assert.equal(RUNTIME_VERSION, require('../package.json').version);
+});
+
+test('session.read returns the exact canonical session digest without mutating authority', () => {
+  const root = tempProject();
+  try {
+    const started = dispatch(request(root, 'session.start', {
+      goal: 'digest read',
+      initial_state: structuredClone(START_FIXTURE.initial_state),
+    }), { now: () => Date.parse('2026-07-13T16:00:00Z') });
+    assert.equal(started.ok, true, JSON.stringify(started));
+    const sessionPath = path.join(fs.realpathSync(started.result.session_root), 'session.yaml');
+    const before = fs.readFileSync(sessionPath);
+    const read = dispatch(request(root, 'session.read', { session_id: started.result.session_id }));
+    assert.equal(read.ok, true, JSON.stringify(read));
+    assert.deepEqual(Object.keys(read.result).sort(), ['session', 'session_sha256']);
+    assert.equal(read.result.session_sha256,
+      `sha256:${require('node:crypto').createHash('sha256').update(before).digest('hex')}`);
+    assert.deepEqual(fs.readFileSync(sessionPath), before);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('Task 4 active protocols route retired scheduling oracles through exact dispatcher operations', () => {

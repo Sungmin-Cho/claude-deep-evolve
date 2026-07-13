@@ -243,6 +243,27 @@ test('strict v3.5 sessions enforce complete metric, epoch, counter, seed, and bu
   active.metric = { ...active.metric, baseline: 1, current: 1, best: 1 };
   assert.strictEqual(validateSession(active), active);
 
+  const seedProjection = (id, allocatedBudget = 3) => ({
+    id,
+    status: 'active',
+    direction: null,
+    hypothesis: null,
+    initial_rationale: null,
+    worktree_path: `/literal/session/worktrees/seed_${id}`,
+    branch: `evolve/session/seed-${id}`,
+    created_at: '2026-07-13T12:35:00Z',
+    created_by: 'init_batch',
+    experiments_used: 0,
+    experiments_used_this_epoch: 0,
+    keeps: 0,
+    borrows_given: 0,
+    borrows_received: 0,
+    current_q: 0,
+    allocated_budget: allocatedBudget,
+    killed_at: null,
+    killed_reason: null,
+  });
+
   const cases = [
     ['partial metric authority', () => {
       const value = structuredClone(active);
@@ -272,8 +293,8 @@ test('strict v3.5 sessions enforce complete metric, epoch, counter, seed, and bu
     ['duplicate seed identity', () => {
       const value = structuredClone(initial);
       value.virtual_parallel.seeds = [
-        { id: 1, status: 'active', allocated_budget: 3 },
-        { id: 1, status: 'paused', allocated_budget: 3 },
+        seedProjection(1),
+        seedProjection(1),
       ];
       value.virtual_parallel.n_current = 1;
       delete value.virtual_parallel['x-active-seed-count'];
@@ -282,7 +303,7 @@ test('strict v3.5 sessions enforce complete metric, epoch, counter, seed, and bu
     }, /identities.*unique/],
     ['active count drift', () => {
       const value = structuredClone(initial);
-      value.virtual_parallel.seeds = [{ id: 1, status: 'active', allocated_budget: 3 }];
+      value.virtual_parallel.seeds = [seedProjection(1)];
       value.virtual_parallel.n_current = 2;
       delete value.virtual_parallel['x-active-seed-count'];
       value.virtual_parallel.budget_unallocated = 27;
@@ -290,7 +311,7 @@ test('strict v3.5 sessions enforce complete metric, epoch, counter, seed, and bu
     }, /n_current.*active seeds/],
     ['allocation equation drift', () => {
       const value = structuredClone(initial);
-      value.virtual_parallel.seeds = [{ id: 1, status: 'active', allocated_budget: 3 }];
+      value.virtual_parallel.seeds = [seedProjection(1)];
       value.virtual_parallel.n_current = 1;
       delete value.virtual_parallel['x-active-seed-count'];
       return value;
@@ -320,6 +341,83 @@ test('strict v3.5 sessions enforce complete metric, epoch, counter, seed, and bu
   for (const [label, makeValue, pattern] of cases) {
     assert.throws(() => validateSession(makeValue()), pattern, label);
   }
+});
+
+test('strict v3.5 seed projection and completion objects have exact typed shapes', () => {
+  const session = buildInitialSession({
+    sessionId: '2026-07-13_typed-shapes',
+    goal: 'typed shapes',
+    parent: null,
+    initialState: structuredClone(startFixture.initial_state),
+    createdAt: '2026-07-13T12:34:56Z',
+    runtimeVersion: '3.5.0',
+  });
+  const seed = {
+    id: 1,
+    status: 'active',
+    direction: null,
+    hypothesis: null,
+    initial_rationale: null,
+    worktree_path: '/literal/session/worktrees/seed_1',
+    branch: 'evolve/session/seed-1',
+    created_at: '2026-07-13T12:35:00Z',
+    created_by: 'init_batch',
+    experiments_used: 0,
+    experiments_used_this_epoch: 0,
+    keeps: 0,
+    borrows_given: 0,
+    borrows_received: 0,
+    current_q: 0,
+    allocated_budget: 30,
+    killed_at: null,
+    killed_reason: null,
+  };
+  session.virtual_parallel.seeds = [seed];
+  session.virtual_parallel.budget_unallocated = 0;
+  session.virtual_parallel.n_current = 1;
+  delete session.virtual_parallel['x-active-seed-count'];
+  assert.strictEqual(validateSession(session), session);
+
+  for (const key of Object.keys(seed)) {
+    const invalid = structuredClone(session);
+    delete invalid.virtual_parallel.seeds[0][key];
+    assert.throws(() => validateSession(invalid), /seed|projection|required|status|budget/i,
+      `missing seed key ${key}`);
+  }
+  for (const [key, value] of [
+    ['id', true], ['experiments_used', true], ['current_q', Number.NaN],
+    ['created_by', 'caller'], ['killed_at', 'not-a-time'],
+  ]) {
+    const invalid = structuredClone(session);
+    invalid.virtual_parallel.seeds[0][key] = value;
+    assert.throws(() => validateSession(invalid), /seed|integer|finite|created|killed/i, key);
+  }
+
+  const completed = structuredClone(session);
+  completed.status = 'completed';
+  completed.metric = { ...completed.metric, baseline: 1, current: 1, best: 1 };
+  completed.completion = {
+    outcome: 'merged',
+    final_branch: 'main',
+    final_commit: 'a'.repeat(40),
+    report: { relative_path: 'report.md', sha256: `sha256:${'b'.repeat(64)}` },
+    receipt: { relative_path: 'evolve-receipt.json', sha256: `sha256:${'c'.repeat(64)}` },
+    synthesis: { outcome: 'baseline_kept', commit: null },
+    final_strategy: { schema_version: '1.0', strategy_version: 2 },
+    completed_at: '2026-07-13T13:00:00Z',
+  };
+  assert.strictEqual(validateSession(completed), completed);
+  for (const key of Object.keys(completed.completion)) {
+    const invalid = structuredClone(completed);
+    delete invalid.completion[key];
+    assert.throws(() => validateSession(invalid), /completion|required/i, `missing completion ${key}`);
+  }
+  const nonterminal = structuredClone(completed);
+  nonterminal.status = 'active';
+  assert.throws(() => validateSession(nonterminal), /completion.*completed|completed.*completion/i);
+  const missing = structuredClone(completed);
+  delete missing.completion;
+  assert.throws(() => validateSession(missing), /completion.*required/i);
 });
 
 test('serialization is deterministic pretty JSON with one trailing newline', () => {

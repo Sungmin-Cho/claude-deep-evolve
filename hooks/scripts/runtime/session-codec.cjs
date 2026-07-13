@@ -448,6 +448,7 @@ const SESSION_KEYS = new Set([
   'program', 'outer_loop', 'evaluation_epoch', 'lineage', 'shortcut', 'diagnose_retry',
   'legibility', 'entropy', 'metric', 'eval_mode', 'protocol_tools', 'virtual_parallel',
   'total_budget', 'target_files', 'transfer', 'final_strategy', 'experiments',
+  'completion',
 ]);
 const VP_KEYS = new Set([
   'enabled', 'N', 'n_current', 'n_initial', 'n_range', 'project_type',
@@ -467,7 +468,9 @@ const PROGRAM_HISTORY_KEYS = new Set(['version', 'experiments', 'keep_rate', 're
 const OUTER_LOOP_KEYS = new Set(['generation', 'interval', 'inner_count', 'auto_trigger', 'q_history']);
 const Q_HISTORY_KEYS = new Set(['generation', 'Q', 'epoch', 'score', 'created_at']);
 const EVALUATION_EPOCH_KEYS = new Set(['current', 'history']);
-const EPOCH_HISTORY_KEYS = new Set(['epoch', 'prepare_version', 'generations', 'best_Q', 'created_at']);
+const EPOCH_HISTORY_KEYS = new Set([
+  'epoch', 'prepare_version', 'generations', 'best_Q', 'created_at', 'evaluator',
+]);
 const PARENT_SESSION_KEYS = new Set(['id', 'parent_receipt_schema_version', 'seed_source', 'inherited_at']);
 const SEED_SOURCE_KEYS = new Set(['strategy_version', 'program_version', 'notable_keep_commit_refs']);
 const LINEAGE_KEYS = new Set(['current_branch', 'forked_from', 'previous_branches']);
@@ -493,6 +496,23 @@ const STRICT_VP_KEYS = new Set([
   'eval_parallelizability', 'selection_reason', 'budget_total', 'budget_unallocated',
   'synthesis', 'seeds',
 ]);
+const STRICT_SEED_KEYS = new Set([
+  'id', 'status', 'direction', 'hypothesis', 'initial_rationale', 'worktree_path',
+  'branch', 'created_at', 'created_by', 'experiments_used',
+  'experiments_used_this_epoch', 'keeps', 'borrows_given', 'borrows_received',
+  'current_q', 'allocated_budget', 'killed_at', 'killed_reason',
+]);
+const COMPLETION_KEYS = new Set([
+  'outcome', 'final_branch', 'final_commit', 'report', 'receipt', 'synthesis',
+  'final_strategy', 'completed_at',
+]);
+const ARTIFACT_REF_KEYS = new Set(['relative_path', 'sha256']);
+const SYNTHESIS_RESULT_KEYS = new Set(['outcome', 'commit']);
+const EVALUATOR_KEYS = new Set([
+  'prepare_sha256', 'config_sha256', 'reason', 'trigger_generation', 'expanded_at',
+]);
+const DIGEST = /^sha256:[0-9a-f]{64}$/;
+const FULL_COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 function requireKeys(value, keys, label) {
   if (!plainObject(value)) throw validationError(`${label} must be an object`);
@@ -607,6 +627,25 @@ function validateStrictSession(value) {
     if (typeof entry.created_at !== 'string'
         || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(entry.created_at)) {
       throw validationError(`evaluation_epoch.history ${index}.created_at must be UTC ISO 8601`);
+    }
+    if (entry.evaluator !== undefined) {
+      rejectKnownObject(entry.evaluator, EVALUATOR_KEYS,
+        `evaluation_epoch.history ${index}.evaluator`);
+      requireKeys(entry.evaluator, EVALUATOR_KEYS,
+        `evaluation_epoch.history ${index}.evaluator`);
+      if (!DIGEST.test(entry.evaluator.prepare_sha256)
+          || !DIGEST.test(entry.evaluator.config_sha256)) {
+        throw validationError(`evaluation_epoch.history ${index}.evaluator digests are invalid`);
+      }
+      if (typeof entry.evaluator.reason !== 'string' || entry.evaluator.reason.length === 0) {
+        throw validationError(`evaluation_epoch.history ${index}.evaluator.reason must be non-empty`);
+      }
+      requireSafeInteger(entry.evaluator.trigger_generation,
+        `evaluation_epoch.history ${index}.evaluator.trigger_generation`);
+      if (typeof entry.evaluator.expanded_at !== 'string'
+          || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(entry.evaluator.expanded_at)) {
+        throw validationError(`evaluation_epoch.history ${index}.evaluator.expanded_at must be UTC ISO 8601`);
+      }
     }
   }
   if (!epochs.has(value.evaluation_epoch.current)
@@ -739,11 +778,60 @@ function validateStrictSession(value) {
   let activeCount = 0;
   let allocated = 0;
   for (const [index, seed] of virtual.seeds.entries()) {
-    const id = seed.id === undefined ? seed.seed_id : seed.id;
+    if (!plainObject(seed)) throw validationError(`seed ${index} must be an object`);
+    requireKeys(seed, STRICT_SEED_KEYS, `seed ${index}`);
+    for (const key of Object.keys(seed)) {
+      if (!STRICT_SEED_KEYS.has(key)) throw validationError(`unknown seed ${index} key ${key}`);
+    }
+    const id = seed.id;
+    requireSafeInteger(id, `seed ${index}.id`, { min: 1 });
     if (ids.has(id)) throw validationError('virtual_parallel seed identities must be unique');
     ids.add(id);
-    if (seed.status === 'active') activeCount += 1;
+    if (seed.status === 'active') {
+      activeCount += 1;
+      if (seed.killed_at !== null || seed.killed_reason !== null) {
+        throw validationError(`seed ${index} active status requires null kill metadata`);
+      }
+    } else if (/^killed:[a-z_]+$/.test(seed.status)) {
+      if (typeof seed.killed_at !== 'string'
+          || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(seed.killed_at)
+          || typeof seed.killed_reason !== 'string' || seed.killed_reason.length === 0) {
+        throw validationError(`seed ${index} killed status requires typed kill metadata`);
+      }
+    } else {
+      throw validationError(`seed ${index}.status is invalid`);
+    }
+    for (const key of ['direction', 'hypothesis', 'initial_rationale']) {
+      if (seed[key] !== null && typeof seed[key] !== 'string') {
+        throw validationError(`seed ${index}.${key} must be null or a string`);
+      }
+    }
+    if (typeof seed.worktree_path !== 'string' || seed.worktree_path.length === 0
+        || typeof seed.branch !== 'string' || seed.branch.length === 0) {
+      throw validationError(`seed ${index} worktree_path and branch must be non-empty strings`);
+    }
+    if (typeof seed.created_at !== 'string'
+        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(seed.created_at)) {
+      throw validationError(`seed ${index}.created_at must be UTC ISO 8601`);
+    }
+    if (!new Set(['init_batch', 'epoch_growth']).has(seed.created_by)) {
+      throw validationError(`seed ${index}.created_by is invalid`);
+    }
+    for (const key of [
+      'experiments_used', 'experiments_used_this_epoch', 'keeps', 'borrows_given',
+      'borrows_received',
+    ]) requireSafeInteger(seed[key], `seed ${index}.${key}`);
+    if (seed.experiments_used_this_epoch > seed.experiments_used
+        || seed.keeps > seed.experiments_used) {
+      throw validationError(`seed ${index} experiment counters are inconsistent`);
+    }
+    if (!Number.isFinite(seed.current_q)) {
+      throw validationError(`seed ${index}.current_q must be finite`);
+    }
     requireSafeInteger(seed.allocated_budget, `seed ${index}.allocated_budget`);
+    if (seed.experiments_used > seed.allocated_budget) {
+      throw validationError(`seed ${index} experiments_used exceeds allocated_budget`);
+    }
     allocated += seed.allocated_budget;
   }
   if (allocated + virtual.budget_unallocated !== virtual.budget_total) {
@@ -756,6 +844,48 @@ function validateStrictSession(value) {
   } else if (virtual.n_current !== activeCount
       || Object.hasOwn(virtual, 'x-active-seed-count')) {
     throw validationError('n_current must equal the number of active seeds');
+  }
+
+  if (value.completion !== undefined) {
+    rejectKnownObject(value.completion, COMPLETION_KEYS, 'completion');
+    requireKeys(value.completion, COMPLETION_KEYS, 'completion');
+    if (value.status !== 'completed') {
+      throw validationError('completion is allowed only when status is completed');
+    }
+    if (!new Set(['merged', 'pr_created', 'kept', 'discarded']).has(value.completion.outcome)) {
+      throw validationError('completion.outcome is invalid');
+    }
+    if (typeof value.completion.final_branch !== 'string'
+        || value.completion.final_branch.length === 0
+        || !FULL_COMMIT.test(value.completion.final_commit)) {
+      throw validationError('completion final branch/commit identity is invalid');
+    }
+    for (const key of ['report', 'receipt']) {
+      rejectKnownObject(value.completion[key], ARTIFACT_REF_KEYS, `completion.${key}`);
+      requireKeys(value.completion[key], ARTIFACT_REF_KEYS, `completion.${key}`);
+      if (typeof value.completion[key].relative_path !== 'string'
+          || value.completion[key].relative_path.length === 0
+          || !DIGEST.test(value.completion[key].sha256)) {
+        throw validationError(`completion.${key} reference is invalid`);
+      }
+    }
+    rejectKnownObject(value.completion.synthesis, SYNTHESIS_RESULT_KEYS, 'completion.synthesis');
+    requireKeys(value.completion.synthesis, SYNTHESIS_RESULT_KEYS, 'completion.synthesis');
+    if (typeof value.completion.synthesis.outcome !== 'string'
+        || value.completion.synthesis.outcome.length === 0
+        || (value.completion.synthesis.commit !== null
+          && !FULL_COMMIT.test(value.completion.synthesis.commit))) {
+      throw validationError('completion.synthesis is invalid');
+    }
+    if (!plainObject(value.completion.final_strategy)) {
+      throw validationError('completion.final_strategy must be a plain object');
+    }
+    if (typeof value.completion.completed_at !== 'string'
+        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value.completion.completed_at)) {
+      throw validationError('completion.completed_at must be UTC ISO 8601');
+    }
+  } else if (value.status === 'completed') {
+    throw validationError('completion is required when status is completed');
   }
 }
 

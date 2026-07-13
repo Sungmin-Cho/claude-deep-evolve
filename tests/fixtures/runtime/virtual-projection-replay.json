@@ -1,0 +1,104 @@
+{
+  "initial_virtual": {
+    "enabled": true,
+    "n_initial": 3,
+    "n_range": {
+      "min": 1,
+      "max": 9
+    },
+    "project_type": "standard_optimization",
+    "eval_parallelizability": "serialized",
+    "selection_reason": "three deterministic seeds",
+    "budget_total": 16,
+    "budget_unallocated": 16,
+    "synthesis": {
+      "budget_allocated": 6,
+      "regression_tolerance": 0.05
+    },
+    "seeds": [],
+    "x-active-seed-count": 0
+  },
+  "initial_allocations": [
+    5,
+    5,
+    6
+  ],
+  "growth": {
+    "pool_before": 12,
+    "active_count": 3,
+    "allocation": 3
+  },
+  "seed_events": [
+    {
+      "event": "seed_initialized",
+      "operation_id": "01J00000000000000000000031",
+      "seed_id": 1,
+      "creation_kind": "initial",
+      "direction": "guard",
+      "hypothesis": "strict parsing wins",
+      "initial_rationale": "first",
+      "worktree_path": "/tmp/session/worktrees/seed_1",
+      "branch": "evolve/session/seed-1",
+      "ts": "2026-07-13T13:00:00Z",
+      "created_by": "init_batch",
+      "allocated_budget": 5
+    },
+    {
+      "event": "seed_initialized",
+      "operation_id": "01J00000000000000000000032",
+      "seed_id": 2,
+      "creation_kind": "initial",
+      "direction": "replay",
+      "hypothesis": "one reducer prevents drift",
+      "initial_rationale": "second",
+      "worktree_path": "/tmp/session/worktrees/seed_2",
+      "branch": "evolve/session/seed-2",
+      "ts": "2026-07-13T13:00:01Z",
+      "created_by": "init_batch",
+      "allocated_budget": 5
+    },
+    {
+      "event": "seed_initialized",
+      "operation_id": "01J00000000000000000000033",
+      "seed_id": 3,
+      "creation_kind": "initial",
+      "direction": "recovery",
+      "hypothesis": "atomic publication wins",
+      "initial_rationale": "third",
+      "worktree_path": "/tmp/session/worktrees/seed_3",
+      "branch": "evolve/session/seed-3",
+      "ts": "2026-07-13T13:00:02Z",
+      "created_by": "init_batch",
+      "allocated_budget": 6
+    }
+  ],
+  "terminal_event": {
+    "event": "kept",
+    "operation_id": "01J00000000000000000000034",
+    "id": 1,
+    "seed_id": 1,
+    "category": "add_guard",
+    "description": "strict parsing",
+    "rationale": "prevents drift",
+    "pre_commit": "0000000000000000000000000000000000000000",
+    "commit": "1111111111111111111111111111111111111111",
+    "status": "kept",
+    "raw_score": 5,
+    "normalized_score": 5,
+    "score_delta": 1,
+    "loc_delta": 4,
+    "flagged": false,
+    "ts": "2026-07-13T13:01:00Z"
+  },
+  "terminal_result_row": {
+    "commit": "1111111111111111111111111111111111111111",
+    "score": 5,
+    "status": "kept",
+    "category": "add_guard",
+    "score_delta": 1,
+    "loc_delta": 4,
+    "flagged": false,
+    "rationale": "prevents drift",
+    "description": "strict parsing"
+  }
+}

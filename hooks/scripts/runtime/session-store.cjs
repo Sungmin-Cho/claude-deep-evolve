@@ -41,6 +41,10 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+function sha256Digest(value) {
+  return `sha256:${sha256(value)}`;
+}
+
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === 'object') {
@@ -992,4 +996,5 @@ module.exports = {
   readCoordinationFiles,
   recoverTransactions,
   validateStoredSession,
+  sha256Digest,
 };

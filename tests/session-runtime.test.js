@@ -3480,3 +3480,25 @@ test('only session.read tolerates otherwise-valid n_current zero and killed_reas
     }
   }
 });
+
+test('canonical v3.5 lifecycle rejects the legacy mark-status writer without changing bytes', () => {
+  const { outer, root } = makeProject('strict lifecycle owner');
+  try {
+    const started = dispatch(request(root, 'session.start', {
+      goal: 'strict lifecycle owner',
+      initial_state: startInitialState('01J00000000000000000000300'),
+    }), { now: () => Date.parse('2026-07-13T17:00:00Z') });
+    assert.equal(started.ok, true, JSON.stringify(started));
+    const stateRoot = path.join(root, '.deep-evolve');
+    const before = snapshotTree(stateRoot);
+    const marked = dispatch(request(root, 'session.mark-status', {
+      session_id: started.result.session_id,
+      status: 'active',
+    }));
+    assert.equal(marked.exitCode, 2, JSON.stringify(marked));
+    assert.equal(marked.error.code, 'legacy_mark_status_forbidden');
+    assert.deepEqual(snapshotTree(stateRoot), before);
+  } finally {
+    fs.rmSync(outer, { recursive: true, force: true });
+  }
+});

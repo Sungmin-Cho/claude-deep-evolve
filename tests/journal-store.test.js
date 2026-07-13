@@ -22,6 +22,7 @@ const {
   validateCommitMarker,
 } = require('../hooks/scripts/runtime/session-store.cjs');
 const { OPERATIONS, dispatch } = require('../hooks/scripts/deep-evolve-runtime.cjs');
+const { buildInitialSession } = require('../hooks/scripts/runtime/session-transitions.cjs');
 
 const RUNTIME = path.join(__dirname, '..', 'hooks', 'scripts', 'deep-evolve-runtime.cjs');
 const JOURNAL_STORE = path.join(__dirname, '..', 'hooks', 'scripts', 'runtime', 'journal-store.cjs');
@@ -587,4 +588,50 @@ test('kill-request shell is a thin dispatcher adapter and package excludes six P
 test('supported Node journal store never imports or spawns Python', () => {
   const source = fs.readFileSync(JOURNAL_STORE, 'utf8');
   assert.doesNotMatch(source, /python|spawnSync|execFileSync|child_process/i);
+});
+
+test('v3.5 generic journal/forum append rejects every typed owner event byte-for-byte', (t) => {
+  const { projectRoot, stateRoot, sessionRoot, sessionId } = makeProject(t, 'evolve-protected-events-');
+  const initialState = JSON.parse(fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'runtime', 'session-start-v3.5.json'), 'utf8',
+  )).initial_state;
+  const session = buildInitialSession({
+    sessionId,
+    goal: 'protected event ownership',
+    parent: null,
+    initialState,
+    createdAt: '2026-07-13T00:00:00Z',
+    runtimeVersion: '3.5.0',
+  });
+  fs.writeFileSync(path.join(sessionRoot, 'session.yaml'), `${JSON.stringify(session, null, 2)}\n`);
+  fs.writeFileSync(path.join(sessionRoot, 'journal.jsonl'), '');
+  fs.writeFileSync(path.join(sessionRoot, 'forum.jsonl'), '');
+  fs.writeFileSync(path.join(sessionRoot, 'results.tsv'),
+    'commit\tscore\tstatus\tcategory\tscore_delta\tloc_delta\tflagged\trationale\tdescription\n');
+  const protectedJournal = [
+    'transfer_adopted', 'seed_initialized', 'baseline_recorded', 'kept', 'discarded', 'failed',
+    'seed_scheduled', 'seed_block_completed', 'seed_block_failed', 'seed_killed',
+    'outer_loop', 'evaluation_epoch_advanced', 'evaluator_expanded', 'session_completed',
+  ];
+  for (const event of protectedJournal) {
+    const before = treeSnapshot(stateRoot);
+    const rejected = request(projectRoot, 'coord.append-journal', {
+      session_id: sessionId, seed_id: 1, event: { event },
+    });
+    assert.equal(rejected.exitCode, 2, `${event}: ${JSON.stringify(rejected)}`);
+    assert.equal(rejected.error.code, 'typed_transition_required', event);
+    assert.deepEqual(treeSnapshot(stateRoot), before, event);
+  }
+  for (const event of [
+    'experiment_kept', 'experiment_discarded', 'seed_block_completed',
+    'seed_block_failed', 'seed_killed', 'session_completed',
+  ]) {
+    const before = treeSnapshot(stateRoot);
+    const rejected = request(projectRoot, 'coord.append-forum', {
+      session_id: sessionId, seed_id: 1, event: { event },
+    });
+    assert.equal(rejected.exitCode, 2, `${event}: ${JSON.stringify(rejected)}`);
+    assert.equal(rejected.error.code, 'typed_transition_required', event);
+    assert.deepEqual(treeSnapshot(stateRoot), before, event);
+  }
 });

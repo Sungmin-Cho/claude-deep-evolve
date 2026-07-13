@@ -1,0 +1,81 @@
+{
+  "operation_ids": {
+    "patch": "01J00000000000000000000010",
+    "baseline": "01J00000000000000000000011",
+    "experiment": "01J00000000000000000000012",
+    "evaluator": "01J00000000000000000000013",
+    "completion": "01J00000000000000000000014"
+  },
+  "transfer": {
+    "source_id": "01J00000000000000000000020",
+    "source_schema_version": "4",
+    "source_artifacts": [
+      "evolve-receipt.json",
+      "recurring-findings.json"
+    ]
+  },
+  "rejected_patch_paths": [
+    "/goal",
+    "/status",
+    "/eval_mode",
+    "/metric/current",
+    "/metric/best",
+    "/outer_loop/generation",
+    "/evaluation_epoch/current",
+    "/lineage/current_branch",
+    "/virtual_parallel/N",
+    "/virtual_parallel/n_current",
+    "/virtual_parallel/budget_unallocated",
+    "/virtual_parallel/unallocated_pool",
+    "/virtual_parallel/enabled",
+    "/final_strategy",
+    "/virtual_parallel/seeds/0/status",
+    "/*",
+    "/__proto__"
+  ],
+  "taxonomy": [
+    "parameter_tune",
+    "refactor_simplify",
+    "add_guard",
+    "algorithm_swap",
+    "data_preprocessing",
+    "caching_memoization",
+    "error_handling",
+    "api_redesign",
+    "test_expansion",
+    "other"
+  ],
+  "experiment": {
+    "id": 1,
+    "category": "add_guard",
+    "description": "reject malformed authority",
+    "rationale": "the guard closes a deterministic corruption seam",
+    "pre_commit": "0000000000000000000000000000000000000000",
+    "commit": "1111111111111111111111111111111111111111",
+    "status": "kept",
+    "raw_score": 5,
+    "normalized_score": 5,
+    "score_delta": 1,
+    "loc_delta": 4,
+    "flagged": false
+  },
+  "completion": {
+    "outcome": "merged",
+    "report": {
+      "relative_path": "report.md",
+      "sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "receipt": {
+      "relative_path": "evolve-receipt.json",
+      "sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "synthesis": {
+      "outcome": "baseline_kept",
+      "commit": null
+    },
+    "final_strategy": {
+      "schema_version": "1.0",
+      "strategy_version": 2
+    }
+  }
+}
