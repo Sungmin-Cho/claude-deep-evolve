@@ -169,8 +169,14 @@ function captureMain(argv, dependencies = {}) {
   }
 }
 
-test('exports the immutable Task 5 registry and runtime version', () => {
-  assert.deepEqual([...OPERATIONS].sort(), [...TASK3_OPERATIONS].sort());
+test('exports the immutable Task 6 registry and runtime version without later operations', () => {
+  const task6HarnessOperations = [
+    'harness.generate',
+    'harness.migrate-legacy',
+    'harness.run',
+    'harness.write-baseline',
+  ];
+  assert.deepEqual([...OPERATIONS].sort(), [...TASK3_OPERATIONS, ...task6HarnessOperations].sort());
   assert.equal(Object.isFrozen(OPERATIONS), true);
   assert.throws(() => OPERATIONS.push('metrics.entropy'), TypeError);
   assert.equal(RUNTIME_VERSION, require('../package.json').version);

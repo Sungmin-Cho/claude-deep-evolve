@@ -73,6 +73,12 @@ const {
   pruneTransfer,
   exportFeedback,
 } = require('./runtime/synthesis.cjs');
+const {
+  generateHarness,
+  migrateLegacyHarness,
+  runHarness,
+  writeBaseline,
+} = require('./runtime/harness-runtime.cjs');
 const { wrapEvolveArtifact } = require('./wrap-evolve-envelope.js');
 const { buildHandoffArtifact } = require('./emit-handoff.js');
 const { buildCompactionArtifact } = require('./emit-compaction-state.js');
@@ -144,6 +150,10 @@ const OPERATIONS = Object.freeze([
   'artifact.wrap-insights',
   'artifact.emit-compaction',
   'artifact.emit-handoff',
+  'harness.generate',
+  'harness.migrate-legacy',
+  'harness.run',
+  'harness.write-baseline',
 ]);
 
 const TASK4_OWNS_RECOVERY = new Set(OPERATIONS.filter((operation) =>
@@ -203,6 +213,8 @@ const SESSION_FILES = [
   'session.yaml',
   'strategy.yaml',
   'program.md',
+  'prepare.cjs',
+  'prepare.config.json',
   'prepare.py',
   'prepare-protocol.md',
   'results.tsv',
@@ -3248,6 +3260,29 @@ const HANDLERS = Object.freeze({
         sessionId: payload.session_id, sourceArtifacts: payload.source_artifacts || [],
       }), warnings: [],
     };
+  },
+  'harness.generate': (request, project) => {
+    const payload = payloadFor(request, ['session_id', 'spec']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    return { result: generateHarness(payload.spec, info.sessionRoot), warnings: [] };
+  },
+  'harness.migrate-legacy': (request, project) => {
+    const payload = payloadFor(request, ['session_id']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    return { result: migrateLegacyHarness(info.sessionRoot), warnings: [] };
+  },
+  'harness.run': (request, project) => {
+    const payload = payloadFor(request, ['session_id', 'options']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    return {
+      result: runHarness(info.sessionRoot, payload.options === undefined ? {} : payload.options),
+      warnings: [],
+    };
+  },
+  'harness.write-baseline': (request, project) => {
+    const payload = payloadFor(request, ['session_id', 'raw_score']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    return { result: writeBaseline(info.sessionRoot, payload.raw_score), warnings: [] };
   },
 });
 

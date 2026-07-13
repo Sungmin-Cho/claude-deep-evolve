@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 
-TEMPLATE = Path(__file__).parents[3] / "templates/prepare-stdout-parse.py"
+TEMPLATE = Path(__file__).parents[3] / "legacy/templates/prepare-stdout-parse.py"
 
 
 def _materialize(tmp_path, raw_command, direction="minimize", baseline="1.0",

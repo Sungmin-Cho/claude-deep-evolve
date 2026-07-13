@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "provenance": "approved Task 6 characterization; read-only to supported Node tests",
+  "cases": [
+    {
+      "name": "custom-maximize-complete",
+      "direction": "maximize",
+      "baseline_score": null,
+      "metrics": {
+        "accuracy": { "pattern": "^accuracy:\\s+([\\d.]+)", "weight": 0.75 },
+        "quality": { "pattern": "^quality:\\s+([\\d.]+)", "weight": 0.25 }
+      },
+      "stdout": "accuracy: 0.8\nquality: 0.4\n",
+      "expected": "\n---\nscore:              0.700000\naccuracy:            0.800000\nquality:             0.400000\ntotal_scenarios:    2\npassed_scenarios:   2\nfailed_scenarios:   0\n---\n"
+    },
+    {
+      "name": "custom-maximize-partial",
+      "direction": "maximize",
+      "baseline_score": null,
+      "metrics": {
+        "accuracy": { "pattern": "^accuracy:\\s+([\\d.]+)", "weight": 0.75 },
+        "quality": { "pattern": "^quality:\\s+([\\d.]+)", "weight": 0.25 }
+      },
+      "stdout": "accuracy: 0.8\n",
+      "expected": "\n---\nscore:              0.600000\naccuracy:            0.800000\ntotal_scenarios:    2\npassed_scenarios:   1\nfailed_scenarios:   1\n---\n"
+    },
+    {
+      "name": "custom-minimize-baseline-inversion",
+      "direction": "minimize",
+      "baseline_score": 10,
+      "metrics": {
+        "latency": { "pattern": "^latency_ms:\\s+([\\d.]+)", "weight": 1 }
+      },
+      "stdout": "latency_ms: 8\n",
+      "expected": "\n---\nscore:              1.250000\nlatency:             8.000000\ntotal_scenarios:    1\npassed_scenarios:   1\nfailed_scenarios:   0\n---\n"
+    },
+    {
+      "name": "missing-metric",
+      "direction": "minimize",
+      "baseline_score": 10,
+      "metrics": {
+        "latency": { "pattern": "^latency_ms:\\s+([\\d.]+)", "weight": 1 }
+      },
+      "stdout": "no metrics here\n",
+      "expected": "\n---\nscore:              0.000000\ntotal_scenarios:    1\npassed_scenarios:   0\nfailed_scenarios:   1\n---\n"
+    }
+  ]
+}

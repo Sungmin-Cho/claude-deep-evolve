@@ -19,9 +19,9 @@ const {
 const CLAUDE_TOOLS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'Bash']);
 const RECOGNIZED_INACTIVE = new Set(['initializing', 'paused', 'completed', 'aborted']);
 const LOCK_OPTIONS = Object.freeze({ timeoutMs: 250, recoveryTimeoutMs: 250 });
-const PROTECTED_BASENAME = /(?:^|[\\/\s"'])(?:prepare\.(?:cjs|py)|prepare-protocol\.md|program\.md|strategy\.yaml)(?=$|[\\/\s"':])/i;
+const PROTECTED_BASENAME = /(?:^|[\\/\s"'])(?:prepare\.(?:cjs|py)|prepare\.config\.json|prepare-protocol\.md|program\.md|strategy\.yaml)(?=$|[\\/\s"':])/i;
 const PROTECTED_NAME_KINDS = Object.freeze([
-  ['prepare', ['prepare.cjs', 'prepare.py', 'prepare-protocol.md']],
+  ['prepare', ['prepare.cjs', 'prepare.config.json', 'prepare.py', 'prepare-protocol.md']],
   ['program', ['program.md']],
   ['strategy', ['strategy.yaml']],
 ]);
@@ -44,8 +44,8 @@ const MAX_NESTED_SHELL_PAYLOADS = 2;
 const MAX_TRANSPARENT_WRAPPERS = 8;
 
 const REASONS = Object.freeze({
-  protected: 'Deep Evolve Guard: active sessions protect prepare.cjs, legacy prepare.py, prepare-protocol.md, program.md, and strategy.yaml. Use the matching meta mode for an authorized policy update.',
-  sealed: 'Deep Evolve Guard (seal_prepare_read): active-session reads of prepare.cjs, legacy prepare.py, and prepare-protocol.md are sealed.',
+  protected: 'Deep Evolve Guard: active sessions protect prepare.cjs, prepare.config.json, legacy prepare.py, prepare-protocol.md, program.md, and strategy.yaml. Use the matching meta mode for an authorized policy update.',
+  sealed: 'Deep Evolve Guard (seal_prepare_read): active-session reads of prepare.cjs, prepare.config.json, legacy prepare.py, and prepare-protocol.md are sealed.',
   legacy: 'Deep Evolve Guard (legacy_prepare_regeneration_required): prepare.py is a migration input only. Regenerate prepare.cjs instead of executing Python.',
   malformed: 'Deep Evolve Guard (malformed_input): the hook received an invalid or unsupported host event and denied it safely.',
   ambiguous: 'Deep Evolve Guard (ambiguous_protected_reference): the request mentions a protected file but does not contain a supported structured path.',
@@ -890,7 +890,7 @@ function protectedKind(candidate, context) {
   if (!requested) return null;
   const platform = process.platform;
   const same = (relative) => sameHookPath(requested, path.join(context.sessionRoot, relative), platform);
-  if (same('prepare.cjs') || same('prepare.py') || same('prepare-protocol.md')) return 'prepare';
+  if (same('prepare.cjs') || same('prepare.config.json') || same('prepare.py') || same('prepare-protocol.md')) return 'prepare';
   if (same('program.md')) return 'program';
   if (same('strategy.yaml')) return 'strategy';
 
@@ -963,7 +963,7 @@ function directCommandKind(command, context, platform = inferCommandPlatform(com
   if (containsCommandBasename(command, 'prepare.py', parsed) && pythonLauncherMentioned(parsed)) {
     return 'legacy_python_prepare';
   }
-  if (['prepare.cjs', 'prepare.py', 'prepare-protocol.md'].some((name) => containsCommandBasename(command, name, parsed))) {
+  if (['prepare.cjs', 'prepare.config.json', 'prepare.py', 'prepare-protocol.md'].some((name) => containsCommandBasename(command, name, parsed))) {
     return 'ambiguous_prepare';
   }
   return null;

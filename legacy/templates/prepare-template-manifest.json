@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "engine_normalization": "utf8-crlf-to-lf-from-evaluation-engine-marker",
+  "templates": {
+    "prepare-stdout-parse.py": {
+      "kind": "stdout-parser",
+      "sha256": "0748121f8b53591f6981c2a7b85db7d20e2682b4953ab6ddda59711c4a5a725d",
+      "engine_sha256": "4da96e3d3ba62aee3c70c024516e3b38ff315d57942f5b0ec0930aaa82c362a5"
+    },
+    "prepare-test-runner.py": {
+      "kind": "test-runner",
+      "sha256": "0f98286aaebd15033ebc8a1addcf230ff934be610ea367199dfbbea49491800a",
+      "engine_sha256": "136356b086e085355d5c0fb867330836be9a88750c37eb7c23d8cc98369d51ee"
+    },
+    "prepare-scenario.py": {
+      "kind": "scenario",
+      "sha256": "2b88943326b8b868d338fa30ecf829f4aa612ba7fe3f7c9c2a11f2b61cb70d6c",
+      "engine_sha256": "0e5fb544c06e92c19b28fb073bf3cf12e9e6509f9ef8015fcbc45ceba77fa2c0"
+    }
+  }
+}

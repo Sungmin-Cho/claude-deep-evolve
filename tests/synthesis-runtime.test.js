@@ -222,7 +222,7 @@ test('synthesis collection and finalization are deterministic across N=1, succes
   assert.equal(finalizeSynthesis({ n: 2, baseline_q: 0.8, synthesis_q: 'synthesis_failed', regression_tolerance: 0.05 }).outcome, 'fallback');
 });
 
-test('Task 5 operations are registered while Task 6 harness operations stay absent', () => {
+test('Task 5 and exact Task 6 harness operations are registered while later operations stay absent', () => {
   const expected = [
     'coord.build-seed-prompt', 'coord.write-seed-program', 'coord.status',
     'worktree.create-seed', 'worktree.validate-seed', 'worktree.remove-seed',
@@ -234,9 +234,8 @@ test('Task 5 operations are registered while Task 6 harness operations stay abse
     'artifact.wrap-receipt', 'artifact.wrap-insights', 'artifact.emit-compaction', 'artifact.emit-handoff',
   ];
   for (const operation of expected) assert.equal(OPERATIONS.includes(operation), true, operation);
-  for (const operation of ['harness.generate', 'harness.migrate-legacy', 'harness.run', 'harness.write-baseline']) {
-    assert.equal(OPERATIONS.includes(operation), false, operation);
-  }
+  const harnessOperations = ['harness.generate', 'harness.migrate-legacy', 'harness.run', 'harness.write-baseline'];
+  assert.deepEqual(OPERATIONS.filter((operation) => operation.startsWith('harness.')), harnessOperations);
 
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'task5 dispatch '));
   const response = dispatch({
