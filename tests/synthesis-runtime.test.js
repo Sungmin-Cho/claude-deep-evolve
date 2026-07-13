@@ -10,6 +10,7 @@ const {
   processBeta,
   processBetaGrowth,
   selectBaseline,
+  buildSeedDispatchContext,
   buildSeedPrompt,
   writeSeedProgram,
   renderForumSummary,
@@ -40,30 +41,49 @@ test('baseline cascade preserves preferred, non-quarantine, best-effort, and no-
   assert.throws(() => selectBaseline({ seeds: [{ id: true }] }), (error) => error.rc === 2);
 });
 
-test('seed prompt is byte-stable, pins absolute paths, and accepts POSIX and Windows absolute paths', () => {
+test('seed dispatch builder returns the same typed object through both supported exports', () => {
+  assert.equal(typeof buildSeedDispatchContext, 'function');
+  const sessionId = '01J00000000000000000000000';
   const input = {
+    project_root: '/tmp/project with spaces',
+    session_root: `/tmp/project with spaces/.deep-evolve/${sessionId}`,
+    session: {
+      session_id: sessionId,
+      status: 'active',
+      eval_mode: 'cli',
+      evaluation_epoch: { current: 1 },
+      virtual_parallel: { seeds: [{
+        id: 2,
+        status: 'active',
+        worktree_path: `/tmp/project with spaces/.deep-evolve/${sessionId}/worktrees/seed_2`,
+        branch: `evolve/${sessionId}/seed-2`,
+      }] },
+    },
+    events: [{
+      event: 'seed_scheduled',
+      block_id: 'block-2',
+      decision_id: 'decision-2',
+      seed_id: 2,
+      epoch: 1,
+      block_size: 4,
+    }],
     seed_id: 2,
-    worktree_path: '/tmp/project with spaces/seed_2',
-    session_root: '/tmp/project with spaces/.deep-evolve/s1',
-    branch: 'evolve/s1/seed-2',
+    block_id: 'block-2',
+    decision_id: 'decision-2',
     n_block: 4,
-    helper_path: '/tmp/plugin with spaces/hooks/scripts/session-helper.sh',
   };
-  const first = buildSeedPrompt(input);
+  const first = buildSeedDispatchContext(input);
   const second = buildSeedPrompt(structuredClone(input));
-  assert.equal(first, second);
-  assert.ok(first.startsWith('You are running as seed_2. Your first two actions MUST be:'));
-  for (const value of [input.worktree_path, input.session_root, input.branch, input.helper_path]) {
-    assert.match(first, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  }
-  assert.match(first, /Step 5\.f/);
-  assert.throws(() => buildSeedPrompt({ ...input, worktree_path: 'relative/path' }), /absolute/i);
-  assert.doesNotThrow(() => buildSeedPrompt({
-    ...input,
-    worktree_path: 'C:\\Project With Spaces\\seed_2',
-    session_root: 'C:\\Project With Spaces\\.deep-evolve\\s1',
-    helper_path: 'C:\\Plugin With Spaces\\session-helper.sh',
-  }, { platform: 'win32' }));
+  assert.deepEqual(first, second);
+  assert.equal(typeof first, 'object');
+  assert.equal(first.worktree_path, input.session.virtual_parallel.seeds[0].worktree_path);
+  assert.deepEqual(first.first_actions, ['read-policy', 'verify-worktree']);
+  assert.deepEqual(first.runtime_operations, [
+    'coord.tail-forum',
+    'session.finish-experiment',
+    'scheduler.borrow-preflight',
+    'harness.run',
+  ]);
 });
 
 test('seed program preserves N=1 base bytes and prefixes N>1 beta deterministically', () => {

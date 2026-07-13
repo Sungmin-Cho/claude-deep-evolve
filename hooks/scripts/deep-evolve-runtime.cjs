@@ -106,7 +106,7 @@ const {
   processBeta,
   processBetaGrowth,
   selectBaseline,
-  buildSeedPrompt,
+  buildSeedDispatchContext,
   writeSeedProgram,
   renderForumSummary,
   renderCrossSeedAudit,
@@ -4879,6 +4879,52 @@ function task5DataRoot(dependencies = {}) {
   return resolveDataRoot(environment, dependencies.homedir);
 }
 
+function authenticateSeedDispatchWorktree(info, context) {
+  const expected = path.join(info.sessionRoot, 'worktrees', `seed_${context.seed_id}`);
+  if (context.session_root !== info.sessionRoot || context.worktree_path !== expected
+      || !isPathInside(info.sessionRoot, expected)) {
+    throw operatorError('seed_worktree_path_invalid',
+      'derived seed worktree differs from the authenticated session namespace');
+  }
+  let current = info.sessionRoot;
+  for (const segment of ['worktrees', `seed_${context.seed_id}`]) {
+    current = path.join(current, segment);
+    let before;
+    try { before = fs.lstatSync(current, { bigint: true }); }
+    catch (error) {
+      if (error && error.code === 'ENOENT') {
+        throw businessError('seed_worktree_missing',
+          `canonical seed worktree is missing: ${current}`);
+      }
+      throw error;
+    }
+    if (before.isSymbolicLink()) {
+      throw operatorError('seed_worktree_symlink',
+        `canonical seed worktree contains a symlink: ${current}`);
+    }
+    if (!before.isDirectory()) {
+      throw operatorError('seed_worktree_path_invalid',
+        `canonical seed worktree component is not a directory: ${current}`);
+    }
+    let resolved;
+    try { resolved = fs.realpathSync(current); }
+    catch {
+      throw operatorError('seed_worktree_path_invalid',
+        `canonical seed worktree cannot be resolved: ${current}`);
+    }
+    if (!isPathInside(info.sessionRoot, resolved)) {
+      throw operatorError('seed_worktree_path_invalid',
+        'canonical seed worktree resolves outside the session namespace');
+    }
+    const after = fs.lstatSync(current, { bigint: true });
+    if (after.isSymbolicLink() || !after.isDirectory()
+        || before.dev !== after.dev || before.ino !== after.ino) {
+      throw operatorError('seed_worktree_changed',
+        'canonical seed worktree changed during authentication');
+    }
+  }
+}
+
 const HANDLERS = Object.freeze({
   'session.resolve-current': (request, project, dependencies) => {
     payloadFor(request, []);
@@ -5285,13 +5331,50 @@ const HANDLERS = Object.freeze({
   },
   'coord.build-seed-prompt': (request, project) => {
     const payload = payloadFor(request, [
-      'seed_id', 'worktree_path', 'session_root', 'branch', 'n_block', 'helper_path',
+      'session_id', 'seed_id', 'block_id', 'decision_id', 'n_block',
     ]);
-    const sessionRoot = requireString(payload.session_root, 'payload.session_root');
-    if (!path.isAbsolute(sessionRoot) || !isPathInside(project.stateRoot, sessionRoot)) {
-      throw operatorError('session_path_escape', 'payload.session_root must be an absolute path inside .deep-evolve');
-    }
-    return { result: { prompt: buildSeedPrompt(payload) }, warnings: [] };
+    const sessionId = ensureSessionId(payload.session_id);
+    const seedId = requireInteger(payload.seed_id, 'payload.seed_id', {
+      min: 1, max: Number.MAX_SAFE_INTEGER,
+    });
+    const blockId = requireString(payload.block_id, 'payload.block_id');
+    const decisionId = requireString(payload.decision_id, 'payload.decision_id');
+    const nBlock = requireInteger(payload.n_block, 'payload.n_block', {
+      min: 1, max: Number.MAX_SAFE_INTEGER,
+    });
+    const info = sessionInfo(project, sessionId, { requireDirectory: true });
+    const relativeJournal = relativeSessionSibling(info, 'journal.jsonl');
+    let result;
+    mutateCoordinationFiles(
+      project.stateRoot,
+      [info.relativeSession, relativeJournal],
+      (files) => {
+        const session = assertSessionIdentity(
+          parseSessionText(files[info.relativeSession], info.sessionPath),
+          info.sessionId,
+        );
+        if (!isStrictSessionVersion(session.deep_evolve_version)) {
+          throw operatorError('seed_dispatch_requires_v35',
+            'seed dispatch context requires a v3.5 canonical session');
+        }
+        const events = validateCommittedJournal(files[relativeJournal])
+          .map((record) => record.value);
+        result = buildSeedDispatchContext({
+          project_root: project.projectRoot,
+          session_root: info.sessionRoot,
+          session,
+          events,
+          session_id: sessionId,
+          seed_id: seedId,
+          block_id: blockId,
+          decision_id: decisionId,
+          n_block: nBlock,
+        }, { platform: process.platform === 'win32' ? 'win32' : 'posix' });
+        authenticateSeedDispatchWorktree(info, result);
+        return null;
+      },
+    );
+    return { result, warnings: [] };
   },
   'coord.write-seed-program': (request, project) => {
     const payload = payloadFor(request, ['session_id', 'seed_id', 'beta']);

@@ -192,51 +192,205 @@ function selectBaseline(payload) {
   };
 }
 
-const PROMPT = `You are running as seed_{seed_id}. Your first two actions MUST be:
-1. \`cd {worktree_path}\`
-2. Verify CWD with \`pwd\`; the output must equal exactly: {worktree_path}
-Failure to remain in this CWD during your block is a contract violation that
-will be detected by post-dispatch git-state validation.
+const SEED_POLICY_REF = 'agents/evolve-seed.md';
+const SEED_FIRST_ACTIONS = Object.freeze(['read-policy', 'verify-worktree']);
+const SEED_RUNTIME_OPERATIONS = Object.freeze([
+  'coord.tail-forum',
+  'session.finish-experiment',
+  'scheduler.borrow-preflight',
+  'harness.run',
+]);
+const SEED_FINAL_RESPONSE_FIELDS = Object.freeze([
+  'experiments_executed',
+  'commits',
+  'final_q',
+  'forum_events_appended',
+  'borrows_planned',
+  'borrows_executed',
+  'status',
+  'notes',
+]);
+const SEED_DISPATCH_INPUT_FIELDS = new Set([
+  'project_root', 'session_root', 'session', 'events',
+  'session_id', 'seed_id', 'block_id', 'decision_id', 'n_block',
+]);
+const SEED_DISPATCH_REQUIRED_FIELDS = new Set([
+  'project_root', 'session_root', 'session', 'events',
+  'seed_id', 'block_id', 'decision_id', 'n_block',
+]);
 
-All git commands must target this worktree's branch: {branch}
-Session state is at {session_root} — reference via absolute paths only.
+function requireNonEmptyString(value, label) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw runtimeError('invalid_string', `${label} must be a non-empty string`);
+  }
+  return value;
+}
 
-Your assignment: run exactly {n_block} experiments (Inner Loop Step 1-6, seed-aware).
+function requireSafePositiveInteger(value, label) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw runtimeError('invalid_integer', `${label} must be a positive safe integer`);
+  }
+  return value;
+}
 
-For each experiment:
-  - Step 0.5 (new): read your seed's program.md (already in your worktree).
-  - Step 1: before idea selection, run \`bash {helper_path} tail_forum 20\` to see other seeds' recent activity. Avoid ideas that duplicate another seed's recent keep.
-  - Step 2-5: standard v3.0 Inner Loop (see skills/deep-evolve-workflow/protocols/inner-loop.md) — commit first, then journal append (git-log-is-truth invariant, § 11.3).
-  - Step 5.f (new, keep branch only): if this experiment kept, evaluate whether any other seed's recent non-flagged keep is semantically relevant to your direction. If so, plan a semantic_borrow for the NEXT experiment by writing \`borrow_planned\` event to journal; execute the re-implementation in the next Step 2.
+function platformPath(platform) {
+  if (platform === 'win32') return path.win32;
+  if (platform === 'posix') return path.posix;
+  throw runtimeError('invalid_platform', 'platform must be win32 or posix');
+}
 
-Use absolute paths to read/write session state:
-  - journal: {session_root}/journal.jsonl
-  - forum: {session_root}/forum.jsonl
-  - session.yaml: {session_root}/session.yaml
+function requireCanonicalAbsolute(value, label, pathApi) {
+  requireNonEmptyString(value, label);
+  if (value.includes('\0') || !pathApi.isAbsolute(value) || pathApi.normalize(value) !== value) {
+    throw runtimeError('seed_worktree_path_invalid', `${label} must be a normalized absolute path`);
+  }
+  return value;
+}
 
-When the block is complete, return a JSON summary on your FINAL message:
-\`\`\`
-{{"experiments_executed": <int>, "commits": ["<sha>", ...],
-  "final_q": <float>, "forum_events_appended": <int>,
-  "borrows_planned": <int>, "borrows_executed": <int>,
-  "status": "completed" | "interrupted" | "failed", "notes": "..."}}
-\`\`\`
-`;
+function pathWithin(pathApi, parent, candidate) {
+  const relative = pathApi.relative(parent, candidate);
+  return relative !== '' && relative !== '..'
+    && !relative.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(relative);
+}
 
-function absoluteForPlatform(value, platform) {
-  if (typeof value !== 'string') return false;
-  return platform === 'win32' ? path.win32.isAbsolute(value) : path.posix.isAbsolute(value);
+function findDispatchSchedule(events, requested) {
+  requireArray(events, 'events');
+  const blocks = new Set();
+  const decisions = new Set();
+  let matched = null;
+  let terminal = false;
+  for (const event of events) {
+    if (!plainObject(event)) {
+      throw runtimeError('seed_dispatch_authority_conflict',
+        'canonical journal contains a non-object event');
+    }
+    if (event.event === 'seed_scheduled') {
+      if (typeof event.block_id !== 'string' || event.block_id.length === 0
+          || typeof event.decision_id !== 'string' || event.decision_id.length === 0
+          || blocks.has(event.block_id) || decisions.has(event.decision_id)) {
+        throw runtimeError('seed_dispatch_authority_conflict',
+          'canonical seed schedule identity is malformed or duplicated');
+      }
+      blocks.add(event.block_id);
+      decisions.add(event.decision_id);
+      if (event.block_id === requested.block_id) matched = event;
+    } else if ((event.event === 'seed_block_completed'
+        || event.event === 'seed_block_failed') && event.block_id === requested.block_id) {
+      terminal = true;
+    }
+  }
+  if (!matched || terminal
+      || matched.decision_id !== requested.decision_id
+      || matched.seed_id !== requested.seed_id
+      || matched.block_size !== requested.n_block
+      || matched.epoch !== requested.epoch) {
+    throw runtimeError('seed_dispatch_authority_conflict',
+      'requested seed block differs from canonical in-flight schedule', 1);
+  }
+  return matched;
+}
+
+function buildSeedDispatchContext(args, options = {}) {
+  requireObject(args, 'seed dispatch args');
+  for (const key of Object.keys(args)) {
+    if (!SEED_DISPATCH_INPUT_FIELDS.has(key)) {
+      throw runtimeError('unknown_field', `unknown seed dispatch arg ${JSON.stringify(key)}`);
+    }
+  }
+  for (const key of SEED_DISPATCH_REQUIRED_FIELDS) {
+    if (!Object.hasOwn(args, key)) {
+      throw runtimeError('missing_field', `missing required seed dispatch arg ${key}`);
+    }
+  }
+
+  const platform = options.platform || (process.platform === 'win32' ? 'win32' : 'posix');
+  const pathApi = platformPath(platform);
+  const projectRoot = requireCanonicalAbsolute(args.project_root, 'project_root', pathApi);
+  const sessionRoot = requireCanonicalAbsolute(args.session_root, 'session_root', pathApi);
+  const session = requireObject(args.session, 'session');
+  const sessionId = requireNonEmptyString(
+    args.session_id === undefined ? session.session_id : args.session_id,
+    'session_id',
+  );
+  const seedId = requireSafePositiveInteger(args.seed_id, 'seed_id');
+  const blockId = requireNonEmptyString(args.block_id, 'block_id');
+  const decisionId = requireNonEmptyString(args.decision_id, 'decision_id');
+  const nBlock = requireSafePositiveInteger(args.n_block, 'n_block');
+  if (session.session_id !== sessionId) {
+    throw runtimeError('session_identity_mismatch',
+      'canonical session identity differs from dispatch request');
+  }
+  if (!new Set(['cli', 'protocol']).has(session.eval_mode)) {
+    throw runtimeError('seed_dispatch_authority_conflict',
+      'canonical session evaluation mode is unsupported');
+  }
+  const epoch = session.evaluation_epoch && session.evaluation_epoch.current;
+  requireSafePositiveInteger(epoch, 'evaluation_epoch.current');
+  const stateRoot = pathApi.join(projectRoot, '.deep-evolve');
+  if (!pathWithin(pathApi, stateRoot, sessionRoot)) {
+    throw runtimeError('seed_worktree_path_invalid',
+      'canonical session root must remain below the project state root');
+  }
+  const virtual = requireObject(session.virtual_parallel, 'session.virtual_parallel');
+  const seeds = requireArray(virtual.seeds, 'session.virtual_parallel.seeds');
+  const matches = seeds.filter((seed) => plainObject(seed) && seed.id === seedId);
+  if (matches.length === 0) {
+    throw runtimeError('seed_not_found', `canonical seed ${seedId} is missing`, 1);
+  }
+  if (matches.length !== 1) {
+    throw runtimeError('seed_dispatch_authority_conflict',
+      `canonical seed ${seedId} is duplicated`);
+  }
+  const seed = matches[0];
+  if (session.status !== 'active') {
+    throw runtimeError('session_not_active', 'seed dispatch requires an active session', 1);
+  }
+  if (seed.status !== 'active') {
+    throw runtimeError('seed_not_active', `canonical seed ${seedId} is terminal`, 1);
+  }
+  const worktreePath = requireCanonicalAbsolute(
+    seed.worktree_path, 'seed.worktree_path', pathApi,
+  );
+  const expectedWorktree = pathApi.join(sessionRoot, 'worktrees', `seed_${seedId}`);
+  if (worktreePath !== expectedWorktree || !pathWithin(pathApi, sessionRoot, worktreePath)) {
+    throw runtimeError('seed_worktree_path_invalid',
+      'canonical seed worktree differs from its derived session path');
+  }
+  const expectedBranch = `evolve/${sessionId}/seed-${seedId}`;
+  if (seed.branch !== expectedBranch) {
+    throw runtimeError('seed_branch_invalid',
+      'canonical seed branch differs from its derived identity');
+  }
+  findDispatchSchedule(args.events, {
+    block_id: blockId,
+    decision_id: decisionId,
+    seed_id: seedId,
+    n_block: nBlock,
+    epoch,
+  });
+
+  return {
+    schema_version: '1.0',
+    policy_ref: SEED_POLICY_REF,
+    project_root: projectRoot,
+    session_id: sessionId,
+    session_root: sessionRoot,
+    seed_id: seedId,
+    worktree_path: worktreePath,
+    branch: expectedBranch,
+    block: {
+      block_id: blockId,
+      decision_id: decisionId,
+      experiments: nBlock,
+    },
+    first_actions: [...SEED_FIRST_ACTIONS],
+    runtime_operations: [...SEED_RUNTIME_OPERATIONS],
+    final_response_schema: { required: [...SEED_FINAL_RESPONSE_FIELDS] },
+  };
 }
 
 function buildSeedPrompt(args, options = {}) {
-  requireObject(args, 'seed prompt args');
-  const required = ['seed_id', 'worktree_path', 'session_root', 'branch', 'n_block', 'helper_path'];
-  for (const key of required) if (!Object.hasOwn(args, key)) throw runtimeError('missing_field', `missing required args: ${key}`);
-  const platform = options.platform || process.platform;
-  for (const key of ['worktree_path', 'session_root', 'helper_path']) {
-    if (!absoluteForPlatform(args[key], platform)) throw runtimeError('path_not_absolute', `${key} must be absolute path, got: ${JSON.stringify(args[key])}`);
-  }
-  return PROMPT.replace(/\{(seed_id|worktree_path|session_root|branch|n_block|helper_path)\}/g, (_match, key) => String(args[key]));
+  return buildSeedDispatchContext(args, options);
 }
 
 function betaPrefix(beta) {
@@ -832,6 +986,7 @@ module.exports = {
   processBeta,
   processBetaGrowth,
   selectBaseline,
+  buildSeedDispatchContext,
   buildSeedPrompt,
   writeSeedProgram,
   renderForumSummary,

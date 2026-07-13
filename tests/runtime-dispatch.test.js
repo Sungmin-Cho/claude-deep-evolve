@@ -215,6 +215,51 @@ test('session.read returns the exact canonical session digest without mutating a
   }
 });
 
+test('seed dispatch owns the exact five-field payload before canonical authority lookup', () => {
+  const root = tempProject();
+  try {
+    const started = dispatch(request(root, 'session.start', {
+      goal: 'seed dispatch payload',
+      initial_state: structuredClone(START_FIXTURE.initial_state),
+    }), { now: () => Date.parse('2026-07-14T00:00:00Z') });
+    assert.equal(started.ok, true, JSON.stringify(started));
+    const payload = {
+      session_id: started.result.session_id,
+      seed_id: 1,
+      block_id: 'block-missing-seed',
+      decision_id: 'decision-missing-seed',
+      n_block: 1,
+    };
+    const missing = dispatch(request(root, 'coord.build-seed-prompt', payload));
+    assert.equal(missing.exitCode, 1, JSON.stringify(missing));
+    assert.equal(missing.error.code, 'seed_not_found');
+
+    for (const [field, value] of [
+      ['worktree_path', '/caller/worktree'],
+      ['branch', 'caller/branch'],
+      ['helper_path', '/caller/helper'],
+      ['session_root', '/caller/session'],
+      ['project_root', '/caller/project'],
+    ]) {
+      const rejected = dispatch(request(root, 'coord.build-seed-prompt', {
+        ...payload, [field]: value,
+      }));
+      assert.equal(rejected.exitCode, 2, `${field}: ${JSON.stringify(rejected)}`);
+      assert.equal(rejected.error.code, 'unknown_payload_field');
+    }
+
+    for (const nBlock of [0, -1, true, false]) {
+      const rejected = dispatch(request(root, 'coord.build-seed-prompt', {
+        ...payload, n_block: nBlock,
+      }));
+      assert.equal(rejected.exitCode, 2, `${String(nBlock)}: ${JSON.stringify(rejected)}`);
+      assert.equal(rejected.error.code, 'invalid_field_type');
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('Task 4 active protocols route retired scheduling oracles through exact dispatcher operations', () => {
   const protocols = path.resolve(__dirname, '..', 'skills', 'deep-evolve-workflow', 'protocols');
   const routes = [
