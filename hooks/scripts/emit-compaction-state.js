@@ -272,6 +272,34 @@ function atomicWriteJson(targetPath, obj) {
   fs.renameSync(tmp, targetPath);
 }
 
+function normalizeSourceArtifacts(sourceArtifacts) {
+  if (!Array.isArray(sourceArtifacts)) {
+    const error = new Error('sourceArtifacts must be an array');
+    error.code = 'invalid_source_artifacts';
+    error.rc = 2;
+    throw error;
+  }
+  return sourceArtifacts.map((source, index) => {
+    const keys = source && typeof source === 'object' && !Array.isArray(source)
+      ? Object.keys(source) : [];
+    const hasRunId = keys.includes('run_id');
+    if (!source || typeof source !== 'object' || Array.isArray(source)
+        || Object.getPrototypeOf(source) !== Object.prototype
+        || !keys.includes('path')
+        || keys.some((key) => !['path', 'run_id'].includes(key))
+        || typeof source.path !== 'string' || source.path.length === 0
+        || (hasRunId && (typeof source.run_id !== 'string' || !env.ULID_RE.test(source.run_id)))) {
+      const error = new Error(
+        `sourceArtifacts[${index}] must contain only path and optional valid run_id`,
+      );
+      error.code = 'invalid_source_artifact';
+      error.rc = 2;
+      throw error;
+    }
+    return { path: source.path, ...(hasRunId ? { run_id: source.run_id } : {}) };
+  });
+}
+
 function buildCompactionArtifact({
   payload,
   parentRunId,
@@ -287,19 +315,14 @@ function buildCompactionArtifact({
     error.details = { errors };
     throw error;
   }
-  if (!Array.isArray(sourceArtifacts)) {
-    const error = new Error('sourceArtifacts must be an array');
-    error.code = 'invalid_source_artifacts';
-    error.rc = 2;
-    throw error;
-  }
+  const normalizedSources = normalizeSourceArtifacts(sourceArtifacts);
   return env.wrapEnvelope({
     ...envelopeOptions,
     artifactKind: 'compaction-state',
     payload,
     parentRunId,
     sessionId,
-    sourceArtifacts,
+    sourceArtifacts: normalizedSources,
   });
 }
 

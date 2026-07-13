@@ -1993,6 +1993,154 @@ test('receipt operations unwrap only the deep-evolve evolve-receipt identity', (
   }
 });
 
+test('strict completed sessions consume only the recorded digest-bound versioned receipt', () => {
+  const { outer, root } = makeProject('strict recorded receipt');
+  const init = spawnSync('git', ['init', '-b', 'main'], { cwd: root, encoding: 'utf8' });
+  assert.equal(init.status, 0, init.stderr);
+  spawnSync('git', ['config', 'user.email', 'receipt@example.invalid'], { cwd: root });
+  spawnSync('git', ['config', 'user.name', 'Receipt Test'], { cwd: root });
+  spawnSync('git', ['add', 'src/index.js'], { cwd: root });
+  const committed = spawnSync('git', ['commit', '-qm', 'base'], { cwd: root, encoding: 'utf8' });
+  assert.equal(committed.status, 0, committed.stderr);
+  try {
+    const started = expectSuccess(runRequest(root, 'session.start', {
+      goal: 'strict receipt authority',
+    }), 'session.start');
+    const sessionRoot = fs.realpathSync(started.session_root);
+    const sessionPath = path.join(sessionRoot, 'session.yaml');
+    const journalPath = path.join(sessionRoot, 'journal.jsonl');
+    const session = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
+    session.status = 'active';
+    session.metric = { ...session.metric, baseline: 1, current: 1, best: 1 };
+    validateSession(session);
+    fs.writeFileSync(sessionPath, `${JSON.stringify(session, null, 2)}\n`);
+
+    const decoyPayload = {
+      receipt_schema_version: 2,
+      session_id: 'fixed-path-decoy',
+      goal: 'decoy',
+      outcome: 'discarded',
+      experiments: { total: 99, kept: 0 },
+      score: { baseline: 1, best: 0 },
+      strategy_evolution: { q_trajectory: [] },
+    };
+    const fixedPath = path.join(sessionRoot, 'evolve-receipt.json');
+    const decoyBytes = Buffer.from(`${JSON.stringify(decoyPayload)}\n`);
+    fs.writeFileSync(fixedPath, decoyBytes);
+    const d0 = `sha256:${sha256(fs.readFileSync(sessionPath))}`;
+    const receiptPayload = {
+      receipt_schema_version: 3,
+      session_id: started.session_id,
+      goal: 'recorded authority',
+      timestamp: '2026-07-14T00:00:00Z',
+      outcome: 'merged',
+      experiments: { total: 4, kept: 3 },
+      score: { baseline: 1, best: 2, improvement_pct: 100 },
+      strategy_evolution: { q_trajectory: [0.4, 0.8], outer_loop_generations: 2 },
+      generation_snapshots: [{
+        strategy_yaml_content: 'recorded: true\n',
+        meta_analysis_content: 'Recorded lesson.\n',
+      }],
+      notable_keeps: [{
+        commit: 'abc123', score_delta: 1, source: 'seed-1', description: 'recorded keep',
+      }],
+    };
+    const published = expectSuccess(runRequest(root, 'artifact.wrap-receipt', {
+      payload: receiptPayload,
+      session_id: started.session_id,
+      source_artifacts: [],
+      publication_id: '01J00000000000000000000700',
+      expected_session_sha256: d0,
+      legacy_artifact_sha256: `sha256:${sha256(decoyBytes)}`,
+    }), 'artifact.wrap-receipt');
+    assert.notEqual(published.artifact_path, fixedPath);
+    assert.deepEqual(fs.readFileSync(fixedPath), decoyBytes);
+
+    const reportBytes = Buffer.from('# Report\n\ncomplete\n');
+    fs.writeFileSync(path.join(sessionRoot, 'report.md'), reportBytes);
+    const branch = spawnSync('git', ['branch', '--show-current'], {
+      cwd: root, encoding: 'utf8',
+    }).stdout.trim();
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], {
+      cwd: root, encoding: 'utf8',
+    }).stdout.trim();
+    const relativeReceipt = path.relative(sessionRoot, published.artifact_path)
+      .split(path.sep).join('/');
+    const completed = expectSuccess(runRequest(root, 'session.complete', {
+      session_id: started.session_id,
+      operation_id: '01J00000000000000000000701',
+      expected_session_sha256: d0,
+      expected_journal_sha256: `sha256:${sha256(fs.readFileSync(journalPath))}`,
+      outcome: 'merged',
+      final_branch: branch,
+      final_commit: head,
+      report: { relative_path: 'report.md', sha256: `sha256:${sha256(reportBytes)}` },
+      receipt: { relative_path: relativeReceipt, sha256: published.artifact_sha256 },
+      synthesis: { outcome: 'baseline', commit: null },
+      final_strategy: {},
+    }), 'session.complete');
+    assert.notEqual(completed.session_sha256, d0);
+    assert.equal(completed.session.completion.receipt.relative_path, relativeReceipt);
+
+    const inherited = expectSuccess(runRequest(root, 'session.render-inherited-context', {
+      parent_session_id: started.session_id,
+    }), 'session.render-inherited-context');
+    assert.match(inherited.markdown, /recorded: true/);
+    assert.doesNotMatch(inherited.markdown, /decoy/);
+    const archived = expectSuccess(runRequest(root, 'session.append-local-archive', {
+      session_id: started.session_id,
+    }), 'session.append-local-archive');
+    assert.equal(archived.entry.session_id, started.session_id);
+    assert.equal(archived.entry.goal, 'recorded authority');
+
+    fs.unlinkSync(fixedPath);
+    const legacyRendered = runLegacyRuntime(root, [
+      'render_inherited_context', started.session_id,
+    ]);
+    assert.equal(legacyRendered.status, 0, legacyRendered.stderr);
+    assert.match(legacyRendered.stdout, /recorded: true/);
+    const legacyArchived = runLegacyRuntime(root, [
+      'append_meta_archive_local', started.session_id,
+    ]);
+    assert.equal(legacyArchived.status, 0, legacyArchived.stderr);
+    const legacyDryRun = runLegacyRuntime(root, [
+      'append_meta_archive_local', '--dry-run', started.session_id,
+    ]);
+    assert.equal(legacyDryRun.status, 0, legacyDryRun.stderr);
+    assert.match(legacyDryRun.stderr,
+      new RegExp(relativeReceipt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+    const recordedBytes = fs.readFileSync(published.artifact_path);
+    fs.writeFileSync(published.artifact_path, '{"tampered":true}\n');
+    for (const [operation, payload] of [
+      ['session.append-local-archive', { session_id: started.session_id }],
+      ['session.render-inherited-context', { parent_session_id: started.session_id }],
+    ]) {
+      const rejected = runRequest(root, operation, payload);
+      assert.equal(rejected.status, 2, `${operation}: ${rejected.stdout}`);
+      assert.equal(rejected.response.error.code, 'receipt_digest_mismatch');
+    }
+    fs.writeFileSync(published.artifact_path, recordedBytes);
+    fs.unlinkSync(published.artifact_path);
+    const missing = runRequest(root, 'session.append-local-archive', {
+      session_id: started.session_id,
+    });
+    assert.equal(missing.status, 2, missing.stdout);
+    assert.equal(missing.response.error.code, 'receipt_missing');
+
+    const outside = path.join(outer, 'outside-receipt.json');
+    fs.writeFileSync(outside, recordedBytes);
+    fs.symlinkSync(outside, published.artifact_path);
+    const escaped = runRequest(root, 'session.render-inherited-context', {
+      parent_session_id: started.session_id,
+    });
+    assert.equal(escaped.status, 2, escaped.stdout);
+    assert.equal(escaped.response.error.code, 'receipt_path_escape');
+  } finally {
+    fs.rmSync(outer, { recursive: true, force: true });
+  }
+});
+
 test('virtual init, append, set-field, and rebuild preserve legacy spellings and journal truth', () => {
   const { outer, root } = makeProject('virtual state');
   const sid = 'virtual-session';

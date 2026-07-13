@@ -11,6 +11,7 @@ const { ULID_RE } = require('../scripts/validate-envelope-emit.js');
 const {
   parseSourceArtifactSpec,
   tryReadEnvelopeRunId,
+  wrapEvolveArtifact,
 } = require('../hooks/scripts/wrap-evolve-envelope.js');
 const {
   wrapEnvelope,
@@ -804,5 +805,29 @@ describe('envelope-chain — wrapEnvelope intra-plugin chain via lib', () => {
       { path: meta, run_id: undefined },
       { path: review, run_id: reviewRunId },
     ]);
+  });
+
+  it('preserves exact authenticated source records without rereading paths', () => {
+    const sourceRunId = generateUlid();
+    const artifact = wrapEvolveArtifact({
+      artifactKind: 'evolve-insights',
+      payload: { updated_at: '2026-07-14T00:00:00Z', insights_for_deep_work: [] },
+      sourceArtifacts: [{ path: 'intentionally-missing.json', run_id: sourceRunId }],
+      sourceArtifactsAuthenticated: true,
+      envelopeOptions: {
+        runId: generateUlid(),
+        generatedAt: '2026-07-14T00:00:00.000Z',
+        git: { head: '0'.repeat(40), branch: 'main', dirty: false },
+      },
+    });
+    assert.deepEqual(artifact.envelope.provenance.source_artifacts, [
+      { path: 'intentionally-missing.json', run_id: sourceRunId },
+    ]);
+    assert.throws(() => wrapEvolveArtifact({
+      artifactKind: 'evolve-insights',
+      payload: { insights_for_deep_work: [] },
+      sourceArtifacts: [{ path: 'source.json', digest: 'caller-owned' }],
+      sourceArtifactsAuthenticated: true,
+    }), (error) => error && error.code === 'invalid_source_artifact');
   });
 });

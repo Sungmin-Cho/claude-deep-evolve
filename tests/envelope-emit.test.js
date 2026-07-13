@@ -20,6 +20,7 @@ const {
   unwrapEnvelope,
   loadProducerVersion,
 } = require('../hooks/scripts/envelope.js');
+const { wrapEvolveArtifact } = require('../hooks/scripts/wrap-evolve-envelope.js');
 
 const FIXTURES = path.join(__dirname, 'fixtures');
 
@@ -110,6 +111,21 @@ describe('envelope.js — wrapEnvelope identity', () => {
       git: { head: 'abc1234', branch: 'main', dirty: false },
     });
     assert.ok(!('parent_run_id' in env.envelope), 'parent_run_id must be absent by default');
+  });
+});
+
+describe('runtime evolve artifact builder provenance boundary', () => {
+  it('rejects a non-ULID run_id even when sources were already authenticated', () => {
+    assert.throws(
+      () => wrapEvolveArtifact({
+        artifactKind: 'evolve-insights',
+        payload: { insights_for_deep_work: [], insights_for_deep_review: [] },
+        sourceArtifacts: [{ path: 'source.json', run_id: 'not-a-ulid' }],
+        sourceArtifactsAuthenticated: true,
+      }),
+      (error) => error && error.code === 'invalid_source_artifact'
+        && /optional valid run_id/.test(error.message),
+    );
   });
 });
 

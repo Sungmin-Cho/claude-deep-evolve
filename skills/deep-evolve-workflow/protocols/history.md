@@ -15,9 +15,25 @@ Arguments from dispatcher (HISTORY_ARGS):
 Primary source: `sessions.jsonl` (via `session-helper.sh list_sessions`)
 - Includes active/paused sessions (X10)
 
-For detail mode: also read `.deep-evolve/<TARGET>/evolve-receipt.json`
-- **Envelope-aware (v3.2.0+)**: detect M3 envelope (`schema_version == "1.0"`
-  AND `envelope.producer == "deep-evolve"` AND
+For detail mode, first use the packaged `deep-evolve-runtime.cjs` dispatcher:
+
+```yaml
+runtime-op: session.read
+payload:
+  session_id: <TARGET>
+```
+
+For a strict completed session, resolve only
+`result.session.completion.receipt.relative_path` beneath the authenticated
+session root and verify its bytes against
+`result.session.completion.receipt.sha256`. Reject missing files, symlinks,
+containment escapes, digest mismatches, or malformed receipt references. A
+strict session never falls back to evolve-receipt.json. A below v3.5 session may use evolve-receipt.json as the compatibility path when no strict receipt
+reference exists.
+
+- **Envelope-aware (v3.2.0+)**: after path and digest authentication, detect an
+  M3 envelope (`schema_version == "1.0"` AND
+  `envelope.producer == "deep-evolve"` AND
   `envelope.artifact_kind == "evolve-receipt"` AND
   `envelope.schema.name == envelope.artifact_kind`). When matched, query under
   `.payload.*` for legacy fields. Pre-3.2.0 receipts continue at root level.

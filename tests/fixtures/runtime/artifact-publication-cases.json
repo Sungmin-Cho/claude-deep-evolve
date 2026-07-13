@@ -1,0 +1,44 @@
+{
+  "publication_ids": {
+    "receipt": "01J00000000000000000000600",
+    "insights": "01J00000000000000000000601",
+    "compaction": "01J00000000000000000000602",
+    "handoff": "01J00000000000000000000603",
+    "feedback": "01J00000000000000000000604"
+  },
+  "receipt_payload": {
+    "receipt_schema_version": 3,
+    "outcome": "merged",
+    "goal": "publish immutably",
+    "experiments": { "total": 1, "kept": 1 },
+    "score": { "baseline": 1, "best": 2, "improvement_pct": 100 }
+  },
+  "insights_payload": {
+    "schema_version": "1.0",
+    "insights": ["keep publication immutable"]
+  },
+  "compaction_payload": {
+    "schema_version": "1.0",
+    "compacted_at": "2026-07-14T00:00:00Z",
+    "trigger": "session-stop",
+    "preserved_artifact_paths": ["receipt.json"]
+  },
+  "handoff_payload": {
+    "schema_version": "1.0",
+    "handoff_kind": "evolve-to-deep-work",
+    "from": {
+      "producer": "deep-evolve",
+      "completed_at": "2026-07-14T00:00:00Z"
+    },
+    "to": {
+      "producer": "deep-work",
+      "intent": "continue"
+    },
+    "summary": "immutable publication complete",
+    "next_action_brief": "consume the authenticated receipt"
+  },
+  "feedback_payload": {
+    "insights_for_deep_work": ["use recorded artifact paths"],
+    "insights_for_deep_review": ["verify immutable publication"]
+  }
+}

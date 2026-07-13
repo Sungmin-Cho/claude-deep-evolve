@@ -19,6 +19,7 @@ const {
   renderStatus,
   collectSynthesis,
   finalizeSynthesis,
+  exportFeedback,
 } = require('../hooks/scripts/runtime/synthesis.cjs');
 const { OPERATIONS, dispatch } = require('../hooks/scripts/deep-evolve-runtime.cjs');
 
@@ -269,4 +270,12 @@ test('Task 5 and exact Task 6 harness operations are registered while later oper
 test('supported synthesis module is Python-free and wrapper-CLI-free', () => {
   const source = fs.readFileSync(require.resolve('../hooks/scripts/runtime/synthesis.cjs'), 'utf8');
   assert.doesNotMatch(source, /python(?:3)?|child_process|spawnSync|execFile|session-helper\.sh/);
+});
+
+test('feedback builder rejects non-exact authenticated provenance records', () => {
+  assert.throws(() => exportFeedback({
+    payload: { insights_for_deep_work: [], insights_for_deep_review: [] },
+    sourceArtifacts: [{ path: 'meta-archive.jsonl', sha256: 'caller-field' }],
+    sourceArtifactsAuthenticated: true,
+  }), (error) => error && error.code === 'invalid_source_artifact');
 });

@@ -289,6 +289,117 @@ test('Task 4 active protocols route retired scheduling oracles through exact dis
   for (const oracle of retired) assert.doesNotMatch(packaged, new RegExp(oracle.replace('.', '\\.')));
 });
 
+test('packaged artifact workflows bind D0 and D1 around immutable runtime publication', () => {
+  const protocols = path.resolve(__dirname, '..', 'skills', 'deep-evolve-workflow', 'protocols');
+  const completion = fs.readFileSync(path.join(protocols, 'completion.md'), 'utf8');
+  const transfer = fs.readFileSync(path.join(protocols, 'transfer.md'), 'utf8');
+  const history = fs.readFileSync(path.join(protocols, 'history.md'), 'utf8');
+  const anchors = [
+    'completion-order: outcome-final',
+    'completion-order: authenticate-final-ref',
+    'completion-order: read-d0',
+    'completion-order: publish-receipt-d0',
+    'completion-order: emit-telemetry-d0',
+    'completion-order: session-complete-d0-to-d1',
+    'completion-order: archive-d1',
+    'completion-order: destructive-cleanup-d1',
+  ];
+  let prior = -1;
+  for (const anchor of anchors) {
+    assert.equal(completion.split(anchor).length - 1, 1, `${anchor} must occur exactly once`);
+    const offset = completion.indexOf(anchor);
+    assert.ok(offset > prior, `${anchor} is out of lifecycle order`);
+    prior = offset;
+  }
+  const beforeD1 = completion.slice(0,
+    completion.indexOf('completion-order: session-complete-d0-to-d1'));
+  const afterD1 = completion.slice(
+    completion.indexOf('completion-order: session-complete-d0-to-d1'));
+  for (const operation of [
+    'artifact.wrap-receipt',
+    'artifact.emit-compaction',
+    'artifact.emit-handoff',
+    'session.complete',
+  ]) {
+    assert.match(beforeD1, new RegExp(`runtime-op:\\s*${operation.replace('.', '\\.')}\\b`));
+  }
+  assert.match(beforeD1, /expected_session_sha256:\s*D0/g);
+  assert.match(afterD1, /runtime-op:\s*session\.append-local-archive\b/);
+  assert.match(afterD1, /D1 returned by that exact session\.complete response/);
+  assert.doesNotMatch(afterD1, /expected_session_sha256:\s*D0/);
+  assert.match(completion, /stale_preimage[^\n]*fatal/i);
+  assert.match(completion, /warning-only[^\n]*never[^\n]*stale_preimage/i);
+  assert.match(completion, /outcome === ['"]discarded['"]/);
+  assert.match(completion, /final_ref = `refs\/heads\/\$\{final_branch\}`/);
+  assert.match(completion, /\['update-ref', '-d', final_ref, final_commit\]/);
+  assert.match(completion, /shell:\s*false/);
+  assert.match(completion, /invocation_count === 1/);
+  assert.match(completion, /response loss[^\n]*read-only/i);
+  assert.doesNotMatch(completion, /git\s+branch\s+-[dD]\b/);
+  assert.doesNotMatch(completion, /\.payload\.outcome\s*=/);
+  assert.doesNotMatch(completion, /--output\b/);
+  assert.doesNotMatch(completion, /node\s+[^\n]*(?:wrap-evolve-envelope|emit-compaction-state|emit-handoff)\.js/);
+
+  assert.match(transfer, /runtime-op:\s*transfer\.export-feedback\b/);
+  assert.match(transfer, /publication_id/);
+  assert.match(transfer, /expected_session_sha256/);
+  assert.doesNotMatch(transfer, /--output\b/);
+  assert.doesNotMatch(transfer, /node\s+[^\n]*wrap-evolve-envelope\.js/);
+  assert.doesNotMatch(transfer, /\$SESSION_ROOT\/evolve-insights\.json/);
+
+  assert.match(history, /runtime-op:\s*session\.read\b/);
+  assert.match(history, /completion\.receipt\.relative_path/);
+  assert.match(history, /completion\.receipt\.sha256/);
+  assert.match(history, /strict[^\n]*never[^\n]*evolve-receipt\.json/i);
+  assert.match(history, /below v3\.5[^\n]*evolve-receipt\.json/i);
+});
+
+test('discard cleanup uses one expected-old update-ref CAS and preserves a moved ref', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'evolve-discard-cas-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const run = (args) => spawnSync('git', ['-C', root, ...args], {
+    encoding: 'utf8',
+    shell: false,
+  });
+  assert.equal(run(['init', '-q', '-b', 'main']).status, 0);
+  assert.equal(run(['config', 'user.email', 'cas@example.invalid']).status, 0);
+  assert.equal(run(['config', 'user.name', 'CAS Test']).status, 0);
+  fs.writeFileSync(path.join(root, 'value.txt'), 'A\n');
+  assert.equal(run(['add', 'value.txt']).status, 0);
+  assert.equal(run(['commit', '-qm', 'A']).status, 0);
+  const expected = run(['rev-parse', 'HEAD']).stdout.trim();
+  assert.equal(run(['branch', 'evolve/exact', expected]).status, 0);
+  assert.equal(run(['branch', 'evolve/moved', expected]).status, 0);
+  assert.equal(run(['branch', 'evolve/lost-response', expected]).status, 0);
+  fs.writeFileSync(path.join(root, 'value.txt'), 'B\n');
+  assert.equal(run(['add', 'value.txt']).status, 0);
+  assert.equal(run(['commit', '-qm', 'B']).status, 0);
+  const replacement = run(['rev-parse', 'HEAD']).stdout.trim();
+
+  const movedRef = 'refs/heads/evolve/moved';
+  assert.equal(run(['update-ref', movedRef, replacement, expected]).status, 0);
+  const movedDelete = run(['update-ref', '-d', movedRef, expected]);
+  assert.notEqual(movedDelete.status, 0);
+  assert.equal(run(['rev-parse', '--verify', movedRef]).stdout.trim(), replacement);
+
+  const exactRef = 'refs/heads/evolve/exact';
+  const exactDelete = run(['update-ref', '-d', exactRef, expected]);
+  assert.equal(exactDelete.status, 0, exactDelete.stderr);
+  assert.notEqual(run(['rev-parse', '--verify', exactRef]).status, 0);
+
+  const responseLossRef = 'refs/heads/evolve/lost-response';
+  let invocationCount = 0;
+  const ambiguousResponse = (() => {
+    invocationCount += 1;
+    run(['update-ref', '-d', responseLossRef, expected]);
+    return { status: null, signal: 'SIGKILL', stdout: '', stderr: '' };
+  })();
+  assert.equal(ambiguousResponse.status, null);
+  assert.equal(invocationCount, 1);
+  assert.notEqual(run(['rev-parse', '--verify', responseLossRef]).status, 0);
+  assert.equal(invocationCount, 1, 'response-loss adoption must not mutate twice');
+});
+
 test('routes all 33 legacy subcommands plus help through native arms', () => {
   assert.deepEqual(Object.keys(LEGACY_ROUTES).sort(), [...LEGACY_ARMS].sort());
   assert.equal(Object.isFrozen(LEGACY_ROUTES), true);

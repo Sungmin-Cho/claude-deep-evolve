@@ -333,10 +333,10 @@ Analyze the meta-archive for patterns that could benefit other plugins:
    - Strategies with high keep_rate (> 0.3)
    - Program.md changes that correlated with Q(v) improvement
    - Idea selection weight distributions that worked well
-5. Generate `$SESSION_ROOT/evolve-insights.json` as an **M3 envelope-wrapped
-   artifact** (cf. `claude-deep-suite/docs/envelope-migration.md` §1). The
-   payload below — preserved verbatim from v3.1.x — becomes the `payload` of
-   the wrapped envelope.
+5. Generate an immutable **M3 envelope-wrapped evolve-insights publication**
+   through the packaged runtime (cf. `claude-deep-suite/docs/envelope-migration.md`
+   §1). The payload below — preserved verbatim from v3.1.x — becomes the
+   `payload` of the wrapped envelope.
 
    > **Multi-source aggregator (handoff §3.3)**: evolve-insights aggregates
    > the local meta-archive plus optional cross-plugin signals. There is no
@@ -368,61 +368,37 @@ Analyze the meta-archive for patterns that could benefit other plugins:
    }
    ```
 
-   ### Envelope wrap (atomic)
+   ### Runtime publication (immutable)
 
-   Write the payload to a temp file and invoke the wrap helper (atomic
-   temp+rename internally; cleanup gated on success — handoff §4 round-1
-   C1+C2 lessons).
+   Read the active session through the packaged `deep-evolve-runtime.cjs`
+   dispatcher (`runtime-op: session.read`) and name its returned digest `D0`.
+   Authenticate the meta-archive and optional recurring-findings file as stable,
+   non-symlink source records before the publication request. Generate one
+   stable ULID `publication_id` for this logical publication and reuse it for
+   every retry:
 
-   ```bash
-   set -euo pipefail
-
-   PAYLOAD_TMP="$SESSION_ROOT/.evolve-insights.payload.json"
-   OUT_PATH="$SESSION_ROOT/evolve-insights.json"
-
-   # Write the payload JSON shape above to PAYLOAD_TMP.
-
-   # Resolve PROJECT_ROOT locally — Bash-tool calls are stateless across
-   # invocations (Round-1 review C1 + handoff §4 W2).
-   PROJECT_ROOT="${PROJECT_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-   META_ARCHIVE="$HOME/.claude/deep-evolve/meta-archive.jsonl"
-
-   WRAP_ARGS=(
-     --artifact-kind evolve-insights
-     --payload-file "$PAYLOAD_TMP"
-     --output "$OUT_PATH"
-   )
-   SESSION_ID=$(grep '^session_id:' "$SESSION_ROOT/session.yaml" | head -1 | sed 's/^session_id:[[:space:]]*//; s/"//g')
-   [ -n "$SESSION_ID" ] && WRAP_ARGS+=(--session-id "$SESSION_ID")
-   [ -f "$META_ARCHIVE" ] && WRAP_ARGS+=(--source-artifact "$META_ARCHIVE")
-
-   # Optional: deep-review recurring-findings as an additional cross-plugin
-   # source signal. evolve-insights does NOT chain via parent_run_id
-   # (multi-source aggregator), but Round-1 W4 fix gives the helper an
-   # auto-harvest path: when the file at this path is a self-consistent
-   # envelope (producer === schema.name === artifact_kind, valid ULID), its
-   # `envelope.run_id` lands in `provenance.source_artifacts[].run_id`. If
-   # the file is legacy or foreign, only the path is recorded (no run_id).
-   REC_PATH="$PROJECT_ROOT/.deep-review/recurring-findings.json"
-   [ -f "$REC_PATH" ] && WRAP_ARGS+=(--source-artifact "$REC_PATH")
-
-   if node "$CLAUDE_PLUGIN_ROOT/hooks/scripts/wrap-evolve-envelope.js" "${WRAP_ARGS[@]}"; then
-     rm -f "$PAYLOAD_TMP"
-   else
-     echo "wrap-evolve-envelope failed — preserving $PAYLOAD_TMP for retry; re-run this step to retry." >&2
-     exit 1
-   fi
+   ```yaml
+   runtime-op: transfer.export-feedback
+   payload:
+     payload: <the evolve-insights payload above>
+     source_artifacts: <ordered authenticated meta-archive and recurring-findings records>
+     session_id: <active session id>
+     publication_id: <stable ULID>
+     expected_session_sha256: D0
    ```
 
-   The helper:
-   - Generates `envelope.run_id` (ULID), sets `producer = "deep-evolve"`,
-     `artifact_kind = "evolve-insights"`, `schema.name = "evolve-insights"`.
-   - **Omits** `envelope.parent_run_id` (multi-source aggregator semantics).
-   - Adds each `--source-artifact <path>` to
-     `envelope.provenance.source_artifacts[]`. Path-only entries get
-     **auto-harvested run_id** when the file is a self-consistent envelope
-     (Round-1 W4 fix); legacy / foreign / inconsistent files contribute
-     path-only.
+   The runtime authenticates `D0` while holding the session authority lock,
+   creates the envelope and immutable target, and returns exactly
+   `envelope`, `artifact_path`, `artifact_sha256`, `publication_id`, and
+   `replayed`. The caller must consume the returned path, digest, and run ID;
+   it must not reconstruct a fixed filename. An exact retry with the same
+   publication ID returns the already committed bytes. A different request
+   under that ID is a conflict, while `stale_preimage`, ambiguous recovery,
+   containment, or source-authentication failures are fatal.
+
+   This multi-source aggregator omits `parent_run_id`. Authenticated source
+   envelopes contribute their run IDs; legacy or foreign sources remain
+   path-only records.
 
 6. Each insight's `source_archive_ids` must reference actual archive entry IDs
    for traceability.

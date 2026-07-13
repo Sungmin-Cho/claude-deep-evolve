@@ -129,6 +129,15 @@ const {
 const { wrapEvolveArtifact } = require('./wrap-evolve-envelope.js');
 const { buildHandoffArtifact } = require('./emit-handoff.js');
 const { buildCompactionArtifact } = require('./emit-compaction-state.js');
+const {
+  BUILDER_VERSION: ARTIFACT_BUILDER_VERSION,
+  DIGEST_RE: ARTIFACT_DIGEST_RE,
+  PUBLICATION_ID_RE,
+  authenticateSourceArtifacts,
+  publishArtifact,
+  readPublication,
+  stableReadRegular,
+} = require('./runtime/artifact-store.cjs');
 const { findProjectRoot, isPathInside } = require('./runtime/runtime-paths.cjs');
 
 const RUNTIME_VERSION = require('../../package.json').version;
@@ -2776,12 +2785,102 @@ function migrateLegacy(project, dependencies = {}) {
   return outcome;
 }
 
+function strictReceiptPath(info, reference, label) {
+  if (!plainObject(reference)
+      || typeof reference.relative_path !== 'string'
+      || reference.relative_path.length === 0
+      || !ARTIFACT_DIGEST_RE.test(reference.sha256 || '')) {
+    throw operatorError('receipt_reference_missing',
+      `${label} has no valid strict completion reference`);
+  }
+  const relative = reference.relative_path.split('/').join(path.sep);
+  if (path.isAbsolute(relative)) {
+    throw operatorError('receipt_path_escape', `${label} reference must be session-relative`);
+  }
+  const receiptPath = path.resolve(info.sessionRoot, relative);
+  if (!isPathInside(info.sessionRoot, receiptPath) || receiptPath === info.sessionRoot) {
+    throw operatorError('receipt_path_escape', `${label} reference escapes its session`);
+  }
+  let current = info.sessionRoot;
+  const components = path.relative(info.sessionRoot, receiptPath).split(path.sep);
+  for (let index = 0; index < components.length; index += 1) {
+    current = path.join(current, components[index]);
+    let stat;
+    try { stat = fs.lstatSync(current); }
+    catch (error) {
+      if (error && error.code === 'ENOENT') {
+        throw operatorError('receipt_missing', `${label} not found: ${receiptPath}`);
+      }
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      throw operatorError('receipt_path_escape', `${label} path contains a symlink`);
+    }
+    if (index < components.length - 1 && !stat.isDirectory()) {
+      throw operatorError('receipt_path_escape', `${label} parent is not a directory`);
+    }
+    if (index === components.length - 1 && !stat.isFile()) {
+      throw operatorError('receipt_path_escape', `${label} is not a regular file`);
+    }
+    const resolved = fs.realpathSync(current);
+    if (!isPathInside(info.sessionRoot, resolved)) {
+      throw operatorError('receipt_path_escape', `${label} resolves outside its session`);
+    }
+  }
+  return receiptPath;
+}
+
 function readReceipt(project, sessionId, label = 'receipt') {
   const info = sessionInfo(project, sessionId, { requireDirectory: true });
-  const receiptPath = path.join(info.sessionRoot, RECEIPT_FILE);
-  ensureContainedExisting(project, receiptPath, label);
+  let receiptPath;
+  let expectedDigest = null;
+  let receiptBytes;
+  mutateCoordinationFiles(project.stateRoot, [info.relativeSession], (files) => {
+    const compatible = parseCompatibleSessionText(
+      files[info.relativeSession], info.sessionPath, info.sessionId,
+    );
+    if (isStrictSessionVersion(compatible.deep_evolve_version)) {
+      const strict = parseSessionText(files[info.relativeSession], info.sessionPath);
+      assertSessionIdentity(strict, info.sessionId);
+      if (strict.status !== 'completed' || !plainObject(strict.completion)) {
+        throw operatorError('receipt_reference_missing',
+          `${label} strict session is not completed with a receipt reference`);
+      }
+      receiptPath = strictReceiptPath(info, strict.completion.receipt, label);
+      expectedDigest = strict.completion.receipt.sha256;
+    } else {
+      receiptPath = path.join(info.sessionRoot, RECEIPT_FILE);
+      if (!fs.existsSync(receiptPath)) {
+        throw operatorError('receipt_missing', `${label} not found: ${receiptPath}`);
+      }
+      const stat = fs.lstatSync(receiptPath);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw operatorError('receipt_path_escape', `${label} must be a regular file`);
+      }
+    }
+    let stable;
+    try {
+      stable = stableReadRegular(receiptPath, {
+        missingCode: 'receipt_missing',
+        symlinkCode: 'receipt_path_escape',
+        invalidCode: 'receipt_path_escape',
+        changedCode: 'receipt_changed_during_read',
+        label,
+      });
+    } catch (error) {
+      if (error && error.rc) throw error;
+      throw operatorError('receipt_changed_during_read',
+        `${label} changed during authentication`);
+    }
+    if (expectedDigest && stable.sha256 !== expectedDigest) {
+      throw operatorError('receipt_digest_mismatch',
+        `${label} does not match its recorded completion digest`);
+    }
+    receiptBytes = stable.bytes;
+    return null;
+  });
   let root;
-  try { root = JSON.parse(fs.readFileSync(receiptPath, 'utf8')); }
+  try { root = JSON.parse(receiptBytes.toString('utf8')); }
   catch { throw operatorError('invalid_receipt_json', `${label} is not valid JSON`); }
   if (!plainObject(root)) throw operatorError('invalid_receipt', `${label} must be a JSON object`);
   assertPlainTree(root, label);
@@ -4925,6 +5024,265 @@ function authenticateSeedDispatchWorktree(info, context) {
   }
 }
 
+function requirePublicationSourceList(value, label = 'payload.source_artifacts') {
+  if (!Array.isArray(value)) {
+    throw operatorError('invalid_source_artifacts', `${label} must be an array`);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const source = requirePlainObject(value[index], `${label}[${index}]`);
+    rejectUnknownKeys(source, new Set(['path', 'run_id']), `${label}[${index}]`,
+      'invalid_source_artifact');
+    requireString(source.path, `${label}[${index}].path`);
+    if (source.run_id !== undefined && !PUBLICATION_ID_RE.test(source.run_id)) {
+      throw operatorError('invalid_source_artifact',
+        `${label}[${index}].run_id must be a valid ULID`);
+    }
+  }
+  return value;
+}
+
+function validatePublicationPayload(payload, {
+  requireOutcome = false,
+  allowParent = false,
+  allowRecurring = false,
+  allowLegacy = false,
+} = {}) {
+  requirePlainObject(payload.payload, 'payload.payload');
+  const sessionId = ensureSessionId(payload.session_id);
+  requirePublicationSourceList(payload.source_artifacts);
+  if (!PUBLICATION_ID_RE.test(payload.publication_id || '')) {
+    throw operatorError('invalid_publication_id', 'payload.publication_id must be a valid ULID');
+  }
+  if (!ARTIFACT_DIGEST_RE.test(payload.expected_session_sha256 || '')) {
+    throw operatorError('invalid_digest',
+      'payload.expected_session_sha256 must be sha256:<64 lowercase hex>');
+  }
+  if (payload.parent_run_id !== undefined) {
+    if (!allowParent || !PUBLICATION_ID_RE.test(payload.parent_run_id)) {
+      throw operatorError('invalid_parent_run_id',
+        'payload.parent_run_id is not allowed or is not a valid ULID');
+    }
+  }
+  if (payload.source_recurring_findings !== undefined) {
+    if (!allowRecurring) {
+      throw operatorError('unknown_payload_field',
+        'payload.source_recurring_findings is not allowed for this operation');
+    }
+    requireString(payload.source_recurring_findings,
+      'payload.source_recurring_findings');
+  }
+  if (payload.legacy_artifact_sha256 !== undefined) {
+    if (!allowLegacy || !ARTIFACT_DIGEST_RE.test(payload.legacy_artifact_sha256)) {
+      throw operatorError('invalid_legacy_artifact_digest',
+        'payload.legacy_artifact_sha256 is not allowed or is malformed');
+    }
+  }
+  if (requireOutcome
+      && (typeof payload.payload.outcome !== 'string'
+        || payload.payload.outcome.length === 0)) {
+    throw operatorError('receipt_outcome_required',
+      'receipt payload requires one final non-null semantic outcome');
+  }
+  if (requireOutcome
+      && !new Set(['merged', 'pr_created', 'kept', 'discarded'])
+        .has(payload.payload.outcome)) {
+    throw operatorError('receipt_outcome_invalid',
+      'receipt payload outcome must be merged, pr_created, kept, or discarded');
+  }
+  return sessionId;
+}
+
+function publicationRequestDigest(operation, payload) {
+  return requestSha256(operation, {
+    ...structuredClone(payload),
+    builder_version: ARTIFACT_BUILDER_VERSION,
+  });
+}
+
+function publicationOptions(dependencies = {}) {
+  const explicit = plainObject(dependencies.artifactOptions)
+    ? dependencies.artifactOptions : {};
+  return {
+    ...explicit,
+    ...(explicit.now === undefined
+      ? { now: dependencies.now || Date.now }
+      : {}),
+  };
+}
+
+function publicationGeneratedAt(publicationId) {
+  const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  let timestamp = 0;
+  for (const character of publicationId.slice(0, 10)) {
+    timestamp = (timestamp * 32) + alphabet.indexOf(character);
+  }
+  const maxFourDigitTimestamp = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
+  return new Date(timestamp % (maxFourDigitTimestamp + 1)).toISOString();
+}
+
+function publicationGit(project, dependencies = {}) {
+  const run = dependencies.spawnSync || spawnSync;
+  const execute = (args) => run('git', ['-C', project.projectRoot, ...args], {
+    encoding: 'utf8',
+    shell: false,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  const head = execute(['rev-parse', 'HEAD']);
+  if (head.status !== 0) return { head: '0000000', branch: 'HEAD', dirty: 'unknown' };
+  const branch = execute(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const status = execute(['status', '--porcelain']);
+  return {
+    head: head.stdout.trim(),
+    branch: branch.status === 0 && branch.stdout.trim() !== 'HEAD'
+      ? branch.stdout.trim() : 'HEAD',
+    dirty: status.status === 0 ? status.stdout.trim().length > 0 : 'unknown',
+  };
+}
+
+function authenticatePublicationSources(project, payload, options) {
+  const ordinary = authenticateSourceArtifacts(payload.source_artifacts, {
+    cwd: project.projectRoot,
+    io: options.io || fs,
+  });
+  if (payload.source_recurring_findings === undefined) return ordinary;
+  const recurring = authenticateSourceArtifacts([
+    { path: payload.source_recurring_findings },
+  ], {
+    cwd: project.projectRoot,
+    io: options.io || fs,
+    expectedIdentity: {
+      producer: 'deep-review',
+      artifact_kind: 'recurring-findings',
+    },
+  });
+  return {
+    records: [...recurring.records, ...ordinary.records],
+    evidence: [...recurring.evidence, ...ordinary.evidence],
+    recurringRunId: recurring.records[0] && recurring.records[0].run_id,
+  };
+}
+
+function buildPublicationEnvelope(operation, payload, sources, project, dependencies) {
+  const envelopeOptions = {
+    runId: payload.publication_id,
+    generatedAt: publicationGeneratedAt(payload.publication_id),
+    git: publicationGit(project, dependencies),
+    producerVersion: RUNTIME_VERSION,
+    toolVersions: { node: process.version },
+  };
+  const common = {
+    payload: payload.payload,
+    sessionId: payload.session_id,
+    sourceArtifacts: sources.records,
+    envelopeOptions,
+  };
+  if (operation === 'artifact.wrap-receipt') {
+    return wrapEvolveArtifact({
+      ...common,
+      artifactKind: 'evolve-receipt',
+      parentRunId: payload.parent_run_id || sources.recurringRunId,
+      sourceRecurringFindings: undefined,
+      sourceArtifactsAuthenticated: true,
+    });
+  }
+  if (operation === 'artifact.wrap-insights') {
+    return wrapEvolveArtifact({
+      ...common,
+      artifactKind: 'evolve-insights',
+      sourceArtifactsAuthenticated: true,
+    });
+  }
+  if (operation === 'artifact.emit-compaction') {
+    return buildCompactionArtifact({
+      ...common,
+      parentRunId: payload.parent_run_id,
+    });
+  }
+  if (operation === 'artifact.emit-handoff') {
+    return buildHandoffArtifact({
+      ...common,
+      parentRunId: payload.parent_run_id,
+    });
+  }
+  if (operation === 'transfer.export-feedback') {
+    return exportFeedback({
+      ...common,
+      sourceArtifactsAuthenticated: true,
+    });
+  }
+  throw operatorError('invalid_artifact_operation',
+    `unsupported artifact publication operation: ${operation}`);
+}
+
+function artifactKindForOperation(operation) {
+  return {
+    'artifact.wrap-receipt': 'receipt',
+    'artifact.wrap-insights': 'insights',
+    'artifact.emit-compaction': 'compaction',
+    'artifact.emit-handoff': 'handoff',
+    'transfer.export-feedback': 'feedback',
+  }[operation];
+}
+
+function publishArtifactOperation(operation, project, payload, dependencies = {}) {
+  const requestDigest = publicationRequestDigest(operation, payload);
+  const options = publicationOptions(dependencies);
+  const kind = artifactKindForOperation(operation);
+  const info = sessionInfo(project, payload.session_id, { requireDirectory: true });
+  const existing = readPublication({
+    stateRoot: project.stateRoot,
+    sessionRoot: info.sessionRoot,
+    sessionId: info.sessionId,
+    kind,
+    publicationId: payload.publication_id,
+    requestDigest,
+    options,
+  });
+  if (existing) return { result: existing, warnings: [] };
+
+  let result;
+  mutateCoordinationFiles(project.stateRoot, [info.relativeSession], (files) => {
+    const session = parseSessionText(files[info.relativeSession], info.sessionPath);
+    assertSessionIdentity(session, info.sessionId);
+    const actualDigest = sha256Digest(Buffer.from(files[info.relativeSession]));
+    if (actualDigest !== payload.expected_session_sha256) {
+      const raced = readPublication({
+        stateRoot: project.stateRoot,
+        sessionRoot: info.sessionRoot,
+        sessionId: info.sessionId,
+        kind,
+        publicationId: payload.publication_id,
+        requestDigest,
+        options,
+      });
+      if (raced) {
+        result = raced;
+        return null;
+      }
+      throw businessError('stale_preimage',
+        'expected_session_sha256 does not match current session authority');
+    }
+    const sources = authenticatePublicationSources(project, payload, options);
+    const envelope = buildPublicationEnvelope(operation, payload, sources,
+      project, dependencies);
+    const bytes = Buffer.from(`${JSON.stringify(envelope, null, 2)}\n`);
+    result = publishArtifact({
+      stateRoot: project.stateRoot,
+      sessionRoot: info.sessionRoot,
+      sessionId: info.sessionId,
+      kind,
+      publicationId: payload.publication_id,
+      requestDigest,
+      bytes,
+      legacyArtifactSha256: payload.legacy_artifact_sha256,
+      sourceEvidence: sources.evidence,
+      options,
+    });
+    return null;
+  }, transitionOptions(dependencies));
+  return { result, warnings: [] };
+}
+
 const HANDLERS = Object.freeze({
   'session.resolve-current': (request, project, dependencies) => {
     payloadFor(request, []);
@@ -5621,53 +5979,51 @@ const HANDLERS = Object.freeze({
       warnings: [],
     };
   },
-  'transfer.export-feedback': (request) => {
-    const payload = payloadFor(request, ['payload', 'source_artifacts', 'session_id']);
-    return {
-      result: exportFeedback({
-        payload: payload.payload,
-        sourceArtifacts: payload.source_artifacts || [],
-        sessionId: payload.session_id,
-      }),
-      warnings: [],
-    };
+  'transfer.export-feedback': (request, project, dependencies) => {
+    const payload = payloadFor(request, [
+      'payload', 'source_artifacts', 'session_id', 'publication_id',
+      'expected_session_sha256',
+    ]);
+    validatePublicationPayload(payload);
+    return publishArtifactOperation(request.operation, project, payload, dependencies);
   },
-  'artifact.wrap-receipt': (request) => {
-    const payload = payloadFor(request, ['payload', 'parent_run_id', 'session_id', 'source_artifacts', 'source_recurring_findings']);
-    return {
-      result: wrapEvolveArtifact({
-        artifactKind: 'evolve-receipt', payload: payload.payload,
-        parentRunId: payload.parent_run_id, sessionId: payload.session_id,
-        sourceArtifacts: payload.source_artifacts || [], sourceRecurringFindings: payload.source_recurring_findings,
-      }), warnings: [],
-    };
+  'artifact.wrap-receipt': (request, project, dependencies) => {
+    const payload = payloadFor(request, [
+      'payload', 'parent_run_id', 'session_id', 'source_artifacts',
+      'source_recurring_findings', 'publication_id', 'expected_session_sha256',
+      'legacy_artifact_sha256',
+    ]);
+    validatePublicationPayload(payload, {
+      requireOutcome: true,
+      allowParent: true,
+      allowRecurring: true,
+      allowLegacy: true,
+    });
+    return publishArtifactOperation(request.operation, project, payload, dependencies);
   },
-  'artifact.wrap-insights': (request) => {
-    const payload = payloadFor(request, ['payload', 'session_id', 'source_artifacts']);
-    return {
-      result: wrapEvolveArtifact({
-        artifactKind: 'evolve-insights', payload: payload.payload,
-        sessionId: payload.session_id, sourceArtifacts: payload.source_artifacts || [],
-      }), warnings: [],
-    };
+  'artifact.wrap-insights': (request, project, dependencies) => {
+    const payload = payloadFor(request, [
+      'payload', 'session_id', 'source_artifacts', 'publication_id',
+      'expected_session_sha256', 'legacy_artifact_sha256',
+    ]);
+    validatePublicationPayload(payload, { allowLegacy: true });
+    return publishArtifactOperation(request.operation, project, payload, dependencies);
   },
-  'artifact.emit-compaction': (request) => {
-    const payload = payloadFor(request, ['payload', 'parent_run_id', 'session_id', 'source_artifacts']);
-    return {
-      result: buildCompactionArtifact({
-        payload: payload.payload, parentRunId: payload.parent_run_id,
-        sessionId: payload.session_id, sourceArtifacts: payload.source_artifacts || [],
-      }), warnings: [],
-    };
+  'artifact.emit-compaction': (request, project, dependencies) => {
+    const payload = payloadFor(request, [
+      'payload', 'parent_run_id', 'session_id', 'source_artifacts',
+      'publication_id', 'expected_session_sha256',
+    ]);
+    validatePublicationPayload(payload, { allowParent: true });
+    return publishArtifactOperation(request.operation, project, payload, dependencies);
   },
-  'artifact.emit-handoff': (request) => {
-    const payload = payloadFor(request, ['payload', 'parent_run_id', 'session_id', 'source_artifacts']);
-    return {
-      result: buildHandoffArtifact({
-        payload: payload.payload, parentRunId: payload.parent_run_id,
-        sessionId: payload.session_id, sourceArtifacts: payload.source_artifacts || [],
-      }), warnings: [],
-    };
+  'artifact.emit-handoff': (request, project, dependencies) => {
+    const payload = payloadFor(request, [
+      'payload', 'parent_run_id', 'session_id', 'source_artifacts',
+      'publication_id', 'expected_session_sha256',
+    ]);
+    validatePublicationPayload(payload, { allowParent: true });
+    return publishArtifactOperation(request.operation, project, payload, dependencies);
   },
   'harness.generate': (request, project) => {
     const payload = payloadFor(request, ['session_id', 'spec']);
@@ -6882,29 +7238,33 @@ function runNativeLegacy(subcommand, args, env = process.env, cwd = process.cwd(
     return 0;
   }
   if (subcommand === 'append_meta_archive_local') {
-    const binding = bindLegacySessionDirectory(
-      path.join(legacyStateRoot, args[0] || ''), { requireDirectory: false },
-    );
-    const receipt = path.join(binding.sessionRoot, RECEIPT_FILE);
-    if (!fs.existsSync(receipt)) {
-      process.stderr.write(`session-helper: receipt not found for ${args[0] || ''}\n`);
-      return 1;
-    }
-    if (!dryRun && legacyReceiptIsInvalid(receipt)) {
-      fs.closeSync(fs.openSync(path.join(legacyStateRoot, 'meta-archive-local.jsonl'), 'a'));
-      return writeLegacyJqParseFailure();
+    try {
+      readReceipt(resolveProject({ project_root: projectRoot }), args[0] || '');
+    } catch (error) {
+      if (error && error.code === 'invalid_receipt_json' && !dryRun) {
+        fs.closeSync(fs.openSync(path.join(legacyStateRoot, 'meta-archive-local.jsonl'), 'a'));
+        return writeLegacyJqParseFailure();
+      }
+      if (error && ['receipt_missing', 'receipt_reference_missing'].includes(error.code)) {
+        process.stderr.write(`session-helper: receipt not found for ${args[0] || ''}\n`);
+        return 1;
+      }
+      process.stderr.write(`${error && error.message ? error.message : 'receipt preflight failed'}\n`);
+      return error && error.rc === 1 ? 1 : 2;
     }
   }
   if (subcommand === 'render_inherited_context') {
-    const binding = bindLegacySessionDirectory(
-      path.join(legacyStateRoot, args[0] || ''), { requireDirectory: false },
-    );
-    const receipt = path.join(binding.sessionRoot, RECEIPT_FILE);
-    if (!fs.existsSync(receipt)) {
-      process.stderr.write(`session-helper: parent receipt not found at ${receipt}\n`);
-      return 1;
+    try {
+      readReceipt(resolveProject({ project_root: projectRoot }), args[0] || '', 'parent receipt');
+    } catch (error) {
+      if (error && error.code === 'invalid_receipt_json') return writeLegacyJqParseFailure();
+      if (error && ['receipt_missing', 'receipt_reference_missing'].includes(error.code)) {
+        process.stderr.write(`session-helper: parent receipt not found for ${args[0] || ''}\n`);
+        return 1;
+      }
+      process.stderr.write(`${error && error.message ? error.message : 'parent receipt preflight failed'}\n`);
+      return error && error.rc === 1 ? 1 : 2;
     }
-    if (legacyReceiptIsInvalid(receipt)) return writeLegacyJqParseFailure();
   }
   if (subcommand === 'resolve_current') response = legacyRequest(projectRoot, 'session.resolve-current', {}, dependencies);
   else if (subcommand === 'list_sessions') {
@@ -7023,10 +7383,8 @@ function runNativeLegacy(subcommand, args, env = process.env, cwd = process.cwd(
   } else if (subcommand === 'append_meta_archive_local') {
     if (dryRun) {
       const project = resolveProject({ project_root: projectRoot });
-      const info = sessionInfo(project, args[0], { requireDirectory: true });
-      const receipt = path.join(info.sessionRoot, RECEIPT_FILE);
-      ensureContainedExisting(project, receipt, 'receipt');
-      process.stderr.write(`[dry-run] would execute: append to meta-archive-local.jsonl from ${receipt}\n`);
+      const resolved = readReceipt(project, args[0]);
+      process.stderr.write(`[dry-run] would execute: append to meta-archive-local.jsonl from ${resolved.receiptPath}\n`);
       return 0;
     }
     response = legacyRequest(projectRoot, 'session.append-local-archive', { session_id: args[0] }, dependencies);

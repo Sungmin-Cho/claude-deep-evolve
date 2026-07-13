@@ -972,11 +972,18 @@ function pruneTransfer({ dataRoot = resolveDataRoot(), now = Date.now(), selecte
   return { candidates, pruned: count, total: entries.length };
 }
 
-function exportFeedback({ payload, sourceArtifacts = [], envelopeOptions = {}, sessionId } = {}) {
+function exportFeedback({
+  payload,
+  sourceArtifacts = [],
+  envelopeOptions = {},
+  sessionId,
+  sourceArtifactsAuthenticated = false,
+} = {}) {
   requireObject(payload, 'feedback payload');
   for (const key of ['insights_for_deep_work', 'insights_for_deep_review']) requireArray(payload[key], key);
   return wrapEvolveArtifact({
     artifactKind: 'evolve-insights', payload, sourceArtifacts, sessionId, envelopeOptions,
+    sourceArtifactsAuthenticated,
   });
 }
 

@@ -524,8 +524,13 @@ test('session.complete verifies artifacts and Git, atomically owns completion/re
   recordBaseline(project);
   const reportBytes = Buffer.from('# Report\n\ncomplete\n');
   const receiptBytes = Buffer.from('{"schema_version":"1.0","outcome":"merged"}\n');
+  const versionedReceipt = path.join('artifacts', 'evolve-receipt',
+    '01J00000000000000000000590.json');
   fs.writeFileSync(path.join(project.sessionRoot, 'report.md'), reportBytes);
-  fs.writeFileSync(path.join(project.sessionRoot, 'evolve-receipt.json'), receiptBytes);
+  fs.mkdirSync(path.dirname(path.join(project.sessionRoot, versionedReceipt)), { recursive: true });
+  fs.writeFileSync(path.join(project.sessionRoot, versionedReceipt), receiptBytes);
+  fs.writeFileSync(path.join(project.sessionRoot, 'evolve-receipt.json'),
+    '{"schema_version":"1.0","outcome":"discarded","decoy":true}\n');
   const finalBranch = git(project.projectRoot, ['branch', '--show-current']);
   const finalCommit = git(project.projectRoot, ['rev-parse', 'HEAD']);
   const before = authority(project);
@@ -538,13 +543,14 @@ test('session.complete verifies artifacts and Git, atomically owns completion/re
     final_branch: finalBranch,
     final_commit: finalCommit,
     report: { relative_path: 'report.md', sha256: digest(reportBytes) },
-    receipt: { relative_path: 'evolve-receipt.json', sha256: digest(receiptBytes) },
+    receipt: { relative_path: versionedReceipt.split(path.sep).join('/'), sha256: digest(receiptBytes) },
     synthesis: clone(CASES.completion.synthesis),
     final_strategy: clone(CASES.completion.final_strategy),
   };
   const completed = expectSuccess(request(project.projectRoot, 'session.complete', payload),
     'session.complete');
   assert.equal(completed.session.status, 'completed');
+  assert.notEqual(completed.session_sha256, before.session_sha256);
   assert.deepEqual(completed.session.completion, {
     outcome: 'merged',
     final_branch: finalBranch,
@@ -568,7 +574,8 @@ test('session.complete verifies artifacts and Git, atomically owns completion/re
   createAndAppendSeed(badArtifact, { operationId: '01J00000000000000000000280' });
   recordBaseline(badArtifact, { operationId: '01J00000000000000000000281' });
   fs.writeFileSync(path.join(badArtifact.sessionRoot, 'report.md'), reportBytes);
-  fs.writeFileSync(path.join(badArtifact.sessionRoot, 'evolve-receipt.json'), receiptBytes);
+  fs.mkdirSync(path.dirname(path.join(badArtifact.sessionRoot, versionedReceipt)), { recursive: true });
+  fs.writeFileSync(path.join(badArtifact.sessionRoot, versionedReceipt), receiptBytes);
   const badBefore = authority(badArtifact);
   const rejected = request(badArtifact.projectRoot, 'session.complete', {
     ...payload,

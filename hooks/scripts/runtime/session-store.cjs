@@ -100,6 +100,35 @@ function renameWithRetry(from, to, {
   }
 }
 
+function linkWithRetry(from, to, {
+  io = fs,
+  platform = process.platform,
+  sleep = sleepSync,
+  attempts = 10,
+} = {}) {
+  const delays = [10, 20, 40, 80, 120, 150, 180, 200, 200];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      io.linkSync(from, to);
+      return;
+    } catch (error) {
+      if (platform !== 'win32'
+          || !TRANSIENT_WINDOWS_RENAME.has(error && error.code)
+          || attempt >= attempts - 1) {
+        throw error;
+      }
+      sleep(delays[Math.min(attempt, delays.length - 1)]);
+    }
+  }
+}
+
+function sameInstallIdentity(left, right) {
+  return Boolean(left && right)
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.mode === right.mode;
+}
+
 function syncRenamedDirectoryBestEffort(directoryPath, platform = process.platform, {
   io = fs,
   onDiagnostic = () => {},
@@ -149,6 +178,101 @@ function atomicWriteFile(filePath, data, {
     }
     if (!installed) {
       try { io.unlinkSync(tempPath); } catch {}
+    }
+  }
+}
+
+// Installs one durable regular file without ever replacing an existing path.
+// The caller owns containment and parent-directory authentication. A hard-link
+// install keeps the flushed temporary inode and the public target identical;
+// EEXIST is an authority conflict, never a rename-over-target fallback.
+function installFileExclusive(filePath, data, {
+  io = fs,
+  platform = process.platform,
+  sleep = sleepSync,
+  tempNonce = nonce(),
+  mode = 0o600,
+  onDiagnostic = () => {},
+  onPhase = () => {},
+  phasePrefix = 'exclusive-install',
+  beforeInstall,
+} = {}) {
+  const directory = path.dirname(filePath);
+  const parent = io.lstatSync(directory);
+  if (!parent.isDirectory() || parent.isSymbolicLink()) {
+    throw Object.assign(new Error(`exclusive install parent is not a directory: ${directory}`), {
+      code: 'artifact_path_escape',
+      rc: 2,
+    });
+  }
+  const tempPath = path.join(directory,
+    `.${path.basename(filePath)}.tmp.${process.pid}.${tempNonce}`);
+  let fd;
+  let linked = false;
+  let tempIdentity;
+  let tempCleaned = false;
+  const phase = (name) => onPhase(`after-${phasePrefix}-${name}`, {
+    filePath,
+    tempPath,
+  });
+  const cleanupOwnedTemp = () => {
+    if (!tempIdentity || tempCleaned) return false;
+    let current;
+    try { current = io.lstatSync(tempPath); }
+    catch (error) {
+      if (error && error.code === 'ENOENT') {
+        tempCleaned = true;
+        return false;
+      }
+      throw error;
+    }
+    if (current.isSymbolicLink() || !sameInstallIdentity(tempIdentity, current)) {
+      onDiagnostic({
+        code: 'exclusive_temp_identity_changed',
+        file_path: filePath,
+        temp_path: tempPath,
+      });
+      return false;
+    }
+    io.unlinkSync(tempPath);
+    tempCleaned = true;
+    return true;
+  };
+  try {
+    fd = io.openSync(tempPath, 'wx', mode);
+    tempIdentity = io.fstatSync(fd);
+    phase('temp-open');
+    io.writeFileSync(fd, data);
+    phase('temp-write');
+    fsyncFile(io, fd, { platform, sleep });
+    phase('temp-flush');
+    io.closeSync(fd);
+    fd = undefined;
+    const currentParent = io.lstatSync(directory);
+    if (currentParent.isSymbolicLink() || !currentParent.isDirectory()
+        || !sameInstallIdentity(parent, currentParent)) {
+      throw Object.assign(new Error(`exclusive install parent changed: ${directory}`), {
+        code: 'artifact_path_escape',
+        rc: 2,
+      });
+    }
+    if (typeof beforeInstall === 'function') beforeInstall({ filePath, tempPath });
+    linkWithRetry(tempPath, filePath, { io, platform, sleep });
+    linked = true;
+    phase('install');
+    cleanupOwnedTemp();
+    syncRenamedDirectoryBestEffort(directory, platform, { io, onDiagnostic });
+    phase('cleanup');
+    return { committed: true, file_path: filePath };
+  } finally {
+    if (fd !== undefined) {
+      try { io.closeSync(fd); } catch {}
+    }
+    if (!tempCleaned) {
+      try { cleanupOwnedTemp(); } catch {}
+    }
+    if (linked) {
+      syncRenamedDirectoryBestEffort(directory, platform, { io, onDiagnostic });
     }
   }
 }
@@ -984,6 +1108,7 @@ module.exports = {
   withDirectoryLock,
   renameWithRetry,
   atomicWriteFile,
+  installFileExclusive,
   persistCommitMarker,
   validateCommitMarker,
   syncRenamedDirectoryBestEffort,
