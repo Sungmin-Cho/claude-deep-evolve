@@ -53,6 +53,33 @@ const TASK3_OPERATIONS = [
   'scheduler.borrow-preflight',
   'scheduler.borrow-abandoned',
   'scheduler.classify-convergence',
+  'coord.build-seed-prompt',
+  'coord.write-seed-program',
+  'coord.status',
+  'worktree.create-seed',
+  'worktree.validate-seed',
+  'worktree.remove-seed',
+  'worktree.create-synthesis',
+  'worktree.cleanup-failed-synthesis',
+  'archive.backtrack',
+  'archive.save-strategy',
+  'archive.restore-strategy',
+  'archive.fork-strategy',
+  'synthesis.process-beta',
+  'synthesis.select-baseline',
+  'synthesis.forum-summary',
+  'synthesis.cross-seed-audit',
+  'synthesis.write-fallback-note',
+  'synthesis.collect',
+  'synthesis.finalize',
+  'transfer.lookup',
+  'transfer.record',
+  'transfer.prune',
+  'transfer.export-feedback',
+  'artifact.wrap-receipt',
+  'artifact.wrap-insights',
+  'artifact.emit-compaction',
+  'artifact.emit-handoff',
 ];
 
 const LEGACY_ARMS = [
@@ -142,7 +169,7 @@ function captureMain(argv, dependencies = {}) {
   }
 }
 
-test('exports the immutable Task 4 registry and runtime version', () => {
+test('exports the immutable Task 5 registry and runtime version', () => {
   assert.deepEqual([...OPERATIONS].sort(), [...TASK3_OPERATIONS].sort());
   assert.equal(Object.isFrozen(OPERATIONS), true);
   assert.throws(() => OPERATIONS.push('metrics.entropy'), TypeError);
@@ -178,17 +205,11 @@ test('Task 4 active protocols route retired scheduling oracles through exact dis
   for (const oracle of retired) assert.doesNotMatch(packaged, new RegExp(oracle.replace('.', '\\.')));
 });
 
-test('routes all 33 legacy subcommands plus help, including deferred arms', () => {
+test('routes all 33 legacy subcommands plus help through native arms', () => {
   assert.deepEqual(Object.keys(LEGACY_ROUTES).sort(), [...LEGACY_ARMS].sort());
   assert.equal(Object.isFrozen(LEGACY_ROUTES), true);
   for (const arm of LEGACY_ARMS) {
     assert.match(LEGACY_ROUTES[arm], /^(?:native|legacy)$/);
-  }
-  for (const arm of [
-    'create_seed_worktree',
-    'create_synthesis_worktree',
-  ]) {
-    assert.equal(LEGACY_ROUTES[arm], 'legacy');
   }
   for (const arm of [
     'resolve_current',
@@ -200,12 +221,17 @@ test('routes all 33 legacy subcommands plus help, including deferred arms', () =
     'migrate_v2_weights',
     'compute_init_budget_split',
     'append_forum_event',
+    'create_seed_worktree',
+    'validate_seed_worktree',
+    'remove_seed_worktree',
+    'create_synthesis_worktree',
+    'cleanup_failed_synthesis_worktree',
   ]) {
     assert.equal(LEGACY_ROUTES[arm], 'native');
   }
 });
 
-test('the compatibility split is exactly 29 native arms and 5 deferred oracle routes', () => {
+test('the compatibility split is exactly 34 native arms and no retained-oracle routes', () => {
   const native = LEGACY_ARMS.filter((arm) => LEGACY_ROUTES[arm] === 'native');
   const deferred = LEGACY_ARMS.filter((arm) => LEGACY_ROUTES[arm] === 'legacy');
   assert.deepEqual(native, [
@@ -227,6 +253,9 @@ test('the compatibility split is exactly 29 native arms and 5 deferred oracle ro
     'count_flagged_since_last_expansion',
     'retry_budget_remaining',
     'resolve_helper_path',
+    'create_seed_worktree',
+    'validate_seed_worktree',
+    'remove_seed_worktree',
     'append_seed_to_session_yaml',
     'set_virtual_parallel_field',
     'init_virtual_parallel_block',
@@ -238,14 +267,10 @@ test('the compatibility split is exactly 29 native arms and 5 deferred oracle ro
     'append_journal_event',
     'append_kill_queue_entry',
     'drain_kill_queue',
-  ]);
-  assert.deepEqual(deferred, [
-    'create_seed_worktree',
-    'validate_seed_worktree',
-    'remove_seed_worktree',
     'create_synthesis_worktree',
     'cleanup_failed_synthesis_worktree',
   ]);
+  assert.deepEqual(deferred, []);
 });
 
 test('rejects malformed, prototype-bearing, and unknown request fields', () => {

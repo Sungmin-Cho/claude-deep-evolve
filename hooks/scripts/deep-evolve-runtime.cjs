@@ -44,6 +44,38 @@ const {
   findBorrowAbandoned,
   classifyConvergence,
 } = require('./runtime/scheduler.cjs');
+const {
+  createSeedWorktree,
+  validateSeedWorktree,
+  removeSeedWorktree,
+  createSynthesisWorktree,
+  cleanupFailedSynthesisWorktree,
+  backtrackArchive,
+  saveStrategyArchive,
+  restoreStrategyArchive,
+  forkStrategyArchive,
+} = require('./runtime/worktree-store.cjs');
+const {
+  processBeta,
+  processBetaGrowth,
+  selectBaseline,
+  buildSeedPrompt,
+  writeSeedProgram,
+  renderForumSummary,
+  renderCrossSeedAudit,
+  renderFallbackNote,
+  renderStatus,
+  collectSynthesis,
+  finalizeSynthesis,
+  resolveDataRoot,
+  lookupTransfer,
+  recordTransfer,
+  pruneTransfer,
+  exportFeedback,
+} = require('./runtime/synthesis.cjs');
+const { wrapEvolveArtifact } = require('./wrap-evolve-envelope.js');
+const { buildHandoffArtifact } = require('./emit-handoff.js');
+const { buildCompactionArtifact } = require('./emit-compaction-state.js');
 const { findProjectRoot, isPathInside } = require('./runtime/runtime-paths.cjs');
 
 const RUNTIME_VERSION = require('../../package.json').version;
@@ -85,6 +117,33 @@ const OPERATIONS = Object.freeze([
   'scheduler.borrow-preflight',
   'scheduler.borrow-abandoned',
   'scheduler.classify-convergence',
+  'coord.build-seed-prompt',
+  'coord.write-seed-program',
+  'coord.status',
+  'worktree.create-seed',
+  'worktree.validate-seed',
+  'worktree.remove-seed',
+  'worktree.create-synthesis',
+  'worktree.cleanup-failed-synthesis',
+  'archive.backtrack',
+  'archive.save-strategy',
+  'archive.restore-strategy',
+  'archive.fork-strategy',
+  'synthesis.process-beta',
+  'synthesis.select-baseline',
+  'synthesis.forum-summary',
+  'synthesis.cross-seed-audit',
+  'synthesis.write-fallback-note',
+  'synthesis.collect',
+  'synthesis.finalize',
+  'transfer.lookup',
+  'transfer.record',
+  'transfer.prune',
+  'transfer.export-feedback',
+  'artifact.wrap-receipt',
+  'artifact.wrap-insights',
+  'artifact.emit-compaction',
+  'artifact.emit-handoff',
 ]);
 
 const TASK4_OWNS_RECOVERY = new Set(OPERATIONS.filter((operation) =>
@@ -122,15 +181,14 @@ const NATIVE_LEGACY_ARMS = [
   'append_journal_event',
   'append_kill_queue_entry',
   'drain_kill_queue',
-];
-
-const DEFERRED_LEGACY_ARMS = [
   'create_seed_worktree',
   'validate_seed_worktree',
   'remove_seed_worktree',
   'create_synthesis_worktree',
   'cleanup_failed_synthesis_worktree',
 ];
+
+const DEFERRED_LEGACY_ARMS = [];
 
 const LEGACY_ROUTES = Object.freeze(Object.fromEntries([
   ...NATIVE_LEGACY_ARMS.map((name) => [name, 'native']),
@@ -2545,6 +2603,48 @@ function operationVirtualRebuild(project, payload) {
   return { result: { session: patched.session }, warnings: patched.warnings };
 }
 
+function task5WorktreeOptions(project, info, dependencies = {}) {
+  return {
+    projectRoot: project.projectRoot,
+    sessionRoot: info.sessionRoot,
+    sessionId: info.sessionId,
+    spawnSync: dependencies.spawnSync,
+    now: dependencies.now,
+    randomUUID: dependencies.randomUUID,
+    onPhase: dependencies.onWorktreePhase,
+  };
+}
+
+function task5OutputPath(info, parts) {
+  let current = info.sessionRoot;
+  for (const part of parts.slice(0, -1)) {
+    current = path.join(current, part);
+    if (fs.existsSync(current)) {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw operatorError('output_path_invalid', `output parent must be a regular directory: ${current}`);
+      }
+    } else fs.mkdirSync(current);
+  }
+  const output = path.join(info.sessionRoot, ...parts);
+  if (!isPathInside(info.sessionRoot, output)) throw operatorError('output_path_escape', 'output path escapes session root');
+  if (fs.existsSync(output) && fs.lstatSync(output).isSymbolicLink()) {
+    throw operatorError('output_path_symlink', `output path must not be a symlink: ${output}`);
+  }
+  return output;
+}
+
+function task5SessionTexts(project, info, names) {
+  const relatives = names.map((name) => relativeSessionSibling(info, name));
+  const files = readCoordinationFiles(project.stateRoot, relatives);
+  return Object.fromEntries(names.map((name, index) => [name, files[relatives[index]]]));
+}
+
+function task5DataRoot(dependencies = {}) {
+  const environment = plainObject(dependencies.env) ? dependencies.env : process.env;
+  return resolveDataRoot(environment, dependencies.homedir);
+}
+
 const HANDLERS = Object.freeze({
   'session.resolve-current': (request, project, dependencies) => {
     payloadFor(request, []);
@@ -2845,6 +2945,309 @@ const HANDLERS = Object.freeze({
       'threshold', 'p3_floor', 'epoch',
     ]);
     return { result: classifyConvergence(payload), warnings: [] };
+  },
+  'coord.build-seed-prompt': (request, project) => {
+    const payload = payloadFor(request, [
+      'seed_id', 'worktree_path', 'session_root', 'branch', 'n_block', 'helper_path',
+    ]);
+    const sessionRoot = requireString(payload.session_root, 'payload.session_root');
+    if (!path.isAbsolute(sessionRoot) || !isPathInside(project.stateRoot, sessionRoot)) {
+      throw operatorError('session_path_escape', 'payload.session_root must be an absolute path inside .deep-evolve');
+    }
+    return { result: { prompt: buildSeedPrompt(payload) }, warnings: [] };
+  },
+  'coord.write-seed-program': (request, project) => {
+    const payload = payloadFor(request, ['session_id', 'seed_id', 'beta']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    const seedId = requireInteger(payload.seed_id, 'payload.seed_id', { min: 1 });
+    const result = writeSeedProgram({
+      baseProgramPath: path.join(info.sessionRoot, 'program.md'),
+      worktreePath: path.join(info.sessionRoot, 'worktrees', `seed_${seedId}`),
+      beta: payload.beta === undefined ? null : payload.beta,
+    });
+    return { result, warnings: [] };
+  },
+  'coord.status': (request, project) => {
+    const payload = payloadFor(request, ['session_id']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    const texts = task5SessionTexts(project, info, ['session.yaml', 'journal.jsonl', 'forum.jsonl']);
+    const session = parseStateDocument(texts['session.yaml'], { sourcePath: info.sessionPath });
+    const result = renderStatus({
+      session,
+      journal_text: texts['journal.jsonl'],
+      forum_text: texts['forum.jsonl'],
+    });
+    return { result: { dashboard: result.dashboard }, warnings: result.warnings };
+  },
+  'worktree.create-seed': (request, project, dependencies) => {
+    const payload = payloadFor(request, ['session_id', 'seed_id', 'base_commit']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    const result = createSeedWorktree({
+      ...task5WorktreeOptions(project, info, dependencies),
+      seedId: payload.seed_id,
+      baseCommit: payload.base_commit,
+    });
+    return { result, warnings: [] };
+  },
+  'worktree.validate-seed': (request, project, dependencies) => {
+    const payload = payloadFor(request, ['session_id', 'seed_id', 'pre_dispatch_head']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    const result = validateSeedWorktree({
+      ...task5WorktreeOptions(project, info, dependencies),
+      seedId: payload.seed_id,
+      preDispatchHead: payload.pre_dispatch_head,
+    });
+    return { result, warnings: [] };
+  },
+  'worktree.remove-seed': (request, project, dependencies) => {
+    const payload = payloadFor(request, ['session_id', 'seed_id']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    return {
+      result: removeSeedWorktree({
+        ...task5WorktreeOptions(project, info, dependencies), seedId: payload.seed_id,
+      }),
+      warnings: [],
+    };
+  },
+  'worktree.create-synthesis': (request, project, dependencies) => {
+    const payload = payloadFor(request, ['session_id', 'baseline_commit']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    return {
+      result: createSynthesisWorktree({
+        ...task5WorktreeOptions(project, info, dependencies), baselineCommit: payload.baseline_commit,
+      }),
+      warnings: [],
+    };
+  },
+  'worktree.cleanup-failed-synthesis': (request, project, dependencies) => {
+    const payload = payloadFor(request, ['session_id']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    return {
+      result: cleanupFailedSynthesisWorktree(task5WorktreeOptions(project, info, dependencies)),
+      warnings: [],
+    };
+  },
+  'archive.backtrack': (request, project, dependencies) => {
+    const payload = payloadFor(request, [
+      'session_id', 'candidates', 'strategy', 'fork_number', 'reason', 'program_context',
+    ]);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    const journalRelative = relativeSessionSibling(info, 'journal.jsonl');
+    const result = backtrackArchive({
+      ...task5WorktreeOptions(project, info, dependencies),
+      candidates: payload.candidates,
+      strategy: payload.strategy,
+      forkNumber: payload.fork_number,
+      reason: payload.reason,
+      programContext: payload.program_context,
+      commitState(context) {
+        mutateCoordinationFiles(project.stateRoot, [info.relativeSession, journalRelative], (files) => {
+          parseJsonl(files[journalRelative], 'journal.jsonl');
+          const session = parseStateDocument(files[info.relativeSession], { sourcePath: info.sessionPath });
+          const lineage = plainObject(session.lineage) ? { ...session.lineage } : {};
+          if (typeof lineage.current_branch === 'string' && lineage.current_branch !== context.previous_branch) {
+            throw businessError('branch_mismatch', `session lineage expected '${lineage.current_branch}', actual '${context.previous_branch}'`);
+          }
+          const previousBranches = Array.isArray(lineage.previous_branches) ? [...lineage.previous_branches] : [];
+          previousBranches.push(context.previous_branch);
+          session.lineage = {
+            ...lineage,
+            current_branch: context.branch,
+            forked_from: {
+              commit: context.commit,
+              keep_id: context.selected.id,
+              reason: context.reason,
+            },
+            previous_branches: previousBranches,
+          };
+          validateStoredSession(session);
+          const event = {
+            event: 'branch_fork',
+            from_commit: context.commit,
+            to_branch: context.branch,
+            reason: context.reason,
+            timestamp: isoNow(dependencies),
+          };
+          return {
+            [info.relativeSession]: serializeStateDocument(session),
+            [journalRelative]: appendJsonLine(files[journalRelative], event),
+          };
+        }, dependencies.storeOptions || {});
+      },
+    });
+    return { result, warnings: [] };
+  },
+  'archive.save-strategy': (request, project) => {
+    const payload = payloadFor(request, ['session_id', 'generation', 'metrics']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    const strategyPath = path.join(info.sessionRoot, 'strategy.yaml');
+    const programPath = path.join(info.sessionRoot, 'program.md');
+    ensureContainedExisting(project, strategyPath, 'strategy');
+    ensureContainedExisting(project, programPath, 'program');
+    return {
+      result: saveStrategyArchive({
+        sessionRoot: info.sessionRoot,
+        generation: payload.generation,
+        strategyText: fs.readFileSync(strategyPath, 'utf8'),
+        programText: fs.readFileSync(programPath, 'utf8'),
+        metrics: payload.metrics,
+      }),
+      warnings: [],
+    };
+  },
+  'archive.restore-strategy': (request, project) => {
+    const payload = payloadFor(request, ['session_id', 'generation']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    return { result: restoreStrategyArchive({ sessionRoot: info.sessionRoot, generation: payload.generation }), warnings: [] };
+  },
+  'archive.fork-strategy': (request, project, dependencies) => {
+    const payload = payloadFor(request, ['session_id', 'generations']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    return {
+      result: forkStrategyArchive({
+        sessionRoot: info.sessionRoot,
+        generations: payload.generations,
+        lockOptions: dependencies.archiveLockOptions,
+      }),
+      warnings: [],
+    };
+  },
+  'synthesis.process-beta': (request) => {
+    const payload = payloadFor(request, ['mode', 'n', 'project_analysis', 'existing_seeds', 'input']);
+    const mode = payload.mode === undefined ? 'init' : payload.mode;
+    const result = mode === 'growth'
+      ? processBetaGrowth(payload.existing_seeds, payload.input)
+      : processBeta(payload.n, payload.input);
+    return { result, warnings: [] };
+  },
+  'synthesis.select-baseline': (request) => {
+    const payload = payloadFor(request, ['seeds']);
+    return { result: selectBaseline(payload), warnings: [] };
+  },
+  'synthesis.forum-summary': (request, project) => {
+    const payload = payloadFor(request, ['session_id', 'generation']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    const forum = readJournalJsonl({
+      stateRoot: project.stateRoot, relativePath: `${info.sessionId}/forum.jsonl`, skipMalformed: true,
+    });
+    const markdown = renderForumSummary(forum.records, payload.generation);
+    const output = task5OutputPath(info, ['meta-analyses', `gen-${payload.generation}`, 'forum-summary.md']);
+    atomicWriteFile(output, markdown);
+    return { result: { output_path: output, markdown }, warnings: forum.warnings };
+  },
+  'synthesis.cross-seed-audit': (request, project) => {
+    const payload = payloadFor(request, ['session_id']);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    const forum = readJournalJsonl({ stateRoot: project.stateRoot, relativePath: `${info.sessionId}/forum.jsonl`, skipMalformed: true });
+    const journal = readJournalJsonl({ stateRoot: project.stateRoot, relativePath: `${info.sessionId}/journal.jsonl`, skipMalformed: true });
+    const rendered = renderCrossSeedAudit(forum.records, journal.records, [...forum.warnings, ...journal.warnings]);
+    const output = task5OutputPath(info, ['completion', 'cross_seed_audit.md']);
+    atomicWriteFile(output, rendered.markdown);
+    return { result: { output_path: output, markdown: rendered.markdown }, warnings: rendered.warnings };
+  },
+  'synthesis.write-fallback-note': (request, project) => {
+    const payload = payloadFor(request, [
+      'session_id', 'baseline_reasoning', 'synthesis_q', 'baseline_q', 'user_choice',
+    ]);
+    const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
+    const text = task5SessionTexts(project, info, ['session.yaml'])['session.yaml'];
+    const session = parseStateDocument(text, { sourcePath: info.sessionPath });
+    const markdown = renderFallbackNote({
+      session,
+      baseline_reasoning: payload.baseline_reasoning,
+      synthesis_q: payload.synthesis_q,
+      baseline_q: payload.baseline_q,
+      user_choice: payload.user_choice,
+    });
+    const output = task5OutputPath(info, ['completion', 'fallback_note.md']);
+    atomicWriteFile(output, markdown);
+    return { result: { output_path: output, markdown }, warnings: [] };
+  },
+  'synthesis.collect': (request) => {
+    const payload = payloadFor(request, ['seed_reports', 'baseline_selection', 'cross_seed_audit']);
+    return { result: collectSynthesis(payload), warnings: [] };
+  },
+  'synthesis.finalize': (request) => {
+    const payload = payloadFor(request, [
+      'n', 'baseline_q', 'synthesis_q', 'regression_tolerance', 'user_choice',
+    ]);
+    return { result: finalizeSynthesis(payload), warnings: [] };
+  },
+  'transfer.lookup': (request, _project, dependencies) => {
+    const payload = payloadFor(request, ['selected_id']);
+    return { result: lookupTransfer({ dataRoot: task5DataRoot(dependencies), selectedId: payload.selected_id }), warnings: [] };
+  },
+  'transfer.record': (request, _project, dependencies) => {
+    const payload = payloadFor(request, ['entry', 'source_id', 'this_session_success']);
+    return {
+      result: recordTransfer({
+        dataRoot: task5DataRoot(dependencies),
+        entry: payload.entry,
+        sourceId: payload.source_id,
+        thisSessionSuccess: payload.this_session_success === undefined ? 0 : payload.this_session_success,
+        lockOptions: dependencies.archiveLockOptions,
+      }),
+      warnings: [],
+    };
+  },
+  'transfer.prune': (request, _project, dependencies) => {
+    const payload = payloadFor(request, ['selected_ids']);
+    const now = dependencies.now ? dependencies.now() : Date.now();
+    return {
+      result: pruneTransfer({
+        dataRoot: task5DataRoot(dependencies), now,
+        selectedIds: payload.selected_ids || [], lockOptions: dependencies.archiveLockOptions,
+      }),
+      warnings: [],
+    };
+  },
+  'transfer.export-feedback': (request) => {
+    const payload = payloadFor(request, ['payload', 'source_artifacts', 'session_id']);
+    return {
+      result: exportFeedback({
+        payload: payload.payload,
+        sourceArtifacts: payload.source_artifacts || [],
+        sessionId: payload.session_id,
+      }),
+      warnings: [],
+    };
+  },
+  'artifact.wrap-receipt': (request) => {
+    const payload = payloadFor(request, ['payload', 'parent_run_id', 'session_id', 'source_artifacts', 'source_recurring_findings']);
+    return {
+      result: wrapEvolveArtifact({
+        artifactKind: 'evolve-receipt', payload: payload.payload,
+        parentRunId: payload.parent_run_id, sessionId: payload.session_id,
+        sourceArtifacts: payload.source_artifacts || [], sourceRecurringFindings: payload.source_recurring_findings,
+      }), warnings: [],
+    };
+  },
+  'artifact.wrap-insights': (request) => {
+    const payload = payloadFor(request, ['payload', 'session_id', 'source_artifacts']);
+    return {
+      result: wrapEvolveArtifact({
+        artifactKind: 'evolve-insights', payload: payload.payload,
+        sessionId: payload.session_id, sourceArtifacts: payload.source_artifacts || [],
+      }), warnings: [],
+    };
+  },
+  'artifact.emit-compaction': (request) => {
+    const payload = payloadFor(request, ['payload', 'parent_run_id', 'session_id', 'source_artifacts']);
+    return {
+      result: buildCompactionArtifact({
+        payload: payload.payload, parentRunId: payload.parent_run_id,
+        sessionId: payload.session_id, sourceArtifacts: payload.source_artifacts || [],
+      }), warnings: [],
+    };
+  },
+  'artifact.emit-handoff': (request) => {
+    const payload = payloadFor(request, ['payload', 'parent_run_id', 'session_id', 'source_artifacts']);
+    return {
+      result: buildHandoffArtifact({
+        payload: payload.payload, parentRunId: payload.parent_run_id,
+        sessionId: payload.session_id, sourceArtifacts: payload.source_artifacts || [],
+      }), warnings: [],
+    };
   },
 });
 
@@ -3815,6 +4218,80 @@ function runTask4Legacy(subcommand, args, env, cwd, dependencies) {
   }
 }
 
+function runTask5Legacy(subcommand, args, env, cwd, dryRun, dependencies) {
+  if (![
+    'create_seed_worktree', 'validate_seed_worktree', 'remove_seed_worktree',
+    'create_synthesis_worktree', 'cleanup_failed_synthesis_worktree',
+  ].includes(subcommand)) return null;
+  if (!env.SESSION_ROOT) {
+    process.stderr.write(`${subcommand}: SESSION_ROOT not set\n`);
+    return 2;
+  }
+  if (!env.SESSION_ID) {
+    process.stderr.write(`${subcommand}: SESSION_ID not set\n`);
+    return 2;
+  }
+  let context;
+  try { context = task4LegacySession(env, cwd); }
+  catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    return 2;
+  }
+  const common = {
+    projectRoot: context.projectRoot,
+    sessionRoot: context.sessionRoot,
+    sessionId: env.SESSION_ID,
+    spawnSync: dependencies.spawnSync,
+    now: dependencies.now,
+    randomUUID: dependencies.randomUUID,
+    onPhase: dependencies.onWorktreePhase,
+  };
+  if (dryRun) {
+    process.stderr.write(`[dry-run] would execute native ${subcommand}\n`);
+    return 0;
+  }
+  try {
+    if (['create_seed_worktree', 'validate_seed_worktree', 'remove_seed_worktree'].includes(subcommand)) {
+      if (!args[0]) {
+        process.stderr.write(`usage: ${subcommand} <seed_id>${subcommand === 'validate_seed_worktree' ? ' [pre_head]' : ''}\n`);
+        return 2;
+      }
+      if (!/^[1-9]\d*$/.test(args[0])) throw operatorError('invalid_seed_id', 'seed_id must be a positive integer');
+      const seedId = Number(args[0]);
+      if (subcommand === 'create_seed_worktree') {
+        const result = createSeedWorktree({ ...common, seedId });
+        process.stdout.write(`${seedId}\t${result.worktree_path}\t${result.branch}\n`);
+      } else if (subcommand === 'validate_seed_worktree') {
+        validateSeedWorktree({ ...common, seedId, preDispatchHead: args[1] || undefined });
+        process.stdout.write('clean\n');
+      } else removeSeedWorktree({ ...common, seedId });
+      return 0;
+    }
+    if (subcommand === 'create_synthesis_worktree') {
+      if (!args[0]) {
+        process.stderr.write('usage: create_synthesis_worktree <baseline_commit>\n');
+        return 2;
+      }
+      createSynthesisWorktree({ ...common, baselineCommit: args[0] });
+      return 0;
+    }
+    cleanupFailedSynthesisWorktree(common);
+    return 0;
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    if (subcommand === 'validate_seed_worktree') {
+      const exitCodes = {
+        worktree_missing: 3,
+        worktree_off_branch: 4,
+        worktree_dirty: 5,
+        worktree_history_rewritten: 6,
+      };
+      if (error && Object.hasOwn(exitCodes, error.code)) return exitCodes[error.code];
+    }
+    return error.rc === 1 ? 1 : 2;
+  }
+}
+
 function runNativeLegacy(subcommand, args, env = process.env, cwd = process.cwd(), dryRun = false,
   dependencies = {}) {
   let response;
@@ -3853,6 +4330,8 @@ function runNativeLegacy(subcommand, args, env = process.env, cwd = process.cwd(
 
   const task4Status = runTask4Legacy(subcommand, args, env, cwd, dependencies);
   if (task4Status !== null) return task4Status;
+  const task5Status = runTask5Legacy(subcommand, args, env, cwd, dryRun, dependencies);
+  if (task5Status !== null) return task5Status;
 
   const virtualArm = [
     'append_seed_to_session_yaml',

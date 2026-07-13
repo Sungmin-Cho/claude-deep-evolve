@@ -272,6 +272,37 @@ function atomicWriteJson(targetPath, obj) {
   fs.renameSync(tmp, targetPath);
 }
 
+function buildCompactionArtifact({
+  payload,
+  parentRunId,
+  sessionId,
+  sourceArtifacts = [],
+  envelopeOptions = {},
+} = {}) {
+  const errors = validateCompactionPayload(payload);
+  if (errors.length > 0) {
+    const error = new Error(`compaction-state payload validation failed: ${errors.join('; ')}`);
+    error.code = 'compaction_payload_invalid';
+    error.rc = 1;
+    error.details = { errors };
+    throw error;
+  }
+  if (!Array.isArray(sourceArtifacts)) {
+    const error = new Error('sourceArtifacts must be an array');
+    error.code = 'invalid_source_artifacts';
+    error.rc = 2;
+    throw error;
+  }
+  return env.wrapEnvelope({
+    ...envelopeOptions,
+    artifactKind: 'compaction-state',
+    payload,
+    parentRunId,
+    sessionId,
+    sourceArtifacts,
+  });
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.output) usage('missing required flag --output');
@@ -370,4 +401,5 @@ module.exports = {
   validateCompactionPayload,
   buildPayloadFromFlags,
   tryReadEnvelopeRunId,
+  buildCompactionArtifact,
 };

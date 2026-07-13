@@ -216,7 +216,7 @@ test('all four legacy kill fixtures preserve N, pool, and seed identity aliases'
   }
 });
 
-test('Task 4 operations are registered, Task 5 coordination operations remain absent, and legacy arms are native', () => {
+test('Task 4 operations remain registered and Task 5 coordination operations are now native', () => {
   const expected = [
     'metrics.entropy', 'metrics.migrate-v2-weights', 'metrics.count-flagged',
     'metrics.retry-budget', 'metrics.init-budget-split', 'metrics.grow-allocation',
@@ -227,8 +227,8 @@ test('Task 4 operations are registered, Task 5 coordination operations remain ab
     'coord.drain-kill-queue',
   ];
   for (const operation of expected) assert.ok(OPERATIONS.includes(operation), operation);
-  for (const deferred of ['coord.build-seed-prompt', 'coord.write-seed-program', 'coord.status']) {
-    assert.equal(OPERATIONS.includes(deferred), false, deferred);
+  for (const operation of ['coord.build-seed-prompt', 'coord.write-seed-program', 'coord.status']) {
+    assert.equal(OPERATIONS.includes(operation), true, operation);
   }
   for (const arm of [
     'entropy_compute', 'migrate_v2_weights', 'count_flagged_since_last_expansion',

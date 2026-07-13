@@ -244,6 +244,37 @@ function atomicWriteJson(targetPath, obj) {
   fs.renameSync(tmp, targetPath);
 }
 
+function buildHandoffArtifact({
+  payload,
+  parentRunId,
+  sessionId,
+  sourceArtifacts = [],
+  envelopeOptions = {},
+} = {}) {
+  const errors = validateHandoffPayload(payload);
+  if (errors.length > 0) {
+    const error = new Error(`handoff payload validation failed: ${errors.join('; ')}`);
+    error.code = 'handoff_payload_invalid';
+    error.rc = 1;
+    error.details = { errors };
+    throw error;
+  }
+  if (!Array.isArray(sourceArtifacts)) {
+    const error = new Error('sourceArtifacts must be an array');
+    error.code = 'invalid_source_artifacts';
+    error.rc = 2;
+    throw error;
+  }
+  return env.wrapEnvelope({
+    ...envelopeOptions,
+    artifactKind: 'handoff',
+    payload,
+    parentRunId,
+    sessionId,
+    sourceArtifacts,
+  });
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   for (const r of ['payload-file', 'output']) {
@@ -355,4 +386,5 @@ module.exports = {
   DE_PARENT_IDENTITIES,
   validateHandoffPayload,
   tryReadEnvelopeRunId,
+  buildHandoffArtifact,
 };

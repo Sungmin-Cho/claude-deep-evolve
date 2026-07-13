@@ -1,0 +1,110 @@
+{
+  "beta": [
+    {
+      "name": "n1 short circuit",
+      "mode": "init",
+      "n": 1,
+      "input": "skip",
+      "expected": {
+        "skipped": true,
+        "reason": "N=1 short-circuit (§ 5.1a)",
+        "directions": [],
+        "retries_used": 0,
+        "max_similarity_observed": 0,
+        "warning_emitted": null
+      }
+    },
+    {
+      "name": "n3 accepts one turn",
+      "mode": "init",
+      "n": 3,
+      "input": {
+        "directions": [
+          {"seed_id": 1, "direction": "A", "hypothesis": "HA", "rationale": "RA"},
+          {"seed_id": 2, "direction": "B", "hypothesis": "HB", "rationale": "RB"},
+          {"seed_id": 3, "direction": "C", "hypothesis": "HC", "rationale": "RC"}
+        ]
+      },
+      "expected": {
+        "skipped": false,
+        "directions": [
+          {"seed_id": 1, "direction": "A", "hypothesis": "HA", "rationale": "RA"},
+          {"seed_id": 2, "direction": "B", "hypothesis": "HB", "rationale": "RB"},
+          {"seed_id": 3, "direction": "C", "hypothesis": "HC", "rationale": "RC"}
+        ],
+        "retries_used": 0,
+        "max_similarity_observed": 0,
+        "warning_emitted": null
+      }
+    },
+    {
+      "name": "n5 retries collision then accepts",
+      "mode": "init",
+      "n": 5,
+      "input": {
+        "attempts": [
+          {"directions": [{"seed_id": 1, "direction": "too close"}], "max_similarity": 0.91},
+          {"directions": [{"seed_id": 1, "direction": "distinct"}], "max_similarity": 0.69}
+        ]
+      },
+      "expected": {
+        "skipped": false,
+        "directions": [{"seed_id": 1, "direction": "distinct"}],
+        "retries_used": 1,
+        "max_similarity_observed": 0.69,
+        "warning_emitted": null
+      }
+    },
+    {
+      "name": "growth exhausts and keeps best collision",
+      "mode": "growth",
+      "existing": [{"seed_id": 1, "direction": "A"}],
+      "input": {
+        "attempts": [
+          {"direction": {"seed_id": 2, "direction": "B1"}, "max_similarity_to_existing": 0.91},
+          {"direction": {"seed_id": 2, "direction": "B2"}, "max_similarity_to_existing": 0.78},
+          {"direction": {"seed_id": 2, "direction": "B3"}, "max_similarity_to_existing": 0.81}
+        ]
+      },
+      "expected": {
+        "direction": {"seed_id": 2, "direction": "B2"},
+        "retries_used": 2,
+        "max_similarity_observed": 0.78,
+        "warning_emitted": "beta_diversity_warning",
+        "warning_context": "epoch_growth"
+      }
+    }
+  ],
+  "baseline": [
+    {
+      "name": "preferred",
+      "seeds": [
+        {"id": 2, "status": "active", "killed_reason": null, "final_q": 0.8, "keeps": 2, "borrows_received": 1},
+        {"id": 1, "status": "completed_early", "killed_reason": null, "final_q": 0.8, "keeps": 2, "borrows_received": 0}
+      ],
+      "expected": {"chosen_seed_id": 1, "tier": "preferred", "ties_broken_on": ["final_q", "keeps", "borrows_received"], "candidates_count": 2, "baseline_selection_reasoning": {"chosen_seed_id": 1, "tier": "preferred", "ties_broken_on": ["final_q", "keeps", "borrows_received"]}}
+    },
+    {
+      "name": "non quarantine fallback",
+      "seeds": [
+        {"id": 1, "status": "killed_plateau", "killed_reason": "plateau", "final_q": 0.5, "keeps": 1, "borrows_received": 0},
+        {"id": 2, "status": "killed_shortcut_quarantine", "killed_reason": "shortcut_quarantine", "final_q": 0.9, "keeps": 3, "borrows_received": 0}
+      ],
+      "expected": {"chosen_seed_id": 1, "tier": "non_quarantine_fallback", "ties_broken_on": ["final_q"], "candidates_count": 1, "baseline_selection_reasoning": {"chosen_seed_id": 1, "tier": "non_quarantine_fallback", "ties_broken_on": ["final_q"]}}
+    },
+    {
+      "name": "best effort",
+      "seeds": [
+        {"id": 3, "status": "killed_shortcut_quarantine", "killed_reason": "shortcut_quarantine", "final_q": 0, "keeps": 1, "borrows_received": 0}
+      ],
+      "expected": {"chosen_seed_id": 3, "tier": "best_effort", "ties_broken_on": ["final_q"], "candidates_count": 1, "baseline_selection_reasoning": {"chosen_seed_id": 3, "tier": "best_effort", "ties_broken_on": ["final_q"]}}
+    },
+    {
+      "name": "no baseline",
+      "seeds": [
+        {"id": 1, "status": "killed_shortcut_quarantine", "killed_reason": "shortcut_quarantine", "final_q": 0, "keeps": 0, "borrows_received": 0}
+      ],
+      "expected": {"chosen_seed_id": null, "tier": "no_baseline", "ties_broken_on": [], "candidates_count": 0, "baseline_selection_reasoning": {"chosen_seed_id": null, "tier": "no_baseline", "ties_broken_on": []}}
+    }
+  ]
+}
