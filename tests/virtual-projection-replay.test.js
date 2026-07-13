@@ -216,6 +216,17 @@ test('strict reducer rejects duplicate, missing-parent, mismatched TSV, post-ter
       request_id: null, kill_entry_id: 'kill-1', seed_id: 1, condition: 'sustained_regression',
       ts: '2026-07-13T15:01:00Z', applied_at: '2026-07-13T15:01:00Z',
     }, terminal], [row]],
+    ['scheduler user-request condition', [seed, {
+      event: 'seed_killed', operation_id: '01J00000000000000000000063', source: 'scheduler',
+      request_id: null, kill_entry_id: 'kill-source-1', seed_id: 1, condition: 'user_requested',
+      ts: '2026-07-13T15:01:00Z', applied_at: '2026-07-13T15:01:00Z',
+    }], []],
+    ['user-request scheduler condition', [seed, {
+      event: 'seed_killed', operation_id: '01J00000000000000000000064', source: 'user_request',
+      request_id: 'request-source-1', kill_entry_id: 'kill-source-2', seed_id: 1,
+      condition: 'sustained_regression', ts: '2026-07-13T15:01:00Z',
+      applied_at: '2026-07-13T15:01:00Z',
+    }], []],
     ['forged Q', [seed, {
       event: 'seed_scheduled', operation_id: '01J00000000000000000000061',
       block_id: 'block-1', decision_id: 'decision-1', seed_id: 1, epoch: 1,
@@ -234,6 +245,20 @@ test('strict reducer rejects duplicate, missing-parent, mismatched TSV, post-ter
     assert.throws(() => reduceVirtualProjection({ initialVirtual, events, resultRows: rows }),
       /virtual|projection|event|result|seed|Q|authority/i, label);
   }
+});
+
+test('shared virtual reducer alone applies an exact user kill and preserves the zero-active sentinel', () => {
+  const projection = reduceVirtualProjection({
+    initialVirtual: { ...structuredClone(FIXTURE.initial_virtual), n_initial: 1, budget_total: 5 },
+    events: [structuredClone(FIXTURE.seed_events[0]), structuredClone(FIXTURE.user_kill_event)],
+    resultRows: [],
+  });
+  assert.equal(projection.seeds[0].status, 'killed:user_requested');
+  assert.equal(projection.seeds[0].allocated_budget, 0);
+  assert.equal(projection.seeds[0].experiments_used, 0);
+  assert.equal(projection.budget_unallocated, 5);
+  assert.equal(projection['x-active-seed-count'], 0);
+  assert.equal(Object.hasOwn(projection, 'n_current'), false);
 });
 
 test('v3.5 forbids legacy virtual.init/set-field while below-v3.5 dispatcher contracts remain byte-compatible', (t) => {

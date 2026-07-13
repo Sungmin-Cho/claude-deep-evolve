@@ -100,5 +100,16 @@
     "flagged": false,
     "rationale": "prevents drift",
     "description": "strict parsing"
+  },
+  "user_kill_event": {
+    "event": "seed_killed",
+    "operation_id": "01J00000000000000000000035",
+    "source": "user_request",
+    "request_id": "request-replay-1",
+    "kill_entry_id": "user-request:04b30d01fe87988a78c7e415eb6b02eb5289c7d681011488b9c77bca3d6c3955",
+    "seed_id": 1,
+    "condition": "user_requested",
+    "ts": "2026-07-13T13:02:00Z",
+    "applied_at": "2026-07-13T13:02:00Z"
   }
 }

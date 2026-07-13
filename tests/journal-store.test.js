@@ -532,7 +532,12 @@ test('queue-user-kill and all coordination dispatcher operations preserve envelo
   const { projectRoot, stateRoot, sessionId } = makeProject(t);
   const queued = request(projectRoot, 'coord.queue-user-kill', { session_id: sessionId, seed_id: 2 });
   assert.equal(queued.exitCode, 0);
-  assert.equal(queued.result.confirmed, false);
+  assert.deepEqual(Object.keys(queued.result), [
+    'entry_id', 'seed_id', 'requested_at', 'acknowledged_at', 'choice_id', 'kill_entry_id',
+  ]);
+  assert.equal(queued.result.acknowledged_at, null);
+  assert.equal(queued.result.choice_id, null);
+  assert.equal(queued.result.kill_entry_id, null);
   const records = readJsonl({ stateRoot, relativePath: 's1/kill_requests.jsonl' }).records;
   assert.equal(records.length, 1);
   assert.equal(records[0].seed_id, 2);
@@ -545,8 +550,28 @@ test('queue-user-kill and all coordination dispatcher operations preserve envelo
   for (const operation of [
     'coord.append-journal', 'coord.append-forum', 'coord.tail-forum',
     'coord.quarantine-malformed', 'coord.queue-user-kill', 'coord.queue-kill',
+    'coord.list-user-kill-requests', 'coord.ack-user-kill-request',
     'coord.drain-kill-queue',
   ]) assert.ok(OPERATIONS.includes(operation), operation);
+});
+
+test('queue-user-kill rejects unsafe seed ids without mutating authority', (t) => {
+  const { projectRoot, stateRoot, sessionId } = makeProject(t);
+  const before = treeSnapshot(stateRoot);
+  assert.throws(() => queueUserKill({
+    stateRoot,
+    sessionId,
+    seedId: Number.MAX_SAFE_INTEGER + 1,
+    randomUUID: () => 'unsafe-seed-request',
+  }), (error) => error.rc === 2);
+  assert.deepEqual(treeSnapshot(stateRoot), before);
+
+  const response = request(projectRoot, 'coord.queue-user-kill', {
+    session_id: sessionId,
+    seed_id: Number.MAX_SAFE_INTEGER + 1,
+  });
+  assert.equal(response.exitCode, 2, JSON.stringify(response));
+  assert.deepEqual(treeSnapshot(stateRoot), before);
 });
 
 test('every Task 4 coordination operation executes through the dispatcher', (t) => {

@@ -815,6 +815,10 @@ function validateKillEvent(event, state) {
     'condition', 'ts', 'applied_at',
   ], 'seed_killed', 'virtual_projection_conflict');
   requireOperationId(event.operation_id, 'seed_killed.operation_id');
+  if (typeof event.kill_entry_id !== 'string' || event.kill_entry_id.length === 0) {
+    throw transitionError('virtual_projection_conflict',
+      'seed kill entry identity must be non-empty');
+  }
   const seedId = requireSafeInteger(event.seed_id, 'seed_killed.seed_id', { min: 1 });
   const seed = state.seeds.get(seedId);
   if (!seed || seed.status !== 'active') {
@@ -832,10 +836,18 @@ function validateKillEvent(event, state) {
       ]).has(event.condition)) {
     throw transitionError('virtual_projection_conflict', 'seed kill source or condition is invalid');
   }
+  if ((event.source === 'user_request') !== (event.condition === 'user_requested')) {
+    throw transitionError('virtual_projection_conflict',
+      'seed kill source and condition are inconsistent');
+  }
   if ((event.source === 'user_request') !== (typeof event.request_id === 'string')) {
     if (!(event.source === 'scheduler' && event.request_id === null)) {
       throw transitionError('virtual_projection_conflict', 'seed kill request identity is inconsistent');
     }
+  }
+  if (event.source === 'user_request' && event.request_id.length === 0) {
+    throw transitionError('virtual_projection_conflict',
+      'user seed kill request identity must be non-empty');
   }
   requireUtc(event.ts, 'seed_killed.ts');
   if (event.applied_at !== event.ts) {
@@ -1046,6 +1058,7 @@ function validateReceiptRecord(record, journalText) {
   }
   const priorAllowed = new Set([
     'session_sha256', 'journal_sha256', 'results_sha256', 'forum_sha256',
+    'kill_queue_sha256', 'kill_requests_sha256',
   ]);
   for (const key of ['session_sha256', 'journal_sha256', 'results_sha256']) {
     if (!Object.hasOwn(receipt.prior, key)) {
@@ -1092,7 +1105,11 @@ function validateCommittedJournal(journalText) {
     if (event.event === 'operation_receipt') {
       const receipt = validateReceiptRecord(record, journalText);
       if (pending.length === 0) {
-        if (receipt.operation !== 'virtual.rebuild-seeds') {
+        if (!new Set([
+          'virtual.rebuild-seeds',
+          'coord.ack-user-kill-request',
+          'coord.drain-kill-queue',
+        ]).has(receipt.operation)) {
           throw transitionError('virtual_projection_conflict',
             'operation receipt is missing its protected typed event');
         }
@@ -1137,8 +1154,16 @@ function findOperationReceipt(journalText, operationId, operation, requestDigest
 }
 
 function appendTypedEventAndReceipt(journalText, event, receiptInput) {
-  const typedLine = `${JSON.stringify(event)}\n`;
-  const eventJournal = `${journalText}${journalText && !journalText.endsWith('\n') ? '\n' : ''}${typedLine}`;
+  return appendTypedEventsAndReceipt(journalText, [event], receiptInput);
+}
+
+function appendTypedEventsAndReceipt(journalText, events, receiptInput) {
+  if (!Array.isArray(events) || events.length === 0) {
+    throw transitionError('virtual_projection_conflict',
+      'typed event group must contain at least one event');
+  }
+  const prefix = `${journalText}${journalText && !journalText.endsWith('\n') ? '\n' : ''}`;
+  const eventJournal = events.reduce((text, event) => `${text}${JSON.stringify(event)}\n`, prefix);
   const receipt = makeOperationReceipt({
     ...receiptInput,
     journalEventSha256: sha256(Buffer.from(eventJournal)),
@@ -1325,6 +1350,7 @@ module.exports = {
   TAXONOMY,
   appendOperationReceipt,
   appendTypedEventAndReceipt,
+  appendTypedEventsAndReceipt,
   applyBaseline,
   applyCompletion,
   applyEvaluatorExpansion,

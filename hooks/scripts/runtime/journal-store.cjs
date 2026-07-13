@@ -23,6 +23,19 @@ const KILL_CONDITIONS = new Set([
   'budget_exhausted_underperform',
   'user_requested',
 ]);
+const UTC_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const USER_KILL_CHOICES = new Set(['confirm-kill', 'keep-seed']);
+const USER_KILL_REQUEST_KEYS = Object.freeze([
+  'entry_id', 'seed_id', 'requested_at', 'acknowledged_at', 'choice_id',
+  'kill_entry_id',
+]);
+const USER_KILL_QUEUE_KEYS = Object.freeze([
+  'entry_id', 'request_id', 'seed_id', 'condition', 'final_q',
+  'experiments_used', 'queued_at',
+]);
+const SCHEDULER_KILL_QUEUE_KEYS = Object.freeze([
+  'entry_id', 'seed_id', 'condition', 'final_q', 'experiments_used', 'queued_at',
+]);
 const TYPED_JOURNAL_EVENTS = new Set([
   'transfer_adopted', 'seed_initialized', 'baseline_recorded', 'kept', 'discarded', 'failed',
   'seed_scheduled', 'seed_block_completed', 'seed_block_failed', 'seed_killed',
@@ -68,7 +81,7 @@ function assertGenericEventAllowed(kind, event) {
 }
 
 function requireInteger(value, label, { min } = {}) {
-  if (!Number.isInteger(value) || typeof value === 'boolean' || (min !== undefined && value < min)) {
+  if (!Number.isSafeInteger(value) || typeof value === 'boolean' || (min !== undefined && value < min)) {
     fail('invalid_field_type', `${label} must be ${min === 1 ? 'a positive ' : ''}integer (not bool)`);
   }
   return value;
@@ -76,6 +89,32 @@ function requireInteger(value, label, { min } = {}) {
 
 function requireNumber(value, label) {
   if (typeof value !== 'number' || !Number.isFinite(value)) fail('invalid_field_type', `${label} must be a finite number (not bool)`);
+  return value;
+}
+
+function assertExactKeys(value, expected, label) {
+  requirePlainObject(value, label);
+  const actual = Object.keys(value);
+  if (actual.length !== expected.length
+      || actual.some((key, index) => key !== expected[index])) {
+    fail('invalid_record_schema', `${label} must contain the exact ordered fields: ${expected.join(', ')}`);
+  }
+  return value;
+}
+
+function requireNonEmptyString(value, label) {
+  if (typeof value !== 'string' || value.length === 0) {
+    fail('invalid_field_type', `${label} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requireUtc(value, label) {
+  const parsed = typeof value === 'string' && UTC_ISO.test(value) ? Date.parse(value) : Number.NaN;
+  if (!Number.isFinite(parsed)
+      || new Date(parsed).toISOString().replace(/\.000Z$/, 'Z') !== value) {
+    fail('invalid_field_type', `${label} must be a canonical UTC timestamp`);
+  }
   return value;
 }
 
@@ -211,11 +250,12 @@ function appendJsonl({
   seedId,
   now = Date.now,
   options = {},
+  injectTimestamp = true,
 }) {
   requirePlainObject(event, 'event');
   const resolved = resolveRelativeJsonl(stateRoot, relativePath);
   const record = { ...event };
-  if (!Object.hasOwn(record, 'ts')) record.ts = isoNow(now);
+  if (injectTimestamp && !Object.hasOwn(record, 'ts')) record.ts = isoNow(now);
   if (sessionId !== undefined && !Object.hasOwn(record, 'session_id')) record.session_id = sessionId;
   if (seedId !== undefined) record.seed_id = requireInteger(seedId, 'seed_id', { min: 1 });
   // Fail malformed ordinary mutations before Task 1 transaction recovery can
@@ -546,7 +586,10 @@ function queueKill({
     experiments_used: experimentsUsed,
     queued_at: isoNow(now),
   };
-  appendJsonl({ stateRoot, relativePath: `${sessionId}/kill_queue.jsonl`, event: entry, options });
+  appendJsonl({
+    stateRoot, relativePath: `${sessionId}/kill_queue.jsonl`, event: entry, options,
+    injectTimestamp: false,
+  });
   return entry;
 }
 
@@ -563,10 +606,110 @@ function queueUserKill({
     entry_id: randomUUID(),
     seed_id: seedId,
     requested_at: isoNow(now),
-    confirmed: false,
+    acknowledged_at: null,
+    choice_id: null,
+    kill_entry_id: null,
   };
-  appendJsonl({ stateRoot, relativePath: `${sessionId}/kill_requests.jsonl`, event: entry, options });
+  appendJsonl({
+    stateRoot, relativePath: `${sessionId}/kill_requests.jsonl`, event: entry, options,
+    injectTimestamp: false,
+  });
   return entry;
+}
+
+function stableUserKillEntryId(request) {
+  validateUserKillRequest(request, 'kill request');
+  const identity = canonicalJson({
+    entry_id: request.entry_id,
+    seed_id: request.seed_id,
+    requested_at: request.requested_at,
+  });
+  return `user-request:${sha256(Buffer.from(identity))}`;
+}
+
+function validateUserKillRequest(entry, label = 'kill request') {
+  assertExactKeys(entry, USER_KILL_REQUEST_KEYS, label);
+  requireNonEmptyString(entry.entry_id, `${label}.entry_id`);
+  requireInteger(entry.seed_id, `${label}.seed_id`, { min: 1 });
+  requireUtc(entry.requested_at, `${label}.requested_at`);
+  const pending = entry.acknowledged_at === null
+    && entry.choice_id === null && entry.kill_entry_id === null;
+  if (pending) return structuredClone(entry);
+  requireUtc(entry.acknowledged_at, `${label}.acknowledged_at`);
+  if (!USER_KILL_CHOICES.has(entry.choice_id)) {
+    fail('invalid_user_kill_choice', `${label}.choice_id must be confirm-kill or keep-seed`);
+  }
+  if (entry.choice_id === 'keep-seed') {
+    if (entry.kill_entry_id !== null) {
+      fail('invalid_record_schema', `${label}.kill_entry_id must be null for keep-seed`);
+    }
+  } else {
+    requireNonEmptyString(entry.kill_entry_id, `${label}.kill_entry_id`);
+    if (entry.kill_entry_id !== stableUserKillEntryIdUnchecked(entry)) {
+      fail('invalid_record_schema', `${label}.kill_entry_id is not bound to the request identity`);
+    }
+  }
+  if (Date.parse(entry.acknowledged_at) < Date.parse(entry.requested_at)) {
+    fail('invalid_record_schema', `${label}.acknowledged_at precedes requested_at`);
+  }
+  return structuredClone(entry);
+}
+
+function stableUserKillEntryIdUnchecked(request) {
+  return `user-request:${sha256(Buffer.from(canonicalJson({
+    entry_id: request.entry_id,
+    seed_id: request.seed_id,
+    requested_at: request.requested_at,
+  })))}`;
+}
+
+function validateUserKillRequests(records) {
+  if (!Array.isArray(records)) fail('invalid_record_schema', 'kill requests must be an array');
+  const seen = new Set();
+  return records.map((entry, index) => {
+    const checked = validateUserKillRequest(entry, `kill_requests[${index}]`);
+    if (seen.has(checked.entry_id)) {
+      fail('duplicate_request_id', `duplicate user kill request id: ${checked.entry_id}`);
+    }
+    seen.add(checked.entry_id);
+    return checked;
+  });
+}
+
+function validateKillQueueEntry(entry, label = 'kill queue entry') {
+  const user = Object.hasOwn(entry || {}, 'request_id');
+  assertExactKeys(entry, user ? USER_KILL_QUEUE_KEYS : SCHEDULER_KILL_QUEUE_KEYS, label);
+  requireNonEmptyString(entry.entry_id, `${label}.entry_id`);
+  if (user) {
+    requireNonEmptyString(entry.request_id, `${label}.request_id`);
+    if (entry.condition !== 'user_requested') {
+      fail('invalid_kill_condition', `${label}.condition must be user_requested`);
+    }
+  } else if (entry.condition === 'user_requested') {
+    fail('invalid_record_schema', `${label}.request_id is required for user_requested`);
+  }
+  requireInteger(entry.seed_id, `${label}.seed_id`, { min: 1 });
+  if (!KILL_CONDITIONS.has(entry.condition)) {
+    fail('invalid_kill_condition', `${label}.condition is invalid`);
+  }
+  requireNumber(entry.final_q, `${label}.final_q`);
+  requireInteger(entry.experiments_used, `${label}.experiments_used`, { min: 0 });
+  requireUtc(entry.queued_at, `${label}.queued_at`);
+  return structuredClone(entry);
+}
+
+function validateKillQueue(records) {
+  if (!Array.isArray(records)) fail('invalid_record_schema', 'kill queue must be an array');
+  const entries = records.map((entry, index) => validateKillQueueEntry(entry, `kill_queue[${index}]`));
+  const entryIds = new Set();
+  const seedIds = new Set();
+  for (const entry of entries) {
+    if (entryIds.has(entry.entry_id)) fail('duplicate_kill_entry_id', `duplicate kill entry id: ${entry.entry_id}`);
+    if (seedIds.has(entry.seed_id)) fail('duplicate_kill_seed', `seed ${entry.seed_id} has more than one queued kill`);
+    entryIds.add(entry.entry_id);
+    seedIds.add(entry.seed_id);
+  }
+  return entries;
 }
 
 function strictlyLater(nowText, queuedAt) {
@@ -669,4 +812,9 @@ module.exports = {
   queueKill,
   queueUserKill,
   drainKillQueue,
+  stableUserKillEntryId,
+  validateKillQueue,
+  validateKillQueueEntry,
+  validateUserKillRequest,
+  validateUserKillRequests,
 };

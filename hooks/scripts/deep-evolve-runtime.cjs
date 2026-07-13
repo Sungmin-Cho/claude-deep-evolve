@@ -13,6 +13,7 @@ const {
   FULL_COMMIT,
   appendOperationReceipt,
   appendTypedEventAndReceipt,
+  appendTypedEventsAndReceipt,
   applyBaseline,
   applyCompletion,
   applyEvaluatorExpansion,
@@ -34,6 +35,7 @@ const {
   serializeResultRow,
   sessionNonProjectionSha256,
   transitionError,
+  validateCommittedJournal,
   validateBeta,
   validateExperiment,
   validateInitialStateSpec,
@@ -60,6 +62,9 @@ const {
   queueKill,
   queueUserKill,
   drainKillQueue,
+  stableUserKillEntryId,
+  validateKillQueue,
+  validateUserKillRequests,
   assertGenericEventAllowed,
 } = require('./runtime/journal-store.cjs');
 const {
@@ -75,6 +80,8 @@ const {
   borrowPreflight,
   findBorrowAbandoned,
   classifyConvergence,
+  eligibleKillEntries,
+  deriveInFlightSeedIds,
 } = require('./runtime/scheduler.cjs');
 const {
   createSeedWorktree,
@@ -151,6 +158,8 @@ const OPERATIONS = Object.freeze([
   'coord.quarantine-malformed',
   'coord.queue-user-kill',
   'coord.queue-kill',
+  'coord.list-user-kill-requests',
+  'coord.ack-user-kill-request',
   'coord.drain-kill-queue',
   'scheduler.signals',
   'scheduler.decide',
@@ -505,9 +514,10 @@ function sessionInfo(project, sessionId, { requireDirectory = false } = {}) {
   }
   if (directoryExists) {
     for (const name of [
-      'session.yaml', 'strategy.yaml', 'journal.jsonl', 'forum.jsonl', 'kill_requests.jsonl',
+      'session.yaml', 'strategy.yaml', 'journal.jsonl', 'forum.jsonl', 'kill_queue.jsonl',
+      'kill_requests.jsonl',
       '.session.yaml.lock', '.strategy.yaml.lock', '.journal.jsonl.lock', '.forum.jsonl.lock',
-      '.kill_requests.jsonl.lock',
+      '.kill_queue.jsonl.lock', '.kill_requests.jsonl.lock',
     ]) {
       assertPhysicalContainment(sessionRoot, path.join(sessionRoot, name));
     }
@@ -542,7 +552,8 @@ function ensureContainedExisting(project, candidate, label) {
 function recoverProject(project, dependencies = {}) {
   for (const name of [
     'current.json', 'sessions.jsonl', 'session.yaml', 'strategy.yaml', 'journal.jsonl',
-    'forum.jsonl', 'kill_requests.jsonl', 'meta-archive-local.jsonl', '.transactions',
+    'forum.jsonl', 'kill_queue.jsonl', 'kill_requests.jsonl', 'meta-archive-local.jsonl',
+    '.transactions',
     '.migration-transactions',
     '.coordination-lock', '.meta-archive-lock', '.legacy-migration-lock',
     '.current.json.lock', '.sessions.jsonl.lock',
@@ -2986,6 +2997,57 @@ function typedPaths(info, { forum = false, registry = false } = {}) {
   };
 }
 
+function typedKillPaths(info) {
+  return {
+    session: info.relativeSession,
+    journal: relativeSessionSibling(info, 'journal.jsonl'),
+    results: relativeSessionSibling(info, 'results.tsv'),
+    forum: relativeSessionSibling(info, 'forum.jsonl'),
+    killQueue: relativeSessionSibling(info, 'kill_queue.jsonl'),
+    killRequests: relativeSessionSibling(info, 'kill_requests.jsonl'),
+  };
+}
+
+function killAuthorityDigests(files, relative) {
+  return {
+    session_sha256: sha256Digest(Buffer.from(files[relative.session])),
+    journal_sha256: sha256Digest(Buffer.from(files[relative.journal])),
+    results_sha256: sha256Digest(Buffer.from(files[relative.results])),
+    forum_sha256: sha256Digest(Buffer.from(files[relative.forum])),
+    kill_queue_sha256: sha256Digest(Buffer.from(files[relative.killQueue])),
+    kill_requests_sha256: sha256Digest(Buffer.from(files[relative.killRequests])),
+  };
+}
+
+function publicKillAuthorityDigests(digests) {
+  return {
+    session_sha256: digests.session_sha256,
+    journal_sha256: digests.journal_sha256,
+    forum_sha256: digests.forum_sha256,
+    kill_queue_sha256: digests.kill_queue_sha256,
+    kill_requests_sha256: digests.kill_requests_sha256,
+  };
+}
+
+function requireKillCas(payload, actual, { forum = false } = {}) {
+  const names = ['session', 'journal', ...(forum ? ['forum'] : []), 'kill_queue', 'kill_requests'];
+  for (const name of names) {
+    const payloadKey = `expected_${name}_sha256`;
+    requireAuthorityDigest(payload[payloadKey], `payload.${payloadKey}`);
+    const actualKey = `${name}_sha256`;
+    if (payload[payloadKey] !== actual[actualKey]) {
+      throw businessError('stale_preimage', `${name} preimage is stale`, {
+        expected: payload[payloadKey],
+        actual: actual[actualKey],
+      });
+    }
+  }
+}
+
+function serializeJsonlRecords(records) {
+  return records.map((entry) => `${JSON.stringify(entry)}\n`).join('');
+}
+
 function requireStrictTypedSession(files, relative, info) {
   const session = assertSessionIdentity(
     parseSessionText(files[relative.session], info.sessionPath),
@@ -4009,6 +4071,367 @@ function operationVirtualRebuildStrict(project, payload, dependencies = {}) {
   return { result, warnings: [] };
 }
 
+function validateKillSemanticState(files, relative, info) {
+  const session = requireStrictTypedSession(files, relative, info);
+  const journalEntries = validateCommittedJournal(files[relative.journal]);
+  const events = journalEntries.map((entry) => entry.value);
+  const resultRows = parseResultsTsv(files[relative.results]);
+  const projection = requireCurrentProjection(session, events, resultRows);
+  const requests = validateUserKillRequests(
+    parseStrictJsonl(files[relative.killRequests]).map((entry) => entry.value),
+  );
+  const queue = validateKillQueue(
+    parseStrictJsonl(files[relative.killQueue]).map((entry) => entry.value),
+  );
+  const seeds = new Map(projection.seeds.map((seed) => [seed.id, seed]));
+  const requestById = new Map(requests.map((entry) => [entry.entry_id, entry]));
+  const queuedByRequest = new Map(queue.filter((entry) => Object.hasOwn(entry, 'request_id'))
+    .map((entry) => [entry.request_id, entry]));
+  const killedByRequest = new Map();
+  for (const event of events.filter((entry) => entry.event === 'seed_killed'
+    && entry.source === 'user_request')) {
+    const request = requestById.get(event.request_id);
+    if (!request || request.choice_id !== 'confirm-kill'
+        || request.kill_entry_id !== event.kill_entry_id
+        || request.seed_id !== event.seed_id) {
+      throw transitionError('user_kill_authority_conflict',
+        `user kill event ${event.kill_entry_id} lacks its acknowledged request`);
+    }
+    if (killedByRequest.has(event.request_id)) {
+      throw transitionError('user_kill_authority_conflict',
+        `user kill request ${event.request_id} has multiple event authorities`);
+    }
+    killedByRequest.set(event.request_id, event);
+  }
+  for (const request of requests) {
+    const seed = seeds.get(request.seed_id);
+    if (!seed) {
+      throw transitionError('user_kill_seed_missing',
+        `user kill request ${request.entry_id} references a missing seed`);
+    }
+    if (request.acknowledged_at === null) {
+      if (seed.status !== 'active') {
+        throw transitionError('user_kill_seed_terminal',
+          `pending user kill request ${request.entry_id} targets a terminal seed`);
+      }
+      continue;
+    }
+    if (request.choice_id !== 'confirm-kill') continue;
+    const queued = queuedByRequest.get(request.entry_id);
+    const killed = killedByRequest.get(request.entry_id);
+    if ((queued ? 1 : 0) + (killed ? 1 : 0) !== 1) {
+      throw transitionError('user_kill_authority_conflict',
+        `confirmed user kill request ${request.entry_id} must have one queue or event authority`);
+    }
+    const authority = queued || killed;
+    if (authority.seed_id !== request.seed_id
+        || (queued && queued.entry_id !== request.kill_entry_id)
+        || (killed && killed.kill_entry_id !== request.kill_entry_id)) {
+      throw transitionError('user_kill_authority_conflict',
+        `confirmed user kill request ${request.entry_id} has mismatched authority`);
+    }
+  }
+  for (const entry of queue) {
+    const seed = seeds.get(entry.seed_id);
+    if (!seed || seed.status !== 'active') {
+      throw transitionError('kill_queue_seed_terminal',
+        `queued kill ${entry.entry_id} targets a missing or terminal seed`);
+    }
+    if (Object.hasOwn(entry, 'request_id')) {
+      const request = requestById.get(entry.request_id);
+      if (!request || request.choice_id !== 'confirm-kill'
+          || request.kill_entry_id !== entry.entry_id
+          || request.seed_id !== entry.seed_id) {
+        throw transitionError('user_kill_authority_conflict',
+          `queued user kill ${entry.entry_id} lacks its acknowledged request`);
+      }
+    }
+  }
+  return {
+    session,
+    events,
+    resultRows,
+    projection,
+    requests,
+    queue,
+    requestById,
+  };
+}
+
+function operationListUserKillRequests(project, payload) {
+  requireExactPayload(payload, ['session_id']);
+  const sessionId = ensureSessionId(payload.session_id);
+  const info = sessionInfo(project, sessionId, { requireDirectory: true });
+  const relative = typedKillPaths(info);
+  let result;
+  mutateCoordinationFiles(project.stateRoot, Object.values(relative), (files) => {
+    const state = validateKillSemanticState(files, relative, info);
+    const pending = state.requests.filter((entry) => entry.acknowledged_at === null)
+      .sort((left, right) => left.requested_at.localeCompare(right.requested_at)
+        || left.entry_id.localeCompare(right.entry_id));
+    const acknowledged = state.requests.filter((entry) => entry.acknowledged_at !== null)
+      .sort((left, right) => left.acknowledged_at.localeCompare(right.acknowledged_at)
+        || left.entry_id.localeCompare(right.entry_id));
+    result = {
+      pending,
+      acknowledged,
+      authority_digests: publicKillAuthorityDigests(killAuthorityDigests(files, relative)),
+    };
+    return null;
+  });
+  return { result, warnings: [] };
+}
+
+function operationAckUserKillRequest(project, payload, dependencies = {}) {
+  requireExactPayload(payload, [
+    'session_id', 'operation_id', 'request_id', 'choice_id',
+    'expected_session_sha256', 'expected_journal_sha256',
+    'expected_forum_sha256', 'expected_kill_queue_sha256',
+    'expected_kill_requests_sha256',
+  ]);
+  const sessionId = ensureSessionId(payload.session_id);
+  requireOperationId(payload.operation_id, 'payload.operation_id');
+  requireString(payload.request_id, 'payload.request_id');
+  if (!new Set(['confirm-kill', 'keep-seed']).has(payload.choice_id)) {
+    throw operatorError('invalid_user_kill_choice',
+      'payload.choice_id must be confirm-kill or keep-seed');
+  }
+  const info = sessionInfo(project, sessionId, { requireDirectory: true });
+  const relative = typedKillPaths(info);
+  const requestDigest = requestSha256('coord.ack-user-kill-request', payload);
+  let result;
+  let replayed = false;
+  const outcome = mutateCoordinationFiles(project.stateRoot, Object.values(relative), (files) => {
+    const state = validateKillSemanticState(files, relative, info);
+    const found = findOperationReceipt(files[relative.journal], payload.operation_id,
+      'coord.ack-user-kill-request', requestDigest);
+    if (found) {
+      result = replayResult(found);
+      replayed = true;
+      return null;
+    }
+    const before = killAuthorityDigests(files, relative);
+    requireKillCas(payload, before, { forum: true });
+    const requestIndex = state.requests.findIndex((entry) => entry.entry_id === payload.request_id);
+    if (requestIndex < 0) {
+      throw operatorError('user_kill_request_missing',
+        `user kill request not found: ${payload.request_id}`);
+    }
+    const priorRequest = state.requests[requestIndex];
+    if (priorRequest.acknowledged_at !== null
+        && priorRequest.choice_id !== payload.choice_id) {
+      throw operatorError('user_kill_choice_conflict',
+        `user kill request ${payload.request_id} was acknowledged with another choice`);
+    }
+    const priorQueue = state.queue.find((entry) => Object.hasOwn(entry, 'request_id')
+      && entry.request_id === payload.request_id);
+    const priorKill = state.events.find((event) => event.event === 'seed_killed'
+      && event.source === 'user_request' && event.request_id === payload.request_id);
+    const now = isoNow(dependencies);
+    let request = priorRequest;
+    let queue = state.queue;
+    let killEvent = null;
+    let nextProjection = state.projection;
+    let applied = Boolean(priorKill);
+    let queued = Boolean(priorQueue);
+    let killEntryId = priorRequest.kill_entry_id;
+    if (priorRequest.acknowledged_at === null) {
+      if (payload.choice_id === 'keep-seed') {
+        request = {
+          ...priorRequest,
+          acknowledged_at: now,
+          choice_id: 'keep-seed',
+          kill_entry_id: null,
+        };
+      } else {
+        if (state.queue.some((entry) => entry.seed_id === priorRequest.seed_id)) {
+          throw transitionError('kill_queue_seed_conflict',
+            `seed ${priorRequest.seed_id} already has a queued kill`);
+        }
+        killEntryId = stableUserKillEntryId(priorRequest);
+        request = {
+          ...priorRequest,
+          acknowledged_at: now,
+          choice_id: 'confirm-kill',
+          kill_entry_id: killEntryId,
+        };
+        const seed = state.projection.seeds.find((entry) => entry.id === priorRequest.seed_id);
+        const queueEntry = {
+          entry_id: killEntryId,
+          request_id: priorRequest.entry_id,
+          seed_id: priorRequest.seed_id,
+          condition: 'user_requested',
+          final_q: seed.current_q,
+          experiments_used: seed.experiments_used,
+          queued_at: now,
+        };
+        const inFlight = deriveInFlightSeedIds(state.events);
+        if (inFlight.has(priorRequest.seed_id)) {
+          queue = [...state.queue, queueEntry];
+          queued = true;
+        } else {
+          killEvent = {
+            event: 'seed_killed',
+            operation_id: payload.operation_id,
+            source: 'user_request',
+            request_id: priorRequest.entry_id,
+            kill_entry_id: killEntryId,
+            seed_id: priorRequest.seed_id,
+            condition: 'user_requested',
+            ts: now,
+            applied_at: now,
+          };
+          nextProjection = reduceVirtualProjection({
+            initialVirtual: state.session.virtual_parallel,
+            events: [...state.events, killEvent],
+            resultRows: state.resultRows,
+          });
+          applied = true;
+        }
+      }
+    }
+    const requests = state.requests.map((entry, index) => (
+      index === requestIndex ? request : entry
+    ));
+    const next = structuredClone(state.session);
+    if (killEvent) next.virtual_parallel = installProjection(next.virtual_parallel, nextProjection);
+    validateStoredSession(next);
+    const sessionText = killEvent ? serializeStateDocument(next) : files[relative.session];
+    const core = {
+      request_id: request.entry_id,
+      seed_id: request.seed_id,
+      choice_id: request.choice_id,
+      kill_entry_id: request.kill_entry_id,
+      applied,
+      queued,
+      replayed: false,
+    };
+    const receiptInput = {
+      operation: 'coord.ack-user-kill-request',
+      operationId: payload.operation_id,
+      requestDigest,
+      prior: before,
+      postSessionSha256: sha256Digest(Buffer.from(sessionText)),
+      postResultsSha256: before.results_sha256,
+      postNonProjectionSha256: sessionNonProjectionSha256(next),
+      result: core,
+      ts: now,
+    };
+    const appended = killEvent
+      ? appendTypedEventAndReceipt(files[relative.journal], killEvent, receiptInput)
+      : appendOperationReceipt(files[relative.journal], receiptInput);
+    result = core;
+    return {
+      [relative.session]: sessionText,
+      [relative.journal]: appended.journalText,
+      [relative.killQueue]: serializeJsonlRecords(queue),
+      [relative.killRequests]: serializeJsonlRecords(requests),
+    };
+  }, transitionOptions(dependencies));
+  if (!replayed) {
+    result.journal_sha256 = sha256Digest(Buffer.from(outcome.files[relative.journal]));
+  }
+  return { result, warnings: [] };
+}
+
+function operationDrainKillQueueStrict(project, payload, dependencies = {}) {
+  requireExactPayload(payload, [
+    'session_id', 'operation_id', 'expected_session_sha256',
+    'expected_journal_sha256', 'expected_kill_queue_sha256',
+    'expected_kill_requests_sha256',
+  ]);
+  const sessionId = ensureSessionId(payload.session_id);
+  requireOperationId(payload.operation_id, 'payload.operation_id');
+  const info = sessionInfo(project, sessionId, { requireDirectory: true });
+  const relative = typedKillPaths(info);
+  const requestDigest = requestSha256('coord.drain-kill-queue', payload);
+  let result;
+  let replayed = false;
+  const outcome = mutateCoordinationFiles(project.stateRoot, Object.values(relative), (files) => {
+    const state = validateKillSemanticState(files, relative, info);
+    const found = findOperationReceipt(files[relative.journal], payload.operation_id,
+      'coord.drain-kill-queue', requestDigest);
+    if (found) {
+      result = replayResult(found);
+      replayed = true;
+      return null;
+    }
+    const before = killAuthorityDigests(files, relative);
+    requireKillCas(payload, before);
+    const inFlight = deriveInFlightSeedIds(state.events);
+    const decision = eligibleKillEntries(state.queue, inFlight);
+    if (decision.duplicates.length > 0) {
+      throw transitionError('duplicate_kill_seed', 'kill queue contains a duplicate seed decision');
+    }
+    const now = isoNow(dependencies);
+    const killEvents = decision.eligible.map((entry) => {
+      const seed = state.projection.seeds.find((candidate) => candidate.id === entry.seed_id);
+      if (!seed || seed.status !== 'active') {
+        throw transitionError('kill_queue_seed_terminal',
+          `queued kill ${entry.entry_id} targets a missing or terminal seed`);
+      }
+      if (!Object.is(entry.final_q, seed.current_q)
+          || entry.experiments_used !== seed.experiments_used) {
+        throw transitionError('kill_queue_snapshot_conflict',
+          `queued kill ${entry.entry_id} snapshot differs from canonical projection`);
+      }
+      const user = Object.hasOwn(entry, 'request_id');
+      return {
+        event: 'seed_killed',
+        operation_id: payload.operation_id,
+        source: user ? 'user_request' : 'scheduler',
+        request_id: user ? entry.request_id : null,
+        kill_entry_id: entry.entry_id,
+        seed_id: entry.seed_id,
+        condition: entry.condition,
+        ts: now,
+        applied_at: now,
+      };
+    });
+    const projection = killEvents.length === 0 ? state.projection : reduceVirtualProjection({
+      initialVirtual: state.session.virtual_parallel,
+      events: [...state.events, ...killEvents],
+      resultRows: state.resultRows,
+    });
+    const next = structuredClone(state.session);
+    if (killEvents.length > 0) next.virtual_parallel = installProjection(next.virtual_parallel, projection);
+    validateStoredSession(next);
+    const sessionText = killEvents.length > 0
+      ? serializeStateDocument(next) : files[relative.session];
+    const core = {
+      applied: killEvents.length,
+      remaining: decision.deferred.length,
+      applied_seed_ids: killEvents.map((event) => event.seed_id),
+      replayed: false,
+    };
+    const receiptInput = {
+      operation: 'coord.drain-kill-queue',
+      operationId: payload.operation_id,
+      requestDigest,
+      prior: before,
+      postSessionSha256: sha256Digest(Buffer.from(sessionText)),
+      postResultsSha256: before.results_sha256,
+      postNonProjectionSha256: sessionNonProjectionSha256(next),
+      result: core,
+      ts: now,
+    };
+    const appended = killEvents.length > 0
+      ? appendTypedEventsAndReceipt(files[relative.journal], killEvents, receiptInput)
+      : appendOperationReceipt(files[relative.journal], receiptInput);
+    result = core;
+    return {
+      [relative.session]: sessionText,
+      [relative.journal]: appended.journalText,
+      [relative.killQueue]: serializeJsonlRecords(decision.deferred),
+      [relative.killRequests]: files[relative.killRequests],
+    };
+  }, transitionOptions(dependencies));
+  if (!replayed) {
+    result.journal_sha256 = sha256Digest(Buffer.from(outcome.files[relative.journal]));
+  }
+  return { result, warnings: [] };
+}
+
 function compatibleSessionForDispatch(project, payload) {
   const sessionId = ensureSessionId(payload.session_id);
   return readNamespaceSession(project, sessionId, { compatibility: true }).session;
@@ -4413,9 +4836,30 @@ const HANDLERS = Object.freeze({
       warnings: [],
     };
   },
+  'coord.list-user-kill-requests': (request, project) => operationListUserKillRequests(
+    project,
+    payloadFor(request, ['session_id']),
+  ),
+  'coord.ack-user-kill-request': (request, project, dependencies) => (
+    operationAckUserKillRequest(project, payloadFor(request, [
+      'session_id', 'operation_id', 'request_id', 'choice_id',
+      'expected_session_sha256', 'expected_journal_sha256',
+      'expected_forum_sha256', 'expected_kill_queue_sha256',
+      'expected_kill_requests_sha256',
+    ]), dependencies)
+  ),
   'coord.drain-kill-queue': (request, project, dependencies) => {
-    const payload = payloadFor(request, ['session_id', 'completed_seed_id']);
+    const payload = payloadFor(request, [
+      'session_id', 'operation_id', 'expected_session_sha256',
+      'expected_journal_sha256', 'expected_kill_queue_sha256',
+      'expected_kill_requests_sha256', 'completed_seed_id',
+    ]);
     const sessionId = ensureSessionId(payload.session_id);
+    const session = compatibleSessionForDispatch(project, payload);
+    if (isStrictSessionVersion(session.deep_evolve_version)) {
+      return operationDrainKillQueueStrict(project, payload, dependencies);
+    }
+    requireExactPayload(payload, ['session_id', 'completed_seed_id']);
     sessionInfo(project, sessionId, { requireDirectory: true });
     return {
       result: drainKillQueue({

@@ -53,6 +53,8 @@ const TASK3_OPERATIONS = [
   'coord.quarantine-malformed',
   'coord.queue-user-kill',
   'coord.queue-kill',
+  'coord.list-user-kill-requests',
+  'coord.ack-user-kill-request',
   'coord.drain-kill-queue',
   'scheduler.signals',
   'scheduler.decide',
@@ -176,7 +178,7 @@ function captureMain(argv, dependencies = {}) {
   }
 }
 
-test('exports the immutable Prerequisite 2 registry and runtime version without later operations', () => {
+test('exports the immutable Prerequisite 3 registry and runtime version without later operations', () => {
   const task6HarnessOperations = [
     'harness.generate',
     'harness.migrate-legacy',

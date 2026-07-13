@@ -634,6 +634,45 @@ function classifyConvergence(payload) {
   return { convergence_events: events };
 }
 
+function eligibleKillEntries(queue, inFlightSeedIds) {
+  requireArray(queue, 'queue');
+  if (!(inFlightSeedIds instanceof Set)) {
+    operatorError('invalid_in_flight', 'inFlightSeedIds must be a Set');
+  }
+  const eligible = [];
+  const deferred = [];
+  const duplicates = [];
+  const seenSeeds = new Set();
+  for (let index = 0; index < queue.length; index += 1) {
+    const entry = requireObject(queue[index], `queue[${index}]`);
+    requireInteger(entry.seed_id, `queue[${index}].seed_id`, { min: 1, allowIntegral: false });
+    if (seenSeeds.has(entry.seed_id)) {
+      duplicates.push(entry);
+      continue;
+    }
+    seenSeeds.add(entry.seed_id);
+    if (inFlightSeedIds.has(entry.seed_id)) deferred.push(entry);
+    else eligible.push(entry);
+  }
+  return { eligible, deferred, duplicates };
+}
+
+function deriveInFlightSeedIds(events) {
+  requireArray(events, 'events');
+  const blocks = new Map();
+  for (const event of events) {
+    if (!plainObject(event)) continue;
+    if (event.event === 'seed_scheduled') {
+      blocks.set(event.block_id, { seed_id: event.seed_id, terminal: false });
+    } else if (event.event === 'seed_block_completed' || event.event === 'seed_block_failed') {
+      const block = blocks.get(event.block_id);
+      if (block) block.terminal = true;
+    }
+  }
+  return new Set([...blocks.values()].filter((block) => !block.terminal)
+    .map((block) => block.seed_id));
+}
+
 module.exports = {
   ALLOWED_BLOCK,
   ALLOWED_DECISION,
@@ -650,4 +689,6 @@ module.exports = {
   borrowPreflight,
   findBorrowAbandoned,
   classifyConvergence,
+  eligibleKillEntries,
+  deriveInFlightSeedIds,
 };

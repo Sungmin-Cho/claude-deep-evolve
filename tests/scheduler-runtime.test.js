@@ -18,6 +18,7 @@ const {
   borrowPreflight,
   findBorrowAbandoned,
   classifyConvergence,
+  eligibleKillEntries,
 } = require('../hooks/scripts/runtime/scheduler.cjs');
 const { parseStateDocument } = require('../hooks/scripts/runtime/session-codec.cjs');
 const { OPERATIONS, LEGACY_ROUTES, dispatch } = require('../hooks/scripts/deep-evolve-runtime.cjs');
@@ -204,6 +205,22 @@ test('kill condition rows preserve order, thresholds, canonical ints, and bool r
   }
 });
 
+test('eligible kill reducer selects every idle row once and leaves in-flight rows in stable order', () => {
+  assert.equal(typeof eligibleKillEntries, 'function');
+  const queue = [
+    { entry_id: 'kill-3', seed_id: 3 },
+    { entry_id: 'kill-1', seed_id: 1 },
+    { entry_id: 'kill-2', seed_id: 2 },
+    { entry_id: 'kill-1-duplicate', seed_id: 1 },
+  ];
+  const result = eligibleKillEntries(queue, new Set([2]));
+  assert.deepEqual(result.eligible.map((entry) => entry.entry_id), ['kill-3', 'kill-1']);
+  assert.deepEqual(result.deferred.map((entry) => entry.entry_id), ['kill-2']);
+  assert.deepEqual(result.duplicates.map((entry) => entry.entry_id), ['kill-1-duplicate']);
+  assert.deepEqual(queue.map((entry) => entry.entry_id),
+    ['kill-3', 'kill-1', 'kill-2', 'kill-1-duplicate'], 'pure reducer mutated input');
+});
+
 test('all four legacy kill fixtures preserve N, pool, and seed identity aliases', () => {
   for (const row of killCases.legacy_fixtures) {
     const file = path.join(FIXTURES, 'legacy', 'kill', row.name, 'session.yaml');
@@ -224,6 +241,7 @@ test('Task 4 operations remain registered and Task 5 coordination operations are
     'scheduler.borrow-preflight', 'scheduler.borrow-abandoned', 'scheduler.classify-convergence',
     'coord.append-journal', 'coord.append-forum', 'coord.tail-forum',
     'coord.quarantine-malformed', 'coord.queue-user-kill', 'coord.queue-kill',
+    'coord.list-user-kill-requests', 'coord.ack-user-kill-request',
     'coord.drain-kill-queue',
   ];
   for (const operation of expected) assert.ok(OPERATIONS.includes(operation), operation);
