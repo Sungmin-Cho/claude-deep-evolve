@@ -1,0 +1,140 @@
+{
+  "interaction_id": "synthesis-regression-action",
+  "options": ["accept-regression", "keep-baseline", "stop"],
+  "finalize_cases": [
+    {
+      "name": "zero active",
+      "input": {"n": 0},
+      "expected": {"outcome": "skipped_zero_active", "fallback_triggered": false, "classification": "no-baseline"}
+    },
+    {
+      "name": "single seed",
+      "input": {"n": 1},
+      "expected": {"outcome": "skipped_n1", "fallback_triggered": false}
+    },
+    {
+      "name": "no baseline",
+      "input": {"n": 2, "baseline_q": null},
+      "expected": {"outcome": "no_baseline", "fallback_triggered": false, "classification": "no-baseline"}
+    },
+    {
+      "name": "synthesis failure",
+      "input": {"n": 2, "baseline_q": 0.8, "synthesis_q": "synthesis_failed"},
+      "expected": {"outcome": "fallback", "fallback_triggered": true, "classification": "automatic-fallback"}
+    },
+    {
+      "name": "success",
+      "input": {"n": 2, "baseline_q": 0.8, "synthesis_q": 0.81, "regression_tolerance": 0.05},
+      "expected": {"outcome": "success", "fallback_triggered": false}
+    },
+    {
+      "name": "below tolerance",
+      "input": {"n": 2, "baseline_q": 0.8, "synthesis_q": 0.74, "regression_tolerance": 0.05},
+      "expected": {"outcome": "fallback", "fallback_triggered": true, "classification": "automatic-fallback"}
+    },
+    {
+      "name": "prompt accepts regression",
+      "input": {"n": 2, "baseline_q": 0.8, "synthesis_q": 0.77, "regression_tolerance": 0.05, "user_choice": "accept-regression"},
+      "expected": {"outcome": "accepted_with_regression", "fallback_triggered": false, "choice_id": "accept-regression"}
+    },
+    {
+      "name": "prompt keeps baseline",
+      "input": {"n": 2, "baseline_q": 0.8, "synthesis_q": 0.77, "regression_tolerance": 0.05, "user_choice": "keep-baseline"},
+      "expected": {"outcome": "fallback_user_kept_baseline", "fallback_triggered": true, "choice_id": "keep-baseline"}
+    }
+  ],
+  "error_cases": [
+    {
+      "name": "prompt stop",
+      "input": {"n": 2, "baseline_q": 0.8, "synthesis_q": 0.77, "regression_tolerance": 0.05, "user_choice": "stop"},
+      "exit_code": 1,
+      "code": "synthesis_stopped"
+    },
+    {
+      "name": "prompt choice missing at lower boundary",
+      "input": {"n": 2, "baseline_q": 0.8, "synthesis_q": 0.75, "regression_tolerance": 0.05},
+      "exit_code": 1,
+      "code": "synthesis_choice_required"
+    },
+    {
+      "name": "valid choice outside prompt",
+      "input": {"n": 2, "baseline_q": 0.8, "synthesis_q": 0.81, "regression_tolerance": 0.05, "user_choice": "accept-regression"},
+      "exit_code": 2,
+      "code": "synthesis_choice_not_applicable"
+    },
+    {
+      "name": "negative tolerance",
+      "input": {"n": 2, "baseline_q": 0.8, "synthesis_q": 0.77, "regression_tolerance": -0.01},
+      "exit_code": 2,
+      "code": "invalid_regression_tolerance"
+    },
+    {
+      "name": "missing baseline",
+      "input": {"n": 2, "synthesis_q": 0.77, "regression_tolerance": 0.05},
+      "exit_code": 2,
+      "code": "invalid_number"
+    }
+  ],
+  "invalid_choices": [
+    "1",
+    "2",
+    "3",
+    "none",
+    "",
+    " accept-regression",
+    "accept-regression ",
+    "option 1",
+    "합성 채택",
+    "unknown"
+  ],
+  "session": {
+    "virtual_parallel": {
+      "seeds": [
+        {"id": 2, "status": "killed_plateau", "final_q": 0.4},
+        {"id": 1, "status": "active", "final_q": 0.8}
+      ]
+    }
+  },
+  "fallback_notes": [
+    {
+      "name": "user kept baseline",
+      "input": {
+        "baseline_reasoning": {"chosen_seed_id": 1, "tier": "preferred", "ties_broken_on": ["final_q"]},
+        "synthesis_q": 0.76,
+        "baseline_q": 0.8,
+        "user_choice": "keep-baseline"
+      },
+      "expected_markdown": "# Fallback Note\n\n## Classification\n\n- **classification**: keep-baseline\n- **description**: User selected the authenticated baseline after a within-tolerance synthesis regression.\n\n## Q Delta\n\n- **synthesis_Q**: 0.7600\n- **baseline_Q**: 0.8000\n- **delta**: -0.0400\n\n## Baseline Selection Reasoning\n\n- **chosen_seed_id**: 1\n- **tier**: preferred\n- **ties_broken_on**: final_q\n\n## Per-Seed Snapshot\n\n| seed | status | final_q |\n|---|---|---|\n| Seed 1 | active | 0.8 |\n| Seed 2 | killed_plateau | 0.4 |\n\n_See also_: `synthesis.md` (AI integration narrative), `cross_seed_audit.md` (forum activity), `seed_reports/` (per-seed journeys).\n"
+    },
+    {
+      "name": "automatic numeric fallback",
+      "input": {
+        "baseline_reasoning": {"chosen_seed_id": 1, "tier": "preferred", "ties_broken_on": ["final_q"]},
+        "synthesis_q": 0.7,
+        "baseline_q": 0.8,
+        "user_choice": "automatic-fallback"
+      },
+      "expected_markdown": "# Fallback Note\n\n## Classification\n\n- **classification**: automatic-fallback\n- **description**: The runtime selected the authenticated baseline without a user choice.\n\n## Q Delta\n\n- **synthesis_Q**: 0.7000\n- **baseline_Q**: 0.8000\n- **delta**: -0.1000\n\n## Baseline Selection Reasoning\n\n- **chosen_seed_id**: 1\n- **tier**: preferred\n- **ties_broken_on**: final_q\n\n## Per-Seed Snapshot\n\n| seed | status | final_q |\n|---|---|---|\n| Seed 1 | active | 0.8 |\n| Seed 2 | killed_plateau | 0.4 |\n\n_See also_: `synthesis.md` (AI integration narrative), `cross_seed_audit.md` (forum activity), `seed_reports/` (per-seed journeys).\n"
+    },
+    {
+      "name": "automatic failed synthesis fallback",
+      "input": {
+        "baseline_reasoning": {"chosen_seed_id": 1, "tier": "preferred", "ties_broken_on": ["final_q"]},
+        "synthesis_q": "synthesis_failed",
+        "baseline_q": 0.8,
+        "user_choice": "automatic-fallback"
+      },
+      "expected_markdown": "# Fallback Note\n\n## Classification\n\n- **classification**: automatic-fallback\n- **description**: The runtime selected the authenticated baseline without a user choice.\n\n## Q Delta\n\n- **synthesis_Q**: synthesis_failed\n- **baseline_Q**: 0.8000\n- **delta**: N/A\n\n## Baseline Selection Reasoning\n\n- **chosen_seed_id**: 1\n- **tier**: preferred\n- **ties_broken_on**: final_q\n\n## Per-Seed Snapshot\n\n| seed | status | final_q |\n|---|---|---|\n| Seed 1 | active | 0.8 |\n| Seed 2 | killed_plateau | 0.4 |\n\n_See also_: `synthesis.md` (AI integration narrative), `cross_seed_audit.md` (forum activity), `seed_reports/` (per-seed journeys).\n"
+    },
+    {
+      "name": "no baseline",
+      "input": {
+        "baseline_reasoning": {"chosen_seed_id": null, "tier": "no_baseline", "ties_broken_on": []},
+        "synthesis_q": null,
+        "baseline_q": null,
+        "user_choice": "no-baseline"
+      },
+      "expected_markdown": "# Fallback Note\n\n## Classification\n\n- **classification**: no-baseline\n- **description**: No eligible authenticated baseline was available.\n\n## Q Delta\n\n- **synthesis_Q**: N/A\n- **baseline_Q**: N/A\n- **delta**: N/A\n\n## Baseline Selection Reasoning\n\n- **chosen_seed_id**: None\n- **tier**: no_baseline\n- **ties_broken_on**: (none)\n\n## Per-Seed Snapshot\n\n| seed | status | final_q |\n|---|---|---|\n| Seed 1 | active | 0.8 |\n| Seed 2 | killed_plateau | 0.4 |\n\n_See also_: `synthesis.md` (AI integration narrative), `cross_seed_audit.md` (forum activity), `seed_reports/` (per-seed journeys).\n"
+    }
+  ]
+}

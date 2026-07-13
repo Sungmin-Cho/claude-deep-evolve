@@ -10,6 +10,16 @@ const { wrapEvolveArtifact } = require('../wrap-evolve-envelope.js');
 const SIMILARITY_THRESHOLD = 0.70;
 const MAX_RETRIES = 2;
 const BETA_FIELDS = ['seed_id', 'direction', 'hypothesis', 'rationale'];
+const SYNTHESIS_INTERACTION_CHOICES = new Set([
+  'accept-regression',
+  'keep-baseline',
+  'stop',
+]);
+const SYNTHESIS_FALLBACK_CLASSIFICATIONS = new Set([
+  'keep-baseline',
+  'automatic-fallback',
+  'no-baseline',
+]);
 
 function runtimeError(code, message, rc = 2, details) {
   return Object.assign(new Error(message), { code, rc, ...(details === undefined ? {} : { details }) });
@@ -40,6 +50,26 @@ function requireInteger(value, label, { positive = false, nonnegative = false } 
 function requireNumber(value, label) {
   if (typeof value !== 'number' || !Number.isFinite(value)) throw runtimeError('invalid_number', `${label} must be a finite number`);
   return value;
+}
+
+function validateSynthesisChoice(value, usage) {
+  if (usage === 'finalize') {
+    if (value === undefined) return undefined;
+    if (typeof value !== 'string' || !SYNTHESIS_INTERACTION_CHOICES.has(value)) {
+      throw runtimeError('invalid_synthesis_choice',
+        'user_choice must be accept-regression, keep-baseline, or stop');
+    }
+    return value;
+  }
+  if (usage === 'fallback-note') {
+    if (typeof value !== 'string' || !SYNTHESIS_FALLBACK_CLASSIFICATIONS.has(value)) {
+      throw runtimeError('invalid_synthesis_classification',
+        'user_choice must be keep-baseline, automatic-fallback, or no-baseline');
+    }
+    return value;
+  }
+  throw runtimeError('invalid_synthesis_choice_usage',
+    'synthesis choice usage must be finalize or fallback-note');
 }
 
 function processBeta(n, payload) {
@@ -547,39 +577,52 @@ function signedFixed(value, places) {
 }
 
 function renderFallbackNote(options) {
+  const classification = validateSynthesisChoice(options.user_choice, 'fallback-note');
   const reasoning = requireObject(options.baseline_reasoning, 'baseline reasoning');
   if (reasoning.ties_broken_on !== undefined && reasoning.ties_broken_on !== null && !Array.isArray(reasoning.ties_broken_on)) {
     throw runtimeError('invalid_ties', `baseline reasoning ties_broken_on must be a list, got ${typeof reasoning.ties_broken_on}`);
   }
-  requireNumber(options.synthesis_q, 'synthesis_q');
-  requireNumber(options.baseline_q, 'baseline_q');
-  const choice = String(options.user_choice);
-  if (!['1', '2', '3', 'none'].includes(choice)) throw runtimeError('invalid_user_choice', `unknown user choice: ${choice}`);
-  let scenario;
-  if (choice === 'none') scenario = '**Branch C — automatic regression fallback** (synthesis_Q dropped below baseline_Q − regression_tolerance without entering the user-prompt window)';
-  else if (choice === '1') scenario = '**Branch B option 1 — user accepted synthesis with regression** (synthesis_Q within regression_tolerance, but user chose to keep the synthesis result anyway)';
-  else scenario = `**Branch B option ${choice} — user-driven fallback**`;
-  const choiceText = {
-    1: '(1) 합성 채택 — accepted_with_regression',
-    2: '(2) 최고 seed 채택 — fallback to winner seed (user choice)',
-    3: '(3) 합성 폐기 + 원래 main 유지 — fallback to main (user choice)',
-  }[choice];
+  const finiteSynthesis = typeof options.synthesis_q === 'number' && Number.isFinite(options.synthesis_q);
+  const finiteBaseline = typeof options.baseline_q === 'number' && Number.isFinite(options.baseline_q);
+  const validShape = (classification === 'keep-baseline' && finiteSynthesis && finiteBaseline)
+    || (classification === 'automatic-fallback' && finiteBaseline
+      && (finiteSynthesis || options.synthesis_q === 'synthesis_failed'))
+    || (classification === 'no-baseline' && options.synthesis_q === null && options.baseline_q === null);
+  if (!validShape) {
+    throw runtimeError('invalid_fallback_q_shape',
+      `Q values do not match fallback classification ${classification}`);
+  }
+  const descriptions = {
+    'keep-baseline': 'User selected the authenticated baseline after a within-tolerance synthesis regression.',
+    'automatic-fallback': 'The runtime selected the authenticated baseline without a user choice.',
+    'no-baseline': 'No eligible authenticated baseline was available.',
+  };
+  const synthesisText = finiteSynthesis ? options.synthesis_q.toFixed(4)
+    : options.synthesis_q === 'synthesis_failed' ? 'synthesis_failed' : 'N/A';
+  const baselineText = finiteBaseline ? options.baseline_q.toFixed(4) : 'N/A';
+  const deltaText = finiteSynthesis && finiteBaseline
+    ? signedFixed(options.synthesis_q - options.baseline_q, 4) : 'N/A';
   const seeds = sortedSeeds(requireObject(options.session, 'session'));
-  const table = seeds.length === 0 ? '_No seeds in session.yaml._\n'
-    : `${['| seed | status | final_q |', '|---|---|---|', ...seeds.map((seed) => `| Seed ${seed.id === undefined ? '?' : seed.id} | ${seed.status === undefined ? 'unknown' : seed.status} | ${seed.final_q === undefined ? 0 : seed.final_q} |`)].join('\n')}\n`;
-  const parts = [
-    '# Fallback Note\n', scenario, '\n## Q Delta\n',
-    `- **synthesis_Q**: ${options.synthesis_q.toFixed(4)}`,
-    `- **baseline_Q**: ${options.baseline_q.toFixed(4)}`,
-    `- **delta**: ${signedFixed(options.synthesis_q - options.baseline_q, 4)}\n`,
-    '## Baseline Selection Reasoning\n',
+  const table = seeds.length === 0 ? ['_No seeds in session.yaml._']
+    : ['| seed | status | final_q |', '|---|---|---|',
+      ...seeds.map((seed) => `| Seed ${seed.id === undefined ? '?' : seed.id} | ${seed.status === undefined ? 'unknown' : seed.status} | ${seed.final_q === undefined ? 0 : seed.final_q} |`)];
+  return `${[
+    '# Fallback Note', '',
+    '## Classification', '',
+    `- **classification**: ${classification}`,
+    `- **description**: ${descriptions[classification]}`, '',
+    '## Q Delta', '',
+    `- **synthesis_Q**: ${synthesisText}`,
+    `- **baseline_Q**: ${baselineText}`,
+    `- **delta**: ${deltaText}`, '',
+    '## Baseline Selection Reasoning', '',
     `- **chosen_seed_id**: ${reasoning.chosen_seed_id === null ? 'None' : reasoning.chosen_seed_id}`,
     `- **tier**: ${reasoning.tier}`,
-    `- **ties_broken_on**: ${(reasoning.ties_broken_on || []).join(', ') || '(none)'}\n`,
-  ];
-  if (choiceText) parts.push('## User Choice\n', `- **selection**: ${choiceText}\n`);
-  parts.push('## Per-Seed Snapshot\n', table, '\n_See also_: `synthesis.md` (AI integration narrative), `cross_seed_audit.md` (forum activity), `seed_reports/` (per-seed journeys).\n');
-  return parts.join('\n');
+    `- **ties_broken_on**: ${(reasoning.ties_broken_on || []).join(', ') || '(none)'}`, '',
+    '## Per-Seed Snapshot', '',
+    ...table, '',
+    '_See also_: `synthesis.md` (AI integration narrative), `cross_seed_audit.md` (forum activity), `seed_reports/` (per-seed journeys).',
+  ].join('\n')}\n`;
 }
 
 function parseJsonl(text, label) {
@@ -721,18 +764,56 @@ function collectSynthesis(payload) {
 
 function finalizeSynthesis(payload) {
   requireObject(payload, 'synthesis finalization');
-  if (payload.n === 0) return { outcome: 'skipped_zero_active', fallback_triggered: false };
-  if (payload.n === 1) return { outcome: 'skipped_n1', fallback_triggered: false };
-  if (payload.baseline_q === null || payload.baseline_q === undefined) return { outcome: 'no_baseline', fallback_triggered: false };
-  if (payload.synthesis_q === 'synthesis_failed') return { outcome: 'fallback', fallback_triggered: true };
+  const n = requireInteger(payload.n, 'n', { nonnegative: true });
+  const choice = validateSynthesisChoice(payload.user_choice, 'finalize');
+  const rejectInapplicableChoice = () => {
+    if (choice !== undefined) {
+      throw runtimeError('synthesis_choice_not_applicable',
+        'user_choice is allowed only inside the synthesis regression prompt window');
+    }
+  };
+  if (n === 0) {
+    rejectInapplicableChoice();
+    return { outcome: 'skipped_zero_active', fallback_triggered: false, classification: 'no-baseline' };
+  }
+  if (n === 1) {
+    rejectInapplicableChoice();
+    return { outcome: 'skipped_n1', fallback_triggered: false };
+  }
+  if (payload.baseline_q === null) {
+    rejectInapplicableChoice();
+    return { outcome: 'no_baseline', fallback_triggered: false, classification: 'no-baseline' };
+  }
   requireNumber(payload.baseline_q, 'baseline_q');
+  if (payload.synthesis_q === 'synthesis_failed') {
+    rejectInapplicableChoice();
+    return { outcome: 'fallback', fallback_triggered: true, classification: 'automatic-fallback' };
+  }
   requireNumber(payload.synthesis_q, 'synthesis_q');
   const tolerance = requireNumber(payload.regression_tolerance, 'regression_tolerance');
-  if (payload.synthesis_q >= payload.baseline_q) return { outcome: 'success', fallback_triggered: false };
-  if (payload.synthesis_q >= payload.baseline_q - tolerance && String(payload.user_choice) === '1') {
-    return { outcome: 'accepted_with_regression', fallback_triggered: false };
+  if (tolerance < 0) {
+    throw runtimeError('invalid_regression_tolerance',
+      'regression_tolerance must be a non-negative finite number');
   }
-  return { outcome: 'fallback', fallback_triggered: true };
+  if (payload.synthesis_q >= payload.baseline_q) {
+    rejectInapplicableChoice();
+    return { outcome: 'success', fallback_triggered: false };
+  }
+  if (payload.synthesis_q < payload.baseline_q - tolerance) {
+    rejectInapplicableChoice();
+    return { outcome: 'fallback', fallback_triggered: true, classification: 'automatic-fallback' };
+  }
+  if (choice === undefined) {
+    throw runtimeError('synthesis_choice_required',
+      'user_choice is required inside the synthesis regression prompt window', 1);
+  }
+  if (choice === 'stop') {
+    throw runtimeError('synthesis_stopped', 'synthesis was stopped by user choice', 1);
+  }
+  if (choice === 'accept-regression') {
+    return { outcome: 'accepted_with_regression', fallback_triggered: false, choice_id: choice };
+  }
+  return { outcome: 'fallback_user_kept_baseline', fallback_triggered: true, choice_id: choice };
 }
 
 function resolveDataRoot(environment = process.env, homedir = os.homedir) {
@@ -1001,6 +1082,7 @@ module.exports = {
   renderFallbackNote,
   renderStatus,
   collectSynthesis,
+  validateSynthesisChoice,
   finalizeSynthesis,
   resolveDataRoot,
   lookupTransfer,

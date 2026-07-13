@@ -194,6 +194,68 @@ test('exports the immutable Prerequisite 4 registry and runtime version without 
   assert.equal(RUNTIME_VERSION, require('../package.json').version);
 });
 
+test('synthesis choice handlers expose exact semantic results and rc boundaries', () => {
+  const root = tempProject();
+  try {
+    const before = fs.readdirSync(path.join(root, '.deep-evolve')).sort();
+    const accepted = dispatch(request(root, 'synthesis.finalize', {
+      n: 2,
+      baseline_q: 0.8,
+      synthesis_q: 0.77,
+      regression_tolerance: 0.05,
+      user_choice: 'accept-regression',
+    }));
+    assert.equal(accepted.exitCode, 0, JSON.stringify(accepted));
+    assert.deepEqual(accepted.result, {
+      outcome: 'accepted_with_regression',
+      fallback_triggered: false,
+      choice_id: 'accept-regression',
+    });
+
+    const numeric = dispatch(request(root, 'synthesis.finalize', {
+      n: 2,
+      baseline_q: 0.8,
+      synthesis_q: 0.77,
+      regression_tolerance: 0.05,
+      user_choice: '1',
+    }));
+    assert.equal(numeric.exitCode, 2, JSON.stringify(numeric));
+    assert.equal(numeric.error.code, 'invalid_synthesis_choice');
+
+    const missing = dispatch(request(root, 'synthesis.finalize', {
+      n: 2,
+      baseline_q: 0.8,
+      synthesis_q: 0.77,
+      regression_tolerance: 0.05,
+    }));
+    assert.equal(missing.exitCode, 1, JSON.stringify(missing));
+    assert.equal(missing.error.code, 'synthesis_choice_required');
+
+    const stale = dispatch(request(root, 'synthesis.finalize', {
+      n: 2,
+      baseline_q: 0.8,
+      synthesis_q: 0.81,
+      regression_tolerance: 0.05,
+      user_choice: 'keep-baseline',
+    }));
+    assert.equal(stale.exitCode, 2, JSON.stringify(stale));
+    assert.equal(stale.error.code, 'synthesis_choice_not_applicable');
+
+    const invalidClassification = dispatch(request(root, 'synthesis.write-fallback-note', {
+      session_id: '01J00000000000000000000000',
+      baseline_reasoning: { chosen_seed_id: 1, tier: 'preferred', ties_broken_on: [] },
+      synthesis_q: 0.77,
+      baseline_q: 0.8,
+      user_choice: 'accept-regression',
+    }));
+    assert.equal(invalidClassification.exitCode, 2, JSON.stringify(invalidClassification));
+    assert.equal(invalidClassification.error.code, 'invalid_synthesis_classification');
+    assert.deepEqual(fs.readdirSync(path.join(root, '.deep-evolve')).sort(), before);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('session.read returns the exact canonical session digest without mutating authority', () => {
   const root = tempProject();
   try {

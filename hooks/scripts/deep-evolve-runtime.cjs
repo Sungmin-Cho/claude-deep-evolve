@@ -113,6 +113,7 @@ const {
   renderFallbackNote,
   renderStatus,
   collectSynthesis,
+  validateSynthesisChoice,
   finalizeSynthesis,
   resolveDataRoot,
   lookupTransfer,
@@ -5927,6 +5928,7 @@ const HANDLERS = Object.freeze({
     const payload = payloadFor(request, [
       'session_id', 'baseline_reasoning', 'synthesis_q', 'baseline_q', 'user_choice',
     ]);
+    const classification = validateSynthesisChoice(payload.user_choice, 'fallback-note');
     const info = sessionInfo(project, ensureSessionId(payload.session_id), { requireDirectory: true });
     const text = task5SessionTexts(project, info, ['session.yaml'])['session.yaml'];
     const session = parseStateDocument(text, { sourcePath: info.sessionPath });
@@ -5935,7 +5937,7 @@ const HANDLERS = Object.freeze({
       baseline_reasoning: payload.baseline_reasoning,
       synthesis_q: payload.synthesis_q,
       baseline_q: payload.baseline_q,
-      user_choice: payload.user_choice,
+      user_choice: classification,
     });
     const output = task5OutputPath(info, ['completion', 'fallback_note.md']);
     atomicWriteFile(output, markdown);

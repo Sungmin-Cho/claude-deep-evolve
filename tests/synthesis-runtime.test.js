@@ -18,6 +18,7 @@ const {
   renderFallbackNote,
   renderStatus,
   collectSynthesis,
+  validateSynthesisChoice,
   finalizeSynthesis,
   exportFeedback,
 } = require('../hooks/scripts/runtime/synthesis.cjs');
@@ -145,7 +146,7 @@ test('cross-seed audit preserves N=1 short circuit, matrices, paranoid skips, an
   assert.deepEqual(audit.warnings, []);
 });
 
-test('fallback note preserves Q formatting, baseline reasoning, user choices, and sorted seed snapshot', () => {
+test('fallback note preserves Q formatting, baseline reasoning, semantic classification, and sorted seed snapshot', () => {
   const markdown = renderFallbackNote({
     session: { virtual_parallel: { seeds: [
       { id: 2, status: 'killed_plateau', final_q: 0.4 },
@@ -154,15 +155,16 @@ test('fallback note preserves Q formatting, baseline reasoning, user choices, an
     baseline_reasoning: { chosen_seed_id: 1, tier: 'preferred', ties_broken_on: ['final_q'] },
     synthesis_q: 0.76,
     baseline_q: 0.8,
-    user_choice: '2',
+    user_choice: 'keep-baseline',
   });
-  assert.match(markdown, /Branch B option 2 — user-driven fallback/);
+  assert.match(markdown, /\*\*classification\*\*: keep-baseline/);
+  assert.match(markdown, /User selected the authenticated baseline/);
   assert.match(markdown, /\*\*delta\*\*: -0\.0400/);
-  assert.match(markdown, /최고 seed 채택/);
+  assert.doesNotMatch(markdown, /Branch B option|option [123]|\([123]\)/);
   assert.ok(markdown.indexOf('| Seed 1 |') < markdown.indexOf('| Seed 2 |'));
   assert.throws(() => renderFallbackNote({
     session: {}, baseline_reasoning: { ties_broken_on: 'final_q' },
-    synthesis_q: 0, baseline_q: 0, user_choice: 'none',
+    synthesis_q: 0, baseline_q: 0, user_choice: 'automatic-fallback',
   }), /ties_broken_on.*list/i);
 });
 
@@ -234,13 +236,32 @@ test('synthesis collection and finalization are deterministic across N=1, succes
     cross_seed_audit: { exchanges: 1 },
   });
   assert.deepEqual(collected.seed_reports.map((row) => row.seed_id), [1, 2]);
-  assert.equal(finalizeSynthesis({ n: 1 }).outcome, 'skipped_n1');
-  assert.equal(finalizeSynthesis({ n: 0 }).outcome, 'skipped_zero_active');
-  assert.equal(finalizeSynthesis({ n: 2, baseline_q: null }).outcome, 'no_baseline');
-  assert.equal(finalizeSynthesis({ n: 2, baseline_q: 0.8, synthesis_q: 0.81, regression_tolerance: 0.05 }).outcome, 'success');
-  assert.equal(finalizeSynthesis({ n: 2, baseline_q: 0.8, synthesis_q: 0.77, regression_tolerance: 0.05, user_choice: '1' }).outcome, 'accepted_with_regression');
-  assert.equal(finalizeSynthesis({ n: 2, baseline_q: 0.8, synthesis_q: 0.77, regression_tolerance: 0.05, user_choice: '2' }).outcome, 'fallback');
-  assert.equal(finalizeSynthesis({ n: 2, baseline_q: 0.8, synthesis_q: 'synthesis_failed', regression_tolerance: 0.05 }).outcome, 'fallback');
+  assert.equal(typeof validateSynthesisChoice, 'function');
+  assert.deepEqual(finalizeSynthesis({ n: 1 }), { outcome: 'skipped_n1', fallback_triggered: false });
+  assert.deepEqual(finalizeSynthesis({ n: 0 }), {
+    outcome: 'skipped_zero_active', fallback_triggered: false, classification: 'no-baseline',
+  });
+  assert.deepEqual(finalizeSynthesis({ n: 2, baseline_q: null }), {
+    outcome: 'no_baseline', fallback_triggered: false, classification: 'no-baseline',
+  });
+  assert.deepEqual(finalizeSynthesis({
+    n: 2, baseline_q: 0.8, synthesis_q: 0.81, regression_tolerance: 0.05,
+  }), { outcome: 'success', fallback_triggered: false });
+  assert.deepEqual(finalizeSynthesis({
+    n: 2, baseline_q: 0.8, synthesis_q: 0.77, regression_tolerance: 0.05,
+    user_choice: 'accept-regression',
+  }), {
+    outcome: 'accepted_with_regression', fallback_triggered: false, choice_id: 'accept-regression',
+  });
+  assert.deepEqual(finalizeSynthesis({
+    n: 2, baseline_q: 0.8, synthesis_q: 0.77, regression_tolerance: 0.05,
+    user_choice: 'keep-baseline',
+  }), {
+    outcome: 'fallback_user_kept_baseline', fallback_triggered: true, choice_id: 'keep-baseline',
+  });
+  assert.deepEqual(finalizeSynthesis({
+    n: 2, baseline_q: 0.8, synthesis_q: 'synthesis_failed',
+  }), { outcome: 'fallback', fallback_triggered: true, classification: 'automatic-fallback' });
 });
 
 test('Task 5 and exact Task 6 harness operations are registered while later operations stay absent', () => {
