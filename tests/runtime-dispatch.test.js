@@ -20,7 +20,7 @@ const {
   main,
 } = require(RUNTIME);
 
-const TASK3_OPERATIONS = [
+const TASK4_OPERATIONS = [
   'session.resolve-current',
   'session.read',
   'session.list',
@@ -56,6 +56,9 @@ const TASK3_OPERATIONS = [
   'coord.list-user-kill-requests',
   'coord.ack-user-kill-request',
   'coord.drain-kill-queue',
+  'coord.begin-seed-block',
+  'coord.finish-seed-block',
+  'coord.advance-epoch',
   'scheduler.signals',
   'scheduler.decide',
   'scheduler.kill-conditions',
@@ -178,14 +181,14 @@ function captureMain(argv, dependencies = {}) {
   }
 }
 
-test('exports the immutable Prerequisite 3 registry and runtime version without later operations', () => {
+test('exports the immutable Prerequisite 4 registry and runtime version without later operations', () => {
   const task6HarnessOperations = [
     'harness.generate',
     'harness.migrate-legacy',
     'harness.run',
     'harness.write-baseline',
   ];
-  assert.deepEqual([...OPERATIONS].sort(), [...TASK3_OPERATIONS, ...task6HarnessOperations].sort());
+  assert.deepEqual([...OPERATIONS].sort(), [...TASK4_OPERATIONS, ...task6HarnessOperations].sort());
   assert.equal(Object.isFrozen(OPERATIONS), true);
   assert.throws(() => OPERATIONS.push('metrics.entropy'), TypeError);
   assert.equal(RUNTIME_VERSION, require('../package.json').version);

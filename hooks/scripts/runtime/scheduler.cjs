@@ -265,14 +265,23 @@ function collectSchedulerSignals(session, journalEvents, forumEvents) {
       convergence_indicators: null,
     });
   }
-  const inFlight = new Map();
+  const strictInFlight = deriveInFlightSeedIds(journalEvents);
+  // Frozen legacy fixtures predate block_id and carried chosen_seed_id. Keep
+  // that compatibility shape physically at the read boundary while strict
+  // coordinator records derive in-flight authority only by block identity.
+  const legacyInFlight = new Map();
   for (const event of journalEvents) {
-    if (!plainObject(event)) continue;
+    if (!plainObject(event) || typeof event.block_id === 'string') continue;
     const type = eventType(event);
-    if (type === 'seed_scheduled' && event.chosen_seed_id !== undefined) inFlight.set(event.chosen_seed_id, true);
-    if ((type === 'seed_block_completed' || type === 'seed_block_failed') && event.seed_id !== undefined) inFlight.set(event.seed_id, false);
+    if (type === 'seed_scheduled' && event.chosen_seed_id !== undefined) {
+      legacyInFlight.set(event.chosen_seed_id, true);
+    }
+    if ((type === 'seed_block_completed' || type === 'seed_block_failed')
+        && event.seed_id !== undefined) legacyInFlight.set(event.seed_id, false);
   }
-  for (const seed of perSeed) seed.in_flight_block = inFlight.get(seed.id) || false;
+  for (const seed of perSeed) {
+    seed.in_flight_block = strictInFlight.has(seed.id) || legacyInFlight.get(seed.id) || false;
+  }
 
   const times = [...new Set(journalEvents.filter(plainObject).map((event) => event.ts).filter(Boolean))].sort().slice(-10);
   const bestSeries = [];

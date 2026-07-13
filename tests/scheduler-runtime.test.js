@@ -151,6 +151,19 @@ test('scheduler signals preserve N/n_current, id/seed_id, canonical zero, trends
   expectRuntimeError(() => collectSchedulerSignals({
     virtual_parallel: { n_current: 2, seeds: [{ id: true, status: 'active' }] },
   }, [], []), 2, 'integral');
+
+  const strictSession = structuredClone(schedulerCases.signals[0].session);
+  const strictSchedule = {
+    event: 'seed_scheduled', block_id: 'strict-block', seed_id: 1,
+    operation_id: '01J00000000000000000000100',
+  };
+  const scheduled = collectSchedulerSignals(strictSession, [strictSchedule], []);
+  assert.equal(scheduled.seeds.find((seed) => seed.id === 1).in_flight_block, true,
+    'strict coordinator schedule identity is seed_id, never chosen_seed_id');
+  const terminal = collectSchedulerSignals(strictSession, [strictSchedule, {
+    event: 'seed_block_completed', block_id: 'strict-block', seed_id: 1,
+  }], []);
+  assert.equal(terminal.seeds.find((seed) => seed.id === 1).in_flight_block, false);
 });
 
 test('all borrow preflight and abandonment oracle rows are frozen', () => {

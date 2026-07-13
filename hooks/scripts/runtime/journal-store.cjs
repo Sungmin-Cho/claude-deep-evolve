@@ -712,6 +712,101 @@ function validateKillQueue(records) {
   return entries;
 }
 
+function seedProjectionMap(projection, label) {
+  requirePlainObject(projection, label);
+  if (!Array.isArray(projection.seeds)) {
+    fail('invalid_projection', `${label}.seeds must be an array`);
+  }
+  const seeds = new Map();
+  for (const seed of projection.seeds) {
+    requirePlainObject(seed, `${label}.seed`);
+    requireInteger(seed.id, `${label}.seed.id`, { min: 1 });
+    if (seeds.has(seed.id)) fail('invalid_projection', `${label} has duplicate seed ${seed.id}`);
+    seeds.set(seed.id, seed);
+  }
+  return seeds;
+}
+
+/**
+ * The one strict eligible-kill decision used by acknowledgement, explicit
+ * drain, and coordinator block completion. Queue snapshots are authenticated
+ * against the complete pre-transition projection first. A productive block
+ * may then refresh only its now-idle seed snapshot from the post-terminal
+ * projection before the exact snapshot is consumed by the kill event.
+ */
+function prepareEligibleKills({
+  queue,
+  inFlightSeedIds,
+  preProjection,
+  postProjection = preProjection,
+  preSnapshotCandidates = new Map(),
+  operationId,
+  now,
+}) {
+  const entries = validateKillQueue(queue);
+  if (!(inFlightSeedIds instanceof Set)) {
+    fail('invalid_in_flight', 'inFlightSeedIds must be a Set');
+  }
+  if (typeof operationId !== 'string' || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(operationId)) {
+    fail('invalid_operation_id', 'operationId must be a canonical ULID');
+  }
+  requireUtc(now, 'kill applied timestamp');
+  const preSeeds = seedProjectionMap(preProjection, 'preProjection');
+  const postSeeds = seedProjectionMap(postProjection, 'postProjection');
+  const killEvents = [];
+  const deferred = [];
+  for (const entry of entries) {
+    const preSeed = preSeeds.get(entry.seed_id);
+    if (!preSeed || preSeed.status !== 'active') {
+      fail('kill_queue_seed_terminal',
+        `queued kill ${entry.entry_id} targets a missing or terminal preimage seed`);
+    }
+    const candidates = preSnapshotCandidates instanceof Map
+      && preSnapshotCandidates.has(entry.seed_id)
+      ? preSnapshotCandidates.get(entry.seed_id) : [preSeed];
+    if (!Array.isArray(candidates) || candidates.length === 0
+        || !candidates.some((candidate) => plainObject(candidate)
+          && candidate.status === 'active'
+          && Object.is(entry.final_q, candidate.current_q)
+          && entry.experiments_used === candidate.experiments_used)) {
+      fail('kill_queue_snapshot_conflict',
+        `queued kill ${entry.entry_id} snapshot differs from every canonical prefix`);
+    }
+    if (inFlightSeedIds.has(entry.seed_id)) {
+      deferred.push(entry);
+      continue;
+    }
+    const postSeed = postSeeds.get(entry.seed_id);
+    if (!postSeed || postSeed.status !== 'active') {
+      fail('kill_queue_seed_terminal',
+        `queued kill ${entry.entry_id} targets a missing or terminal postimage seed`);
+    }
+    const refreshed = {
+      ...entry,
+      final_q: postSeed.current_q,
+      experiments_used: postSeed.experiments_used,
+    };
+    if (!Object.is(refreshed.final_q, postSeed.current_q)
+        || refreshed.experiments_used !== postSeed.experiments_used) {
+      fail('kill_queue_snapshot_conflict',
+        `queued kill ${entry.entry_id} could not be reconciled to the postimage`);
+    }
+    const user = Object.hasOwn(refreshed, 'request_id');
+    killEvents.push({
+      event: 'seed_killed',
+      operation_id: operationId,
+      source: user ? 'user_request' : 'scheduler',
+      request_id: user ? refreshed.request_id : null,
+      kill_entry_id: refreshed.entry_id,
+      seed_id: refreshed.seed_id,
+      condition: refreshed.condition,
+      ts: now,
+      applied_at: now,
+    });
+  }
+  return { killEvents, deferred };
+}
+
 function strictlyLater(nowText, queuedAt) {
   const queued = Date.parse(queuedAt);
   const now = Date.parse(nowText);
@@ -813,6 +908,7 @@ module.exports = {
   queueUserKill,
   drainKillQueue,
   stableUserKillEntryId,
+  prepareEligibleKills,
   validateKillQueue,
   validateKillQueueEntry,
   validateUserKillRequest,

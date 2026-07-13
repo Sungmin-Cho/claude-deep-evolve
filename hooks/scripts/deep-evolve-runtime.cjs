@@ -63,6 +63,7 @@ const {
   queueUserKill,
   drainKillQueue,
   stableUserKillEntryId,
+  prepareEligibleKills,
   validateKillQueue,
   validateUserKillRequests,
   assertGenericEventAllowed,
@@ -80,9 +81,16 @@ const {
   borrowPreflight,
   findBorrowAbandoned,
   classifyConvergence,
-  eligibleKillEntries,
   deriveInFlightSeedIds,
 } = require('./runtime/scheduler.cjs');
+const {
+  applyEpochBoundary,
+  assertSummaryMatches,
+  beginSeedBlock,
+  buildFinishEvent,
+  deriveEpochBoundary,
+  deriveFinishEvidence,
+} = require('./runtime/coordinator-store.cjs');
 const {
   createSeedWorktree,
   validateSeedWorktree,
@@ -161,6 +169,9 @@ const OPERATIONS = Object.freeze([
   'coord.list-user-kill-requests',
   'coord.ack-user-kill-request',
   'coord.drain-kill-queue',
+  'coord.begin-seed-block',
+  'coord.finish-seed-block',
+  'coord.advance-epoch',
   'scheduler.signals',
   'scheduler.decide',
   'scheduler.kill-conditions',
@@ -4266,21 +4277,19 @@ function operationAckUserKillRequest(project, payload, dependencies = {}) {
           queued_at: now,
         };
         const inFlight = deriveInFlightSeedIds(state.events);
-        if (inFlight.has(priorRequest.seed_id)) {
+        const eligible = prepareEligibleKills({
+          queue: [queueEntry],
+          inFlightSeedIds: inFlight,
+          preProjection: state.projection,
+          postProjection: state.projection,
+          operationId: payload.operation_id,
+          now,
+        });
+        if (eligible.deferred.length === 1) {
           queue = [...state.queue, queueEntry];
           queued = true;
         } else {
-          killEvent = {
-            event: 'seed_killed',
-            operation_id: payload.operation_id,
-            source: 'user_request',
-            request_id: priorRequest.entry_id,
-            kill_entry_id: killEntryId,
-            seed_id: priorRequest.seed_id,
-            condition: 'user_requested',
-            ts: now,
-            applied_at: now,
-          };
+          [killEvent] = eligible.killEvents;
           nextProjection = reduceVirtualProjection({
             initialVirtual: state.session.virtual_parallel,
             events: [...state.events, killEvent],
@@ -4358,36 +4367,16 @@ function operationDrainKillQueueStrict(project, payload, dependencies = {}) {
     }
     const before = killAuthorityDigests(files, relative);
     requireKillCas(payload, before);
-    const inFlight = deriveInFlightSeedIds(state.events);
-    const decision = eligibleKillEntries(state.queue, inFlight);
-    if (decision.duplicates.length > 0) {
-      throw transitionError('duplicate_kill_seed', 'kill queue contains a duplicate seed decision');
-    }
     const now = isoNow(dependencies);
-    const killEvents = decision.eligible.map((entry) => {
-      const seed = state.projection.seeds.find((candidate) => candidate.id === entry.seed_id);
-      if (!seed || seed.status !== 'active') {
-        throw transitionError('kill_queue_seed_terminal',
-          `queued kill ${entry.entry_id} targets a missing or terminal seed`);
-      }
-      if (!Object.is(entry.final_q, seed.current_q)
-          || entry.experiments_used !== seed.experiments_used) {
-        throw transitionError('kill_queue_snapshot_conflict',
-          `queued kill ${entry.entry_id} snapshot differs from canonical projection`);
-      }
-      const user = Object.hasOwn(entry, 'request_id');
-      return {
-        event: 'seed_killed',
-        operation_id: payload.operation_id,
-        source: user ? 'user_request' : 'scheduler',
-        request_id: user ? entry.request_id : null,
-        kill_entry_id: entry.entry_id,
-        seed_id: entry.seed_id,
-        condition: entry.condition,
-        ts: now,
-        applied_at: now,
-      };
+    const decision = prepareEligibleKills({
+      queue: state.queue,
+      inFlightSeedIds: deriveInFlightSeedIds(state.events),
+      preProjection: state.projection,
+      postProjection: state.projection,
+      operationId: payload.operation_id,
+      now,
     });
+    const killEvents = decision.killEvents;
     const projection = killEvents.length === 0 ? state.projection : reduceVirtualProjection({
       initialVirtual: state.session.virtual_parallel,
       events: [...state.events, ...killEvents],
@@ -4429,6 +4418,366 @@ function operationDrainKillQueueStrict(project, payload, dependencies = {}) {
   if (!replayed) {
     result.journal_sha256 = sha256Digest(Buffer.from(outcome.files[relative.journal]));
   }
+  return { result, warnings: [] };
+}
+
+function requireSafeCoordinatorInteger(value, label, { min = 0 } = {}) {
+  requireInteger(value, label, { min });
+  if (!Number.isSafeInteger(value)) {
+    throw operatorError('invalid_field_type', `${label} must be a safe integer`);
+  }
+  return value;
+}
+
+function coordinatorSeedWorktree(project, info, seed, dependencies = {}) {
+  const expectedWorktree = path.join(info.sessionRoot, 'worktrees', `seed_${seed.id}`);
+  if (path.resolve(seed.worktree_path) !== path.resolve(expectedWorktree)) {
+    throw operatorError('seed_worktree_identity_mismatch',
+      'canonical seed worktree path is inconsistent');
+  }
+  const validated = validateSeedWorktree({
+    ...task5WorktreeOptions(project, info, dependencies),
+    seedId: seed.id,
+  });
+  if (path.resolve(validated.worktree_path) !== path.resolve(expectedWorktree)
+      || validated.branch !== seed.branch || !FULL_COMMIT.test(validated.head)) {
+    throw businessError('worktree_identity_mismatch',
+      'seed worktree branch or HEAD differs from canonical state');
+  }
+  return validated;
+}
+
+function verifyCoordinatorReturnedHead(project, info, seed, schedule, returnedHead,
+  dependencies = {}) {
+  if (!FULL_COMMIT.test(returnedHead)) {
+    throw operatorError('invalid_commit', 'payload.returned_head must be a full commit ID');
+  }
+  const worktree = coordinatorSeedWorktree(project, info, seed, dependencies);
+  const resolvedPre = gitLiteral(worktree.worktree_path,
+    ['rev-parse', '--verify', `${schedule.pre_dispatch_head}^{commit}`], dependencies,
+    'verify block pre-dispatch HEAD');
+  const resolvedReturned = gitLiteral(worktree.worktree_path,
+    ['rev-parse', '--verify', `${returnedHead}^{commit}`], dependencies,
+    'verify block returned HEAD');
+  if (resolvedPre !== schedule.pre_dispatch_head || resolvedReturned !== returnedHead
+      || worktree.head !== returnedHead) {
+    throw businessError('worktree_head_mismatch',
+      'returned HEAD is not the authenticated seed branch tip');
+  }
+  const ancestry = (dependencies.spawnSync || spawnSync)('git', [
+    '-C', worktree.worktree_path, 'merge-base', '--is-ancestor',
+    schedule.pre_dispatch_head, returnedHead,
+  ], { encoding: 'utf8', shell: false });
+  if (!ancestry || ancestry.status !== 0) {
+    if (ancestry && ancestry.status === 1) {
+      throw businessError('git_ancestry_mismatch',
+        'returned HEAD is not a descendant of pre-dispatch HEAD');
+    }
+    throw businessError('git_identity_mismatch', 'Git ancestry verification failed');
+  }
+  return worktree;
+}
+
+function operationBeginSeedBlock(project, payload, dependencies = {}) {
+  requireExactPayload(payload, [
+    'session_id', 'operation_id', 'decision_id', 'seed_id', 'block_size',
+    'pre_dispatch_head', 'expected_epoch', 'budget_preimage',
+    'expected_session_sha256', 'expected_journal_sha256',
+  ]);
+  const sessionId = ensureSessionId(payload.session_id);
+  requireOperationId(payload.operation_id, 'payload.operation_id');
+  requireString(payload.decision_id, 'payload.decision_id');
+  requireSafeCoordinatorInteger(payload.seed_id, 'payload.seed_id', { min: 1 });
+  requireSafeCoordinatorInteger(payload.block_size, 'payload.block_size', { min: 1 });
+  requireSafeCoordinatorInteger(payload.expected_epoch, 'payload.expected_epoch', { min: 1 });
+  requireSafeCoordinatorInteger(payload.budget_preimage, 'payload.budget_preimage');
+  if (!FULL_COMMIT.test(payload.pre_dispatch_head)) {
+    throw operatorError('invalid_commit', 'payload.pre_dispatch_head must be a full commit ID');
+  }
+  const info = sessionInfo(project, sessionId, { requireDirectory: true });
+  const relative = typedPaths(info);
+  const requestDigest = requestSha256('coord.begin-seed-block', payload);
+  let result;
+  let replayed = false;
+  const outcome = mutateCoordinationFiles(project.stateRoot, Object.values(relative), (files) => {
+    const current = requireStrictTypedSession(files, relative, info);
+    const found = findOperationReceipt(files[relative.journal], payload.operation_id,
+      'coord.begin-seed-block', requestDigest);
+    if (found) {
+      result = replayResult(found);
+      replayed = true;
+      return null;
+    }
+    const before = authorityDigests(files, relative);
+    requireCas(payload, before, ['session', 'journal']);
+    const entries = validateCommittedJournal(files[relative.journal]);
+    const events = entries.map((entry) => entry.value);
+    const resultRows = parseResultsTsv(files[relative.results]);
+    requireCurrentProjection(current, events, resultRows);
+    const seed = current.virtual_parallel.seeds.find((entry) => entry.id === payload.seed_id);
+    if (!seed) throw businessError('seed_not_active', `seed ${payload.seed_id} is missing`);
+    const worktree = coordinatorSeedWorktree(project, info, seed, dependencies);
+    const now = isoNow(dependencies);
+    const begun = beginSeedBlock({ session: current, payload, events, worktree, now });
+    // Re-authenticate immediately before publication so a summary-time HEAD
+    // drift cannot be converted into a durable schedule.
+    const stable = coordinatorSeedWorktree(project, info, seed, dependencies);
+    if (stable.head !== worktree.head || stable.branch !== worktree.branch) {
+      throw businessError('worktree_changed_during_validation',
+        'seed worktree changed during block begin validation');
+    }
+    reduceVirtualProjection({
+      initialVirtual: current.virtual_parallel,
+      events: [...events, begun.event],
+      resultRows,
+    });
+    const core = {
+      block_id: begun.blockId,
+      seed_id: payload.seed_id,
+      epoch: payload.expected_epoch,
+      pre_dispatch_head: payload.pre_dispatch_head,
+      block_size: payload.block_size,
+      budget_preimage: payload.budget_preimage,
+      session_sha256: before.session_sha256,
+    };
+    const appended = appendTypedEventAndReceipt(files[relative.journal], begun.event, {
+      operation: 'coord.begin-seed-block',
+      operationId: payload.operation_id,
+      requestDigest,
+      prior: before,
+      postSessionSha256: before.session_sha256,
+      postResultsSha256: before.results_sha256,
+      postNonProjectionSha256: sessionNonProjectionSha256(current),
+      result: core,
+      ts: now,
+    });
+    result = { ...core, replayed: false };
+    return { [relative.journal]: appended.journalText };
+  }, transitionOptions(dependencies));
+  if (!replayed) result.journal_sha256 = sha256Digest(Buffer.from(outcome.files[relative.journal]));
+  return { result, warnings: [] };
+}
+
+function operationFinishSeedBlock(project, payload, dependencies = {}) {
+  requireExactPayload(payload, [
+    'session_id', 'operation_id', 'block_id', 'seed_id', 'status', 'returned_head',
+    'summary', 'expected_session_sha256', 'expected_journal_sha256',
+    'expected_forum_sha256', 'expected_kill_queue_sha256',
+    'expected_kill_requests_sha256',
+  ]);
+  const sessionId = ensureSessionId(payload.session_id);
+  requireOperationId(payload.operation_id, 'payload.operation_id');
+  requireString(payload.block_id, 'payload.block_id');
+  requireSafeCoordinatorInteger(payload.seed_id, 'payload.seed_id', { min: 1 });
+  requireString(payload.status, 'payload.status');
+  if (!FULL_COMMIT.test(payload.returned_head)) {
+    throw operatorError('invalid_commit', 'payload.returned_head must be a full commit ID');
+  }
+  const info = sessionInfo(project, sessionId, { requireDirectory: true });
+  const relative = typedKillPaths(info);
+  const requestDigest = requestSha256('coord.finish-seed-block', payload);
+  let result;
+  let replayed = false;
+  const outcome = mutateCoordinationFiles(project.stateRoot, Object.values(relative), (files) => {
+    const state = validateKillSemanticState(files, relative, info);
+    const found = findOperationReceipt(files[relative.journal], payload.operation_id,
+      'coord.finish-seed-block', requestDigest);
+    if (found) {
+      result = replayResult(found);
+      replayed = true;
+      return null;
+    }
+    const before = killAuthorityDigests(files, relative);
+    requireKillCas(payload, before, { forum: true });
+    const forumEvents = parseStrictJsonl(files[relative.forum]).map((entry) => entry.value);
+    const now = isoNow(dependencies);
+    const evidence = deriveFinishEvidence({
+      events: state.events,
+      forumEvents,
+      sessionId,
+      blockId: payload.block_id,
+      seedId: payload.seed_id,
+      status: payload.status,
+      now,
+    });
+    assertSummaryMatches(payload.summary, evidence);
+    if (payload.returned_head !== evidence.expectedReturnedHead) {
+      throw businessError('worktree_head_authority_conflict',
+        'returned HEAD is not reproduced by the ordered typed experiment chain');
+    }
+    const seed = state.projection.seeds.find((entry) => entry.id === payload.seed_id);
+    if (!seed || seed.status !== 'active') {
+      throw businessError('seed_not_active', `seed ${payload.seed_id} is missing or terminal`);
+    }
+    verifyCoordinatorReturnedHead(project, info, seed, evidence.schedule,
+      payload.returned_head, dependencies);
+    const terminalEvent = buildFinishEvent({ payload, evidence, now });
+    const terminalEvents = [...state.events, terminalEvent];
+    const terminalProjection = reduceVirtualProjection({
+      initialVirtual: state.session.virtual_parallel,
+      events: terminalEvents,
+      resultRows: state.resultRows,
+    });
+    const prefixStart = seed.allocated_budget - evidence.schedule.budget_preimage;
+    if (!Number.isSafeInteger(prefixStart) || prefixStart < 0
+        || prefixStart > seed.experiments_used) {
+      throw transitionError('kill_queue_snapshot_conflict',
+        'block schedule cannot derive canonical kill snapshot prefixes');
+    }
+    const blockPrefixSnapshots = [];
+    for (let experiments = prefixStart; experiments <= seed.experiments_used; experiments += 1) {
+      blockPrefixSnapshots.push({
+        status: 'active',
+        current_q: seed.current_q,
+        experiments_used: experiments,
+      });
+    }
+    const killDecision = prepareEligibleKills({
+      queue: state.queue,
+      inFlightSeedIds: deriveInFlightSeedIds(terminalEvents),
+      preProjection: state.projection,
+      postProjection: terminalProjection,
+      preSnapshotCandidates: new Map([[seed.id, blockPrefixSnapshots]]),
+      operationId: payload.operation_id,
+      now,
+    });
+    const typedEvents = [terminalEvent, ...killDecision.killEvents];
+    const projection = killDecision.killEvents.length === 0 ? terminalProjection
+      : reduceVirtualProjection({
+        initialVirtual: state.session.virtual_parallel,
+        events: [...state.events, ...typedEvents],
+        resultRows: state.resultRows,
+      });
+    // Authenticate the branch a second time after every caller summary and
+    // derived-file scan but before any transaction bytes are staged.
+    verifyCoordinatorReturnedHead(project, info, seed, evidence.schedule,
+      payload.returned_head, dependencies);
+    const next = structuredClone(state.session);
+    next.virtual_parallel = installProjection(next.virtual_parallel, projection);
+    validateStoredSession(next);
+    const sessionText = serializeStateDocument(next);
+    const queueText = serializeJsonlRecords(killDecision.deferred);
+    const core = {
+      block_id: payload.block_id,
+      seed_id: payload.seed_id,
+      status: payload.status,
+      returned_head: payload.returned_head,
+      final_q: evidence.Q,
+      components: structuredClone(evidence.components),
+      experiment_ids: evidence.experimentIds,
+      commits: evidence.commits,
+      forum_entry_ids: evidence.forumEntryIds,
+      borrows_given: evidence.borrowsGiven,
+      borrows_received: evidence.borrowsReceived,
+      killed_seed_ids: killDecision.killEvents.map((event) => event.seed_id),
+      session_sha256: sha256Digest(Buffer.from(sessionText)),
+      forum_sha256: before.forum_sha256,
+      kill_queue_sha256: sha256Digest(Buffer.from(queueText)),
+      kill_requests_sha256: before.kill_requests_sha256,
+    };
+    const appended = appendTypedEventsAndReceipt(files[relative.journal], typedEvents, {
+      operation: 'coord.finish-seed-block',
+      operationId: payload.operation_id,
+      requestDigest,
+      prior: before,
+      postSessionSha256: core.session_sha256,
+      postResultsSha256: before.results_sha256,
+      postNonProjectionSha256: sessionNonProjectionSha256(next),
+      result: core,
+      ts: now,
+    });
+    result = { ...core, replayed: false };
+    return {
+      [relative.session]: sessionText,
+      [relative.journal]: appended.journalText,
+      [relative.forum]: files[relative.forum],
+      [relative.killQueue]: queueText,
+      [relative.killRequests]: files[relative.killRequests],
+    };
+  }, transitionOptions(dependencies));
+  if (!replayed) result.journal_sha256 = sha256Digest(Buffer.from(outcome.files[relative.journal]));
+  return { result, warnings: [] };
+}
+
+function operationAdvanceEpoch(project, payload, dependencies = {}) {
+  requireExactPayload(payload, [
+    'session_id', 'operation_id', 'expected_epoch', 'completed_block_ids', 'reason',
+    'expected_session_sha256', 'expected_journal_sha256', 'expected_results_sha256',
+  ]);
+  const sessionId = ensureSessionId(payload.session_id);
+  requireOperationId(payload.operation_id, 'payload.operation_id');
+  requireSafeCoordinatorInteger(payload.expected_epoch, 'payload.expected_epoch', { min: 1 });
+  if (!Array.isArray(payload.completed_block_ids)) {
+    throw operatorError('invalid_field_type', 'payload.completed_block_ids must be an array');
+  }
+  requireString(payload.reason, 'payload.reason');
+  const info = sessionInfo(project, sessionId, { requireDirectory: true });
+  const relative = typedPaths(info);
+  const requestDigest = requestSha256('coord.advance-epoch', payload);
+  let result;
+  let replayed = false;
+  const outcome = mutateCoordinationFiles(project.stateRoot, Object.values(relative), (files) => {
+    const current = requireStrictTypedSession(files, relative, info);
+    const found = findOperationReceipt(files[relative.journal], payload.operation_id,
+      'coord.advance-epoch', requestDigest);
+    if (found) {
+      result = replayResult(found);
+      replayed = true;
+      return null;
+    }
+    const before = authorityDigests(files, relative);
+    requireCas(payload, before, ['session', 'journal', 'results']);
+    if (payload.expected_epoch !== current.evaluation_epoch.current) {
+      throw businessError('epoch_conflict', 'expected epoch differs from canonical session');
+    }
+    const entries = validateCommittedJournal(files[relative.journal]);
+    const events = entries.map((entry) => entry.value);
+    const resultRows = parseResultsTsv(files[relative.results]);
+    requireCurrentProjection(current, events, resultRows);
+    const boundary = deriveEpochBoundary({
+      session: current,
+      events,
+      completedBlockIds: payload.completed_block_ids,
+      reason: payload.reason,
+    });
+    const now = isoNow(dependencies);
+    const applied = applyEpochBoundary(current, boundary, {
+      operationId: payload.operation_id,
+      reason: payload.reason,
+      now,
+    });
+    const projection = reduceVirtualProjection({
+      initialVirtual: current.virtual_parallel,
+      events: [...events, ...applied.events],
+      resultRows,
+    });
+    applied.session.virtual_parallel = installProjection(
+      applied.session.virtual_parallel, projection,
+    );
+    validateStoredSession(applied.session);
+    const sessionText = serializeStateDocument(applied.session);
+    const core = {
+      ...applied.result,
+      session_sha256: sha256Digest(Buffer.from(sessionText)),
+    };
+    const appended = appendTypedEventsAndReceipt(files[relative.journal], applied.events, {
+      operation: 'coord.advance-epoch',
+      operationId: payload.operation_id,
+      requestDigest,
+      prior: before,
+      postSessionSha256: core.session_sha256,
+      postResultsSha256: before.results_sha256,
+      postNonProjectionSha256: sessionNonProjectionSha256(applied.session),
+      result: core,
+      ts: now,
+    });
+    result = { ...core, replayed: false };
+    return {
+      [relative.session]: sessionText,
+      [relative.journal]: appended.journalText,
+    };
+  }, transitionOptions(dependencies));
+  if (!replayed) result.journal_sha256 = sha256Digest(Buffer.from(outcome.files[relative.journal]));
   return { result, warnings: [] };
 }
 
@@ -4872,6 +5221,27 @@ const HANDLERS = Object.freeze({
       warnings: [],
     };
   },
+  'coord.begin-seed-block': (request, project, dependencies) => (
+    operationBeginSeedBlock(project, payloadFor(request, [
+      'session_id', 'operation_id', 'decision_id', 'seed_id', 'block_size',
+      'pre_dispatch_head', 'expected_epoch', 'budget_preimage',
+      'expected_session_sha256', 'expected_journal_sha256',
+    ]), dependencies)
+  ),
+  'coord.finish-seed-block': (request, project, dependencies) => (
+    operationFinishSeedBlock(project, payloadFor(request, [
+      'session_id', 'operation_id', 'block_id', 'seed_id', 'status', 'returned_head',
+      'summary', 'expected_session_sha256', 'expected_journal_sha256',
+      'expected_forum_sha256', 'expected_kill_queue_sha256',
+      'expected_kill_requests_sha256',
+    ]), dependencies)
+  ),
+  'coord.advance-epoch': (request, project, dependencies) => (
+    operationAdvanceEpoch(project, payloadFor(request, [
+      'session_id', 'operation_id', 'expected_epoch', 'completed_block_ids', 'reason',
+      'expected_session_sha256', 'expected_journal_sha256', 'expected_results_sha256',
+    ]), dependencies)
+  ),
   'scheduler.signals': (request, project) => {
     const payload = payloadFor(request, ['session_id']);
     const sessionId = ensureSessionId(payload.session_id);

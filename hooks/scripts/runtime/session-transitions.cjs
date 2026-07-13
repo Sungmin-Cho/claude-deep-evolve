@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { deriveQ: deriveCoordinatorQ } = require('./coordinator-store.cjs');
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const PROJECT_TYPES = new Set([
@@ -686,7 +687,17 @@ function validateTerminalEvent(event, state, resultRows, consumedRows) {
       `experiment ${id} exceeds seed ${seedId} allocation`);
   }
   if (event.status === 'kept') seed.keeps += 1;
-  state.terminals.push({ id, seed_id: seedId, commit: event.commit, status: event.status });
+  state.terminals.push({
+    id,
+    seed_id: seedId,
+    operation_id: event.operation_id,
+    pre_commit: event.pre_commit,
+    commit: event.commit,
+    status: event.status,
+    event: event.event,
+    description: event.description,
+    score_delta: event.score_delta,
+  });
 }
 
 function qFromComponents(components) {
@@ -694,10 +705,11 @@ function qFromComponents(components) {
     ['keep_rate', 'normalized_delta', 'crash_rate', 'idea_diversity'],
     'q_components', 'virtual_projection_conflict');
   for (const key of Object.keys(components)) requireFinite(components[key], `q_components.${key}`);
-  return 0.35 * components.keep_rate
+  const value = 0.35 * components.keep_rate
     + 0.30 * components.normalized_delta
     + 0.20 * (1 - components.crash_rate)
     + 0.15 * components.idea_diversity;
+  return Number(value.toPrecision(15));
 }
 
 function validateBlockEvent(event, state) {
@@ -717,6 +729,7 @@ function validateBlockEvent(event, state) {
     requireSafeInteger(event.epoch, 'seed_scheduled.epoch', { min: 1 });
     requireSafeInteger(event.block_size, 'seed_scheduled.block_size', { min: 1 });
     requireSafeInteger(event.budget_preimage, 'seed_scheduled.budget_preimage', { min: 0 });
+    requireUtc(event.ts, 'seed_scheduled.ts');
     const seed = state.seeds.get(event.seed_id);
     if (!seed || seed.status !== 'active') {
       throw transitionError('virtual_projection_conflict', 'scheduled seed is missing or terminal');
@@ -740,6 +753,7 @@ function validateBlockEvent(event, state) {
       terminal: false,
       terminalStart: state.terminals.length,
     });
+    state.blockOrder.push(event.block_id);
     return;
   }
   const keys = [
@@ -750,6 +764,7 @@ function validateBlockEvent(event, state) {
   assertExactKeys(event, keys, event.event, 'virtual_projection_conflict');
   requireOperationId(event.operation_id, `${event.event}.operation_id`);
   requireOperationId(event.schedule_operation_id, `${event.event}.schedule_operation_id`);
+  requireUtc(event.ts, `${event.event}.ts`);
   if (typeof event.block_id !== 'string' || event.block_id.length === 0
       || !FULL_COMMIT.test(event.returned_head)) {
     throw transitionError('virtual_projection_conflict',
@@ -783,20 +798,63 @@ function validateBlockEvent(event, state) {
   }
   const terminals = state.terminals.slice(block.terminalStart)
     .filter((terminal) => terminal.seed_id === event.seed_id);
+  let expectedReturnedHead = block.event.pre_dispatch_head;
+  for (const terminal of terminals) {
+    if (terminal.pre_commit !== expectedReturnedHead) {
+      throw transitionError('virtual_projection_conflict',
+        'block experiment commit chain is discontinuous');
+    }
+    expectedReturnedHead = terminal.status === 'kept'
+      ? terminal.commit : terminal.pre_commit;
+  }
   if (JSON.stringify(event.experiment_ids) !== JSON.stringify(terminals.map((entry) => entry.id))
       || JSON.stringify(event.commits) !== JSON.stringify(terminals.map((entry) => entry.commit))
       || (event.event === 'seed_block_completed'
         && terminals.length !== block.event.block_size)
-      || event.forum_entry_ids.length
-        !== terminals.filter((entry) => entry.status !== 'failed').length) {
+      || (event.event === 'seed_block_failed' && terminals.length > block.event.block_size)
+      || event.returned_head !== expectedReturnedHead) {
     throw transitionError('virtual_projection_conflict',
       'block terminal experiment or forum summary is inconsistent with typed authority');
   }
   requireSafeInteger(event.borrows_given, 'borrows_given', { min: 0 });
   requireSafeInteger(event.borrows_received, 'borrows_received', { min: 0 });
+  const expectedExperimentForums = new Set(terminals
+    .filter((entry) => entry.status !== 'failed')
+    .map((entry) => `experiment:${entry.operation_id}`));
+  const actualExperimentForums = new Set(event.forum_entry_ids
+    .filter((identity) => typeof identity === 'string' && identity.startsWith('experiment:')));
+  const given = event.forum_entry_ids.filter((identity) => (
+    typeof identity === 'string' && /^borrow:given:[0-9a-f]{64}$/.test(identity)
+  ));
+  const received = event.forum_entry_ids.filter((identity) => (
+    typeof identity === 'string' && /^borrow:received:[0-9a-f]{64}$/.test(identity)
+  ));
+  if (event.forum_entry_ids.some((identity) => typeof identity !== 'string'
+      || (!identity.startsWith('experiment:')
+        && !/^borrow:(?:given|received):[0-9a-f]{64}$/.test(identity)))
+      || actualExperimentForums.size !== expectedExperimentForums.size
+      || [...expectedExperimentForums].some((identity) => !actualExperimentForums.has(identity))
+      || given.length !== event.borrows_given
+      || received.length !== event.borrows_received) {
+    throw transitionError('virtual_projection_conflict',
+      'block terminal forum and borrow identities are inconsistent');
+  }
+  const epochTerminals = state.terminals.slice(state.epochTerminalStart);
+  const derivedQ = deriveCoordinatorQ(terminals, epochTerminals,
+    event.event === 'seed_block_failed' ? 'failed' : 'completed');
+  assertExactKeys(event.q_components,
+    ['keep_rate', 'normalized_delta', 'crash_rate', 'idea_diversity'],
+    `${event.event}.q_components`, 'virtual_projection_conflict');
+  for (const key of ['keep_rate', 'normalized_delta', 'crash_rate', 'idea_diversity']) {
+    if (!Object.hasOwn(event.q_components, key)
+        || !Object.is(event.q_components[key], derivedQ.components[key])) {
+      throw transitionError('virtual_projection_conflict',
+        `block Q component ${key} is not reproduced from terminal authority`);
+    }
+  }
   const q = qFromComponents(event.q_components);
   requireFinite(event.final_q, 'final_q');
-  if (Math.abs(q - event.final_q) > 1e-12) {
+  if (!Object.is(q, event.final_q) || !Object.is(q, derivedQ.Q)) {
     throw transitionError('virtual_projection_conflict', 'block final Q is forged');
   }
   const seed = state.seeds.get(event.seed_id);
@@ -807,6 +865,97 @@ function validateBlockEvent(event, state) {
   seed.borrows_given += event.borrows_given;
   seed.borrows_received += event.borrows_received;
   block.terminal = true;
+  block.terminalEvent = event;
+}
+
+function validateQAuthority(event, expected, label) {
+  assertExactKeys(event.q_components,
+    ['keep_rate', 'normalized_delta', 'crash_rate', 'idea_diversity'],
+    `${label}.q_components`, 'virtual_projection_conflict');
+  for (const key of ['keep_rate', 'normalized_delta', 'crash_rate', 'idea_diversity']) {
+    requireFinite(event.q_components[key], `${label}.q_components.${key}`);
+    if (!Object.is(event.q_components[key], expected.components[key])) {
+      throw transitionError('virtual_projection_conflict',
+        `${label} Q component ${key} is forged`);
+    }
+  }
+  requireFinite(event.Q, `${label}.Q`);
+  if (!Object.is(event.Q, expected.Q)) {
+    throw transitionError('virtual_projection_conflict', `${label} Q is forged`);
+  }
+}
+
+function completedEpochAuthority(state) {
+  const ids = state.blockOrder.filter((blockId) => {
+    const block = state.blocks.get(blockId);
+    return block.event.epoch === state.epoch;
+  });
+  if (ids.length === 0 || ids.some((blockId) => !state.blocks.get(blockId).terminal)) {
+    throw transitionError('virtual_projection_conflict',
+      'epoch boundary requires a non-empty gap-free completed block set');
+  }
+  const experimentIds = new Set(ids.flatMap((blockId) => (
+    state.blocks.get(blockId).terminalEvent.experiment_ids
+  )));
+  const terminals = state.terminals.filter((entry) => experimentIds.has(entry.id));
+  if (terminals.length !== experimentIds.size) {
+    throw transitionError('virtual_projection_conflict',
+      'epoch boundary terminal set is inconsistent');
+  }
+  return { ids, terminals };
+}
+
+function validateOuterLoopEvent(event, state) {
+  assertExactKeys(event, [
+    'event', 'operation_id', 'completed_block_ids', 'generation', 'q_components',
+    'Q', 'reason', 'ts', 'epoch',
+  ], 'outer_loop', 'virtual_projection_conflict');
+  requireOperationId(event.operation_id, 'outer_loop.operation_id');
+  requireSafeInteger(event.generation, 'outer_loop.generation', { min: 1 });
+  requireUtc(event.ts, 'outer_loop.ts');
+  if (!new Set([
+    'block_interval', 'tier3_expansion', 'manual_boundary', 'termination_boundary',
+  ]).has(event.reason) || event.epoch !== state.epoch
+      || event.generation !== state.generation + 1 || state.pendingOuter !== null) {
+    throw transitionError('virtual_projection_conflict', 'outer-loop identity is malformed');
+  }
+  const authority = completedEpochAuthority(state);
+  if (canonicalJson(event.completed_block_ids) !== canonicalJson(authority.ids)) {
+    throw transitionError('virtual_projection_conflict',
+      'outer-loop completed block IDs are not gap-free authority');
+  }
+  const q = deriveCoordinatorQ(authority.terminals, authority.terminals,
+    authority.terminals.length === 0 ? 'failed' : 'completed');
+  validateQAuthority(event, q, 'outer_loop');
+  state.pendingOuter = { event, authority, q };
+}
+
+function validateEpochEvent(event, state) {
+  assertExactKeys(event, [
+    'event', 'operation_id', 'completed_block_ids', 'generation', 'q_components',
+    'Q', 'reason', 'ts', 'from_epoch', 'to_epoch',
+  ], 'evaluation_epoch_advanced', 'virtual_projection_conflict');
+  requireOperationId(event.operation_id, 'evaluation_epoch_advanced.operation_id');
+  requireSafeInteger(event.generation, 'evaluation_epoch_advanced.generation', { min: 1 });
+  requireUtc(event.ts, 'evaluation_epoch_advanced.ts');
+  const outer = state.pendingOuter;
+  if (!outer || event.operation_id !== outer.event.operation_id
+      || event.from_epoch !== state.epoch || event.to_epoch !== state.epoch + 1
+      || event.generation !== outer.event.generation
+      || event.reason !== outer.event.reason || event.ts !== outer.event.ts
+      || canonicalJson(event.completed_block_ids)
+        !== canonicalJson(outer.event.completed_block_ids)
+      || canonicalJson(event.q_components) !== canonicalJson(outer.event.q_components)
+      || !Object.is(event.Q, outer.event.Q)) {
+    throw transitionError('virtual_projection_conflict',
+      'evaluation epoch event lacks its exact paired outer-loop authority');
+  }
+  validateQAuthority(event, outer.q, 'evaluation_epoch_advanced');
+  for (const seed of state.seeds.values()) seed.experiments_used_this_epoch = 0;
+  state.epochTerminalStart = state.terminals.length;
+  state.epoch = event.to_epoch;
+  state.generation = event.generation;
+  state.pendingOuter = null;
 }
 
 function validateKillEvent(event, state) {
@@ -879,7 +1028,11 @@ function reduceVirtualProjection({ initialVirtual, events, resultRows }) {
     lastResultIndex: -1,
     terminals: [],
     blocks: new Map(),
+    blockOrder: [],
     epoch: 1,
+    epochTerminalStart: 0,
+    generation: 0,
+    pendingOuter: null,
   };
   const consumedRows = new Set();
   for (const event of events) {
@@ -889,23 +1042,19 @@ function reduceVirtualProjection({ initialVirtual, events, resultRows }) {
     if (event.event === 'operation_receipt'
         || event.event === 'baseline_recorded'
         || event.event === 'evaluator_expanded'
-        || event.event === 'session_completed'
-        || event.event === 'outer_loop') continue;
+        || event.event === 'session_completed') continue;
     if (event.event === 'seed_initialized') validateSeedInitialization(event, initialVirtual, state);
     else if (new Set(['kept', 'discarded', 'failed']).has(event.event)) {
       validateTerminalEvent(event, state, resultRows, consumedRows);
     } else if (event.event === 'seed_killed') validateKillEvent(event, state);
     else if (new Set(['seed_scheduled', 'seed_block_completed', 'seed_block_failed']).has(event.event)) {
       validateBlockEvent(event, state);
-    } else if (event.event === 'evaluation_epoch_advanced') {
-      if (!Number.isSafeInteger(event.from_epoch) || !Number.isSafeInteger(event.to_epoch)
-          || event.from_epoch !== state.epoch || event.to_epoch !== event.from_epoch + 1
-          || [...state.blocks.values()].some((block) => !block.terminal)) {
-        throw transitionError('virtual_projection_conflict', 'epoch boundary is malformed or out of order');
-      }
-      for (const seed of state.seeds.values()) seed.experiments_used_this_epoch = 0;
-      state.epoch = event.to_epoch;
-    }
+    } else if (event.event === 'outer_loop') validateOuterLoopEvent(event, state);
+    else if (event.event === 'evaluation_epoch_advanced') validateEpochEvent(event, state);
+  }
+  if (state.pendingOuter !== null) {
+    throw transitionError('virtual_projection_conflict',
+      'outer-loop event is missing its paired epoch advancement');
   }
   for (let index = 0; index < resultRows.length; index += 1) {
     const status = resultRows[index] && resultRows[index].status;

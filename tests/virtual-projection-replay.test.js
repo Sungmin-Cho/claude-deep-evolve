@@ -261,6 +261,70 @@ test('shared virtual reducer alone applies an exact user kill and preserves the 
   assert.equal(Object.hasOwn(projection, 'n_current'), false);
 });
 
+test('strict replay derives coordinator Q and epoch resets and rejects forged block or boundary authority', () => {
+  const coordinator = structuredClone(FIXTURE.coordinator_events);
+  const events = [
+    structuredClone(FIXTURE.seed_events[0]),
+    coordinator.schedule,
+    structuredClone(FIXTURE.terminal_event),
+    coordinator.terminal,
+    coordinator.outer_loop,
+    coordinator.epoch,
+  ];
+  const projection = reduceVirtualProjection({
+    initialVirtual: { ...structuredClone(FIXTURE.initial_virtual), n_initial: 1, budget_total: 5 },
+    events,
+    resultRows: [structuredClone(FIXTURE.terminal_result_row)],
+  });
+  assert.equal(projection.seeds[0].current_q, 0.85);
+  assert.equal(projection.seeds[0].experiments_used, 1);
+  assert.equal(projection.seeds[0].experiments_used_this_epoch, 0);
+
+  const forgedComponents = structuredClone(events);
+  forgedComponents[3].q_components.keep_rate = 0;
+  forgedComponents[3].final_q = 0.5;
+  assert.throws(() => reduceVirtualProjection({
+    initialVirtual: { ...structuredClone(FIXTURE.initial_virtual), n_initial: 1, budget_total: 5 },
+    events: forgedComponents,
+    resultRows: [structuredClone(FIXTURE.terminal_result_row)],
+  }), /component|authority|projection|Q/i);
+
+  const nearForgedComponents = structuredClone(events);
+  nearForgedComponents[3].q_components.keep_rate -= 5e-13;
+  nearForgedComponents[3].final_q = 0.35 * nearForgedComponents[3].q_components.keep_rate
+    + 0.30 * nearForgedComponents[3].q_components.normalized_delta
+    + 0.20 * (1 - nearForgedComponents[3].q_components.crash_rate)
+    + 0.15 * nearForgedComponents[3].q_components.idea_diversity;
+  assert.throws(() => reduceVirtualProjection({
+    initialVirtual: { ...structuredClone(FIXTURE.initial_virtual), n_initial: 1, budget_total: 5 },
+    events: nearForgedComponents,
+    resultRows: [structuredClone(FIXTURE.terminal_result_row)],
+  }), /component|authority|projection|Q/i);
+
+  const forgedBorrow = structuredClone(events);
+  forgedBorrow[3].borrows_given = 1;
+  assert.throws(() => reduceVirtualProjection({
+    initialVirtual: { ...structuredClone(FIXTURE.initial_virtual), n_initial: 1, budget_total: 5 },
+    events: forgedBorrow,
+    resultRows: [structuredClone(FIXTURE.terminal_result_row)],
+  }), /borrow|authority|projection/i);
+
+  const missingOuter = events.filter((event) => event.event !== 'outer_loop');
+  assert.throws(() => reduceVirtualProjection({
+    initialVirtual: { ...structuredClone(FIXTURE.initial_virtual), n_initial: 1, budget_total: 5 },
+    events: missingOuter,
+    resultRows: [structuredClone(FIXTURE.terminal_result_row)],
+  }), /epoch|outer|boundary|projection/i);
+
+  const forgedBoundary = structuredClone(events);
+  forgedBoundary.at(-1).completed_block_ids = ['block:missing'];
+  assert.throws(() => reduceVirtualProjection({
+    initialVirtual: { ...structuredClone(FIXTURE.initial_virtual), n_initial: 1, budget_total: 5 },
+    events: forgedBoundary,
+    resultRows: [structuredClone(FIXTURE.terminal_result_row)],
+  }), /block|epoch|boundary|projection/i);
+});
+
 test('v3.5 forbids legacy virtual.init/set-field while below-v3.5 dispatcher contracts remain byte-compatible', (t) => {
   const strict = makeProject(t, { label: 'version gate', nChosen: 1, totalBudget: 12 });
   const strictBefore = snapshot(strict);

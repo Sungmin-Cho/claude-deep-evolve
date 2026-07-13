@@ -601,6 +601,32 @@ function validateStrictSession(value) {
   if (typeof value.outer_loop.auto_trigger !== 'boolean') {
     throw validationError('outer_loop.auto_trigger must be boolean');
   }
+  if (!Array.isArray(value.outer_loop.q_history)) {
+    throw validationError('outer_loop.q_history must be an array');
+  }
+  if (value.outer_loop.q_history.length !== value.outer_loop.generation) {
+    throw validationError('outer_loop.q_history must contain exactly one row per generation');
+  }
+  const qByGeneration = new Map();
+  for (const [index, entry] of value.outer_loop.q_history.entries()) {
+    if (!plainObject(entry)
+        || Object.keys(entry).length !== 3
+        || !Object.hasOwn(entry, 'generation')
+        || !Object.hasOwn(entry, 'Q')
+        || !Object.hasOwn(entry, 'epoch')) {
+      throw validationError(`outer_loop.q_history ${index} must contain exactly generation, Q, epoch`);
+    }
+    requireSafeInteger(entry.generation,
+      `outer_loop.q_history ${index}.generation`, { min: 1 });
+    requireSafeInteger(entry.epoch, `outer_loop.q_history ${index}.epoch`, { min: 1 });
+    if (!Number.isFinite(entry.Q)) {
+      throw validationError(`outer_loop.q_history ${index}.Q must be finite`);
+    }
+    if (entry.generation !== index + 1 || qByGeneration.has(entry.generation)) {
+      throw validationError('outer_loop.q_history generations must be gap-free and unique');
+    }
+    qByGeneration.set(entry.generation, entry);
+  }
 
   requireKeys(value.evaluation_epoch, new Set(['current', 'history']), 'evaluation_epoch');
   requireSafeInteger(value.evaluation_epoch.current, 'evaluation_epoch.current', { min: 1 });
@@ -613,6 +639,9 @@ function validateStrictSession(value) {
       new Set(['epoch', 'prepare_version', 'generations', 'best_Q', 'created_at']),
       `evaluation_epoch.history ${index}`);
     requireSafeInteger(entry.epoch, `evaluation_epoch.history ${index}.epoch`, { min: 1 });
+    if (entry.epoch !== index + 1) {
+      throw validationError('evaluation_epoch.history epochs must be gap-free and ordered');
+    }
     if (epochs.has(entry.epoch)) throw validationError('evaluation_epoch.history epochs must be unique');
     epochs.add(entry.epoch);
     requireSafeInteger(entry.prepare_version,
@@ -620,6 +649,13 @@ function validateStrictSession(value) {
     if (!Array.isArray(entry.generations)
         || entry.generations.some((generation) => !Number.isSafeInteger(generation) || generation < 0)) {
       throw validationError(`evaluation_epoch.history ${index}.generations must be nonnegative integers`);
+    }
+    if (new Set(entry.generations).size !== entry.generations.length
+        || entry.generations.some((generation, generationIndex) => (
+          generation < 1
+          || (generationIndex > 0 && generation <= entry.generations[generationIndex - 1])
+        ))) {
+      throw validationError(`evaluation_epoch.history ${index}.generations must be unique and ordered`);
     }
     if (entry.best_Q !== null && !Number.isFinite(entry.best_Q)) {
       throw validationError(`evaluation_epoch.history ${index}.best_Q must be null or finite`);
@@ -652,6 +688,25 @@ function validateStrictSession(value) {
       || value.evaluation_epoch.history[value.evaluation_epoch.history.length - 1].epoch
         !== value.evaluation_epoch.current) {
     throw validationError('evaluation_epoch.current must match the current history entry');
+  }
+  const historyGenerations = new Set();
+  for (const entry of value.evaluation_epoch.history) {
+    const epochQ = [];
+    for (const generation of entry.generations) {
+      const q = qByGeneration.get(generation);
+      if (!q || q.epoch !== entry.epoch || historyGenerations.has(generation)) {
+        throw validationError('evaluation_epoch generation history must match one Q row and epoch');
+      }
+      historyGenerations.add(generation);
+      epochQ.push(q.Q);
+    }
+    const expectedBest = epochQ.length === 0 ? null : Math.max(...epochQ);
+    if (!Object.is(entry.best_Q, expectedBest)) {
+      throw validationError('evaluation_epoch best_Q must equal the exact maximum Q for its generations');
+    }
+  }
+  if (historyGenerations.size !== qByGeneration.size) {
+    throw validationError('every Q row must belong to one evaluation epoch history entry');
   }
 
   requireKeys(value.lineage, new Set(['current_branch', 'forked_from', 'previous_branches']),

@@ -7,7 +7,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
-const { parseStateDocument } = require('../hooks/scripts/runtime/session-codec.cjs');
+const {
+  parseStateDocument,
+  validateSession,
+} = require('../hooks/scripts/runtime/session-codec.cjs');
 
 const RUNTIME = path.resolve(__dirname, '..', 'hooks', 'scripts', 'deep-evolve-runtime.cjs');
 const FIXTURE_ROOT = path.join(__dirname, 'fixtures', 'runtime');
@@ -3498,6 +3501,56 @@ test('canonical v3.5 lifecycle rejects the legacy mark-status writer without cha
     assert.equal(marked.exitCode, 2, JSON.stringify(marked));
     assert.equal(marked.error.code, 'legacy_mark_status_forbidden');
     assert.deepEqual(snapshotTree(stateRoot), before);
+  } finally {
+    fs.rmSync(outer, { recursive: true, force: true });
+  }
+});
+
+test('strict coordinator history rejects forged Q rows and non-consecutive epoch authority', () => {
+  const { outer, root } = makeProject('strict coordinator history');
+  try {
+    const started = dispatch(request(root, 'session.start', {
+      goal: 'strict coordinator history',
+      initial_state: startInitialState('01J00000000000000000000310'),
+    }), { now: () => Date.parse('2026-07-14T00:00:00Z') });
+    assert.equal(started.ok, true, JSON.stringify(started));
+    const canonical = started.result.session;
+    const cases = [
+      ['bool generation', (session) => {
+        session.outer_loop.q_history = [{ generation: true, Q: 0.5, epoch: 1 }];
+      }],
+      ['non-finite Q shape', (session) => {
+        session.outer_loop.q_history = [{ generation: 1, Q: '0.5', epoch: 1 }];
+      }],
+      ['unknown Q field', (session) => {
+        session.outer_loop.q_history = [{ generation: 1, Q: 0.5, epoch: 1, score: 0.5 }];
+      }],
+      ['missing Q epoch history', (session) => {
+        session.outer_loop.generation = 1;
+        session.outer_loop.q_history = [{ generation: 1, Q: 0.5, epoch: 1 }];
+      }],
+      ['forged epoch best Q', (session) => {
+        session.outer_loop.generation = 1;
+        session.outer_loop.q_history = [{ generation: 1, Q: 0.5, epoch: 1 }];
+        session.evaluation_epoch.history[0].generations = [1];
+        session.evaluation_epoch.history[0].best_Q = 0.7;
+      }],
+      ['epoch gap', (session) => {
+        session.evaluation_epoch.current = 3;
+        session.evaluation_epoch.history.push({
+          epoch: 3, prepare_version: 1, generations: [], best_Q: null,
+          created_at: '2026-07-14T00:01:00Z',
+        });
+      }],
+    ];
+    for (const [label, mutate] of cases) {
+      const session = structuredClone(canonical);
+      mutate(session);
+      assert.throws(() => validateSession(parseStateDocument(
+        `${JSON.stringify(session, null, 2)}\n`,
+      )),
+        /Q|generation|epoch|history|unknown/i, label);
+    }
   } finally {
     fs.rmSync(outer, { recursive: true, force: true });
   }

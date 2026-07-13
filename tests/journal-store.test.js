@@ -16,6 +16,7 @@ const {
   queueKill,
   queueUserKill,
   drainKillQueue,
+  prepareEligibleKills,
 } = require('../hooks/scripts/runtime/journal-store.cjs');
 const {
   syncRenamedDirectoryBestEffort,
@@ -659,4 +660,75 @@ test('v3.5 generic journal/forum append rejects every typed owner event byte-for
     assert.equal(rejected.error.code, 'typed_transition_required', event);
     assert.deepEqual(treeSnapshot(stateRoot), before, event);
   }
+});
+
+test('shared eligible-kill transition authenticates a canonical block prefix before refreshing the terminal snapshot', () => {
+  const queue = [{
+    entry_id: 'user-request:fixture',
+    request_id: 'request-fixture',
+    seed_id: 1,
+    condition: 'user_requested',
+    final_q: 0,
+    experiments_used: 0,
+    queued_at: '2026-07-14T00:01:00Z',
+  }];
+  const preProjection = {
+    seeds: [{ id: 1, status: 'active', current_q: 0, experiments_used: 1 }],
+  };
+  const postProjection = {
+    seeds: [{ id: 1, status: 'active', current_q: 0.85, experiments_used: 1 }],
+  };
+  const result = prepareEligibleKills({
+    queue,
+    inFlightSeedIds: new Set(),
+    preProjection,
+    postProjection,
+    preSnapshotCandidates: new Map([[1, [
+      { status: 'active', current_q: 0, experiments_used: 0 },
+      { status: 'active', current_q: 0, experiments_used: 1 },
+    ]]]),
+    operationId: '01J00000000000000000000101',
+    now: '2026-07-14T00:05:00Z',
+  });
+  assert.deepEqual(result.deferred, []);
+  assert.deepEqual(result.killEvents, [{
+    event: 'seed_killed',
+    operation_id: '01J00000000000000000000101',
+    source: 'user_request',
+    request_id: 'request-fixture',
+    kill_entry_id: 'user-request:fixture',
+    seed_id: 1,
+    condition: 'user_requested',
+    ts: '2026-07-14T00:05:00Z',
+    applied_at: '2026-07-14T00:05:00Z',
+  }]);
+  assert.throws(() => prepareEligibleKills({
+    queue: [{ ...queue[0], experiments_used: 2 }],
+    inFlightSeedIds: new Set(),
+    preProjection,
+    postProjection,
+    preSnapshotCandidates: new Map([[1, [
+      { status: 'active', current_q: 0, experiments_used: 0 },
+      { status: 'active', current_q: 0, experiments_used: 1 },
+    ]]]),
+    operationId: '01J00000000000000000000101',
+    now: '2026-07-14T00:05:00Z',
+  }), (error) => error.code === 'kill_queue_snapshot_conflict');
+
+  assert.throws(() => prepareEligibleKills({
+    queue: [queue[0], {
+      ...queue[0],
+      entry_id: 'user-request:duplicate-seed',
+      request_id: 'request-duplicate-seed',
+    }],
+    inFlightSeedIds: new Set([1]),
+    preProjection,
+    postProjection,
+    preSnapshotCandidates: new Map([[1, [
+      { status: 'active', current_q: 0, experiments_used: 0 },
+      { status: 'active', current_q: 0, experiments_used: 1 },
+    ]]]),
+    operationId: '01J00000000000000000000101',
+    now: '2026-07-14T00:05:00Z',
+  }), (error) => error.code === 'duplicate_kill_seed');
 });
