@@ -14,7 +14,11 @@ cleanup_failed_synthesis_worktree
   - rc=0 on success or no-op when no synthesis worktree exists
   - rc=2 on SESSION_ROOT/SESSION_ID unset
 """
+import base64
+import hashlib
+import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -176,48 +180,127 @@ def test_create_then_cleanup_then_create_succeeds(tmp_path):
     assert (sr / "worktrees" / "synthesis").is_dir()
 
 
-# ---- W-1 fix: preserve uncommitted state (ITEM-2) -----------------------
+# ---- Durable recovery bundle for uncommitted state ----------------------
 
-def test_cleanup_preserves_uncommitted_state(tmp_path):
-    """W-1 fix: cleanup must commit uncommitted worktree edits as a final
-    preservation commit BEFORE removing the worktree, so the renamed audit
-    branch HEAD reflects the agent's last attempted state."""
+def test_cleanup_preserves_uncommitted_state_in_ready_bundle(tmp_path):
+    """Dirty state is reconstructable from a ready bundle, never committed."""
     repo, sr, env, baseline = _setup(tmp_path)
-    # Create the synthesis worktree
     r = _run(["create_synthesis_worktree", baseline], repo, env)
     assert r.returncode == 0, r.stderr
 
     wt_path = sr / "worktrees" / "synthesis"
-    # Add an uncommitted file to the worktree
-    (wt_path / "agent_attempt.txt").write_text(
-        "agent was here", encoding="utf-8"
+    before_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=wt_path, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    (wt_path / "README.md").write_bytes(b"unstaged\x00agent bytes\n")
+    (wt_path / "staged.txt").write_bytes(b"staged agent bytes\n")
+    subprocess.run(
+        ["git", "add", "staged.txt"], cwd=wt_path, check=True,
+        capture_output=True,
     )
+    untracked_bytes = b"agent was here\x00\xff\n"
+    untracked_path = wt_path / "untracked dir" / "agent_attempt.bin"
+    untracked_path.parent.mkdir()
+    untracked_path.write_bytes(untracked_bytes)
+    untracked_mode = untracked_path.stat().st_mode & 0o777
 
-    # Run cleanup
+    def git_bytes(*args):
+        return subprocess.run(
+            ["git", *args], cwd=wt_path, check=True, capture_output=True,
+        ).stdout
+
+    expected_staged = git_bytes("diff", "--binary", "--cached", "--no-ext-diff")
+    expected_unstaged = git_bytes("diff", "--binary", "--no-ext-diff")
+    expected_status = git_bytes("status", "--porcelain=v1", "-z")
+
     r = _run(["cleanup_failed_synthesis_worktree"], repo, env)
     assert r.returncode == 0, r.stderr
-
-    # Worktree dir must be gone
     assert not wt_path.exists()
 
-    # Find the renamed audit branch
     branches = subprocess.run(
         ["git", "branch", "--list", "evolve/sess-test/synthesis-failed-*"],
         cwd=repo, capture_output=True, text=True,
     ).stdout.strip()
     assert branches, "expected a synthesis-failed-* audit branch after cleanup"
-
     audit_branch = branches.splitlines()[0].strip().lstrip("* ")
+    audit_head = subprocess.run(
+        ["git", "rev-parse", audit_branch], cwd=repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    assert audit_head == before_head == baseline, "cleanup must not create an implicit commit"
 
-    # The preserved file must appear in the audit branch HEAD commit
-    show_out = subprocess.run(
-        ["git", "show", "--name-only", "--format=", f"{audit_branch}"],
-        cwd=repo, capture_output=True, text=True,
-    ).stdout
-    assert "agent_attempt.txt" in show_out, (
-        f"uncommitted file not found in audit branch {audit_branch} HEAD;\n"
-        f"git show output:\n{show_out}"
+    recovery_parent = sr / "synthesis-recovery"
+    recovery_dirs = sorted(path for path in recovery_parent.iterdir() if path.is_dir())
+    assert len(recovery_dirs) == 1
+    recovery = recovery_dirs[0]
+    manifest = json.loads((recovery / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 1
+    assert manifest["ready"] is True
+    assert manifest["phase"] == "ready"
+    assert manifest["base_commit"] == before_head
+    assert manifest["refs"] == {
+        "original_branch": "evolve/sess-test/synthesis",
+        "original_branch_sha": before_head,
+    }
+    assert base64.b64decode(manifest["status_porcelain_v1_z_base64"]) == expected_status
+    assert set(manifest["artifacts"]) == {
+        "staged_patch", "unstaged_patch", "status", "untracked", "refs",
+    }
+
+    artifact_bytes = {}
+    for name, record in manifest["artifacts"].items():
+        relative = Path(record["path"])
+        assert not relative.is_absolute() and ".." not in relative.parts
+        artifact = recovery / relative
+        assert artifact.is_file() and not artifact.is_symlink()
+        payload = artifact.read_bytes()
+        assert len(payload) == record["size"], name
+        assert hashlib.sha256(payload).hexdigest() == record["sha256"], name
+        artifact_bytes[name] = payload
+
+    assert artifact_bytes["staged_patch"] == expected_staged
+    assert artifact_bytes["unstaged_patch"] == expected_unstaged
+    assert artifact_bytes["status"] == expected_status
+    untracked = json.loads(artifact_bytes["untracked"])
+    assert len(untracked) == 1
+    assert untracked[0] == {
+        "path": "untracked dir/agent_attempt.bin",
+        "type": "file",
+        "mode": untracked_mode,
+        "content_base64": base64.b64encode(untracked_bytes).decode("ascii"),
+    }
+
+    reconstructed = tmp_path / "reconstructed"
+    subprocess.run(
+        ["git", "clone", "--quiet", "--no-hardlinks", str(repo), str(reconstructed)],
+        check=True, capture_output=True,
     )
+    subprocess.run(
+        ["git", "checkout", "--quiet", "--detach", manifest["base_commit"]],
+        cwd=reconstructed, check=True, capture_output=True,
+    )
+    for patch_name, extra in (("staged_patch", ["--index"]), ("unstaged_patch", [])):
+        if artifact_bytes[patch_name]:
+            subprocess.run(
+                ["git", "apply", "--binary", *extra, "--whitespace=nowarn", "-"],
+                cwd=reconstructed, input=artifact_bytes[patch_name], check=True,
+                capture_output=True,
+            )
+    for entry in untracked:
+        target = reconstructed / entry["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(base64.b64decode(entry["content_base64"]))
+        target.chmod(entry["mode"])
+
+    def reconstructed_git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=reconstructed, check=True, capture_output=True,
+        ).stdout
+
+    assert reconstructed_git("diff", "--binary", "--cached", "--no-ext-diff") == expected_staged
+    assert reconstructed_git("diff", "--binary", "--no-ext-diff") == expected_unstaged
+    assert reconstructed_git("status", "--porcelain=v1", "-z") == expected_status
 
 
 # ---- W-2 fix: orphan branch recovery (ITEM-3) ---------------------------
@@ -299,34 +382,31 @@ def test_cleanup_orphan_branch_then_create_succeeds(tmp_path):
     assert (sr / "worktrees" / "synthesis").is_dir()
 
 
-# ---- W-4 fix: PID suffix uniqueness (ITEM-4) ----------------------------
+# ---- Collision-safe failed-branch uniqueness -----------------------------
 
-def test_cleanup_iso_now_pid_suffix_unique(tmp_path):
-    """W-4 fix: ts variable in cleanup must include a -$$ (PID) suffix to
-    guarantee unique branch names within the same second. This test verifies
-    the PID suffix is present in the audit branch name rather than attempting
-    to trigger a real 1-second collision (which is non-deterministic in CI)."""
+def test_cleanup_uses_collision_safe_uuid_suffixes(tmp_path):
+    """Repeated cleanups retain distinct audit branches with UUID nonces."""
     repo, sr, env, baseline = _setup(tmp_path)
-    _run(["create_synthesis_worktree", baseline], repo, env)
-
-    r = _run(["cleanup_failed_synthesis_worktree"], repo, env)
-    assert r.returncode == 0, r.stderr
+    for _ in range(2):
+        created = _run(["create_synthesis_worktree", baseline], repo, env)
+        assert created.returncode == 0, created.stderr
+        cleaned = _run(["cleanup_failed_synthesis_worktree"], repo, env)
+        assert cleaned.returncode == 0, cleaned.stderr
 
     branches = subprocess.run(
         ["git", "branch", "--list", "evolve/sess-test/synthesis-failed-*"],
         cwd=repo, capture_output=True, text=True,
-    ).stdout.strip()
-    assert branches, "expected a synthesis-failed-* audit branch"
-
-    # The branch name should follow the pattern:
-    # evolve/sess-test/synthesis-failed-<date>_<time>-<pid>
-    # The PID portion is a numeric suffix after the last '-'.
-    branch_name = branches.splitlines()[0].strip().lstrip("* ")
-    # Extract the part after 'synthesis-failed-'
-    suffix = branch_name.split("synthesis-failed-", 1)[-1]
-    # The suffix ends with -<pid> where pid is numeric
-    parts = suffix.rsplit("-", 1)
-    assert len(parts) == 2 and parts[1].isdigit(), (
-        f"Expected audit branch name to end with -<pid> (numeric), "
-        f"got: {branch_name!r} (suffix after 'synthesis-failed-': {suffix!r})"
+    ).stdout
+    names = sorted(line.strip().lstrip("* ") for line in branches.splitlines() if line.strip())
+    assert len(names) == 2
+    pattern = re.compile(
+        r"^evolve/sess-test/synthesis-failed-"
+        r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}Z-"
+        r"([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
     )
+    nonces = []
+    for name in names:
+        match = pattern.fullmatch(name)
+        assert match, f"audit branch lacks collision-safe UUID suffix: {name!r}"
+        nonces.append(match.group(1))
+    assert len(set(nonces)) == 2

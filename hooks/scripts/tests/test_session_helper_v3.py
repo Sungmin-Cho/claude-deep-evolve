@@ -12,6 +12,7 @@ import pytest
 ROOT = Path(__file__).parents[3]
 HELPER = ROOT / "hooks/scripts/session-helper.sh"
 ORACLE = ROOT / "legacy/session-helper-v3.4.3.sh"
+RUNTIME = ROOT / "hooks/scripts/deep-evolve-runtime.cjs"
 
 NATIVE_TASK3_ARMS = {
     "help": [],
@@ -36,7 +37,7 @@ NATIVE_TASK3_ARMS = {
     "rebuild_seeds_from_journal": [],
 }
 
-DEFERRED_TASK3_ARMS = [
+TASK5_NATIVE_ARMS = [
     "create_seed_worktree",
     "validate_seed_worktree",
     "remove_seed_worktree",
@@ -931,27 +932,36 @@ def test_all_18_task3_native_arms_match_frozen_v343_observables(tmp_path):
         assert _tree_snapshot(wrapper_root) == _tree_snapshot(oracle_root), arm
 
 
-@pytest.mark.skipif(os.name == "nt", reason="frozen Bash/Python oracle is Unix-only")
-def test_all_5_deferred_task5_arms_execute_the_frozen_oracle_route(tmp_path):
-    """Only Task 5 arms remain exact Unix oracle delegates after Task 4."""
-    assert len(DEFERRED_TASK3_ARMS) == 5
-    for arm in DEFERRED_TASK3_ARMS:
-        wrapper_root = tmp_path / f"wrapper-deferred-{arm}"
-        oracle_root = tmp_path / f"oracle-deferred-{arm}"
-        wrapper_root.mkdir()
-        oracle_root.mkdir()
-        wrapper_env = os.environ.copy()
-        oracle_env = os.environ.copy()
-        for env in (wrapper_env, oracle_env):
-            env.pop("SESSION_ROOT", None)
-            env.pop("SESSION_ID", None)
-        wrapper = _run_compatibility(HELPER, wrapper_root, [arm], wrapper_env)
-        oracle = _run_compatibility(ORACLE, oracle_root, [arm], oracle_env)
-        assert wrapper.returncode == oracle.returncode, (arm, wrapper.stderr, oracle.stderr)
-        assert _normalize_probe(wrapper.stdout, wrapper_root) == _normalize_probe(
-            oracle.stdout, oracle_root,
-        ), arm
-        assert _normalize_probe(wrapper.stderr, wrapper_root) == _normalize_probe(
-            oracle.stderr, oracle_root,
-        ), arm
-        assert _tree_snapshot(wrapper_root) == _tree_snapshot(oracle_root), arm
+def test_all_5_task5_arms_are_registered_and_execute_natively(tmp_path):
+    """Task 5 intentionally replaced the five frozen-oracle worktree arms."""
+    registry = subprocess.run(
+        [
+            "node", "-e",
+            (
+                "const {LEGACY_ROUTES}=require(process.argv[1]);"
+                "process.stdout.write(JSON.stringify(LEGACY_ROUTES));"
+            ),
+            str(RUNTIME),
+        ],
+        cwd=tmp_path, capture_output=True, text=True, check=False,
+    )
+    assert registry.returncode == 0, registry.stderr
+    routes = json.loads(registry.stdout)
+    assert len(TASK5_NATIVE_ARMS) == 5
+    assert len(routes) == 34
+    assert set(routes.values()) == {"native"}
+    assert {arm: routes.get(arm) for arm in TASK5_NATIVE_ARMS} == {
+        arm: "native" for arm in TASK5_NATIVE_ARMS
+    }
+
+    env = os.environ.copy()
+    env.pop("SESSION_ROOT", None)
+    env.pop("SESSION_ID", None)
+    for arm in TASK5_NATIVE_ARMS:
+        result = subprocess.run(
+            ["node", str(RUNTIME), "--legacy-session-helper", arm],
+            cwd=tmp_path, env=env, capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 2, (arm, result.stderr)
+        assert result.stdout == "", arm
+        assert result.stderr == f"{arm}: SESSION_ROOT not set\n", arm

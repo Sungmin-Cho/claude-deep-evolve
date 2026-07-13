@@ -120,11 +120,11 @@ function createSeedWorktree(options) {
   const worktreePath = path.join(sessionRoot, 'worktrees', `seed_${seedId}`);
   const branch = `evolve/${sessionId}/seed-${seedId}`;
   const base = options.baseCommit || 'HEAD';
-  if (targetCollision(worktreePath)) {
-    throw runtimeError('worktree_collision', `seed worktree already exists at ${worktreePath}`, 1);
-  }
   if (branchExists(projectRoot, branch, options)) {
     throw runtimeError('branch_collision', `pre-existing branch '${branch}' preserved; investigate orphan state`, 1);
+  }
+  if (targetCollision(worktreePath)) {
+    throw runtimeError('worktree_collision', `seed worktree already exists at ${worktreePath}`, 1);
   }
   ensureWorktreeParent(worktreePath);
   const result = git(projectRoot, ['worktree', 'add', worktreePath, '-b', branch, base], options);

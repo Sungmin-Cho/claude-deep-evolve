@@ -237,16 +237,37 @@ test('Node legacy validator matches Bash rc 6 for rewritten seed history', {
   }
 });
 
-test('seed create preserves pre-existing branches and blocking worktree paths', () => {
+test('seed create reports a preserved pre-existing branch before a simultaneous target collision', () => {
   const repo = repository();
   const branch = 'evolve/session-space/seed-7';
   git(repo.projectRoot, ['branch', branch, repo.baseline]);
   const target = path.join(repo.sessionRoot, 'worktrees', 'seed_7');
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, 'operator bytes');
-  assert.throws(() => createSeedWorktree(seedOptions(repo, 7)), /branch|exist|collision/i);
+  assert.throws(() => createSeedWorktree(seedOptions(repo, 7)), (error) => {
+    assert.equal(error.code, 'branch_collision');
+    assert.match(error.message, /pre-existing branch.*preserved/i);
+    return true;
+  });
   assert.equal(git(repo.projectRoot, ['rev-parse', branch]).trim(), repo.baseline);
   assert.equal(fs.readFileSync(target, 'utf8'), 'operator bytes');
+
+  const targetOnlyRepo = repository();
+  const targetOnly = path.join(targetOnlyRepo.sessionRoot, 'worktrees', 'seed_8');
+  fs.mkdirSync(path.dirname(targetOnly), { recursive: true });
+  fs.writeFileSync(targetOnly, 'target-only bytes');
+  assert.throws(() => createSeedWorktree(seedOptions(targetOnlyRepo, 8)), (error) => {
+    assert.equal(error.code, 'worktree_collision');
+    assert.match(error.message, /worktree already exists/i);
+    return true;
+  });
+  const missingBranch = spawnSync(
+    'git', ['-C', targetOnlyRepo.projectRoot, 'rev-parse', '--verify', '--quiet',
+      'refs/heads/evolve/session-space/seed-8'],
+    { encoding: 'utf8', shell: false },
+  );
+  assert.equal(missingBranch.status, 1);
+  assert.equal(fs.readFileSync(targetOnly, 'utf8'), 'target-only bytes');
 });
 
 test('failed worktree creation never deletes a branch won by a concurrent creator', () => {
