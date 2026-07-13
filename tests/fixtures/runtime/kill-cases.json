@@ -1,0 +1,27 @@
+{
+  "conditions": [
+    {"name":"healthy","overrides":{},"conditions":[]},
+    {"name":"crash give up","overrides":{"seed":{"diagnosed_gave_up_experiment_count":2},"ai_judgments":{"direction_unrecoverable":true}},"conditions":["crash_give_up"]},
+    {"name":"crash needs AI","overrides":{"seed":{"diagnosed_gave_up_experiment_count":2}},"conditions":[]},
+    {"name":"sustained regression","overrides":{"seed":{"experiments_used":5,"current_q":0.5,"q_history":[1.0,0.8],"evaluated_events":[{"status":"discarded"},{"status":"diagnosed_gave_up"},{"status":"flagged_unexplained"},{"status":"discarded"},{"status":"discarded"}]}},"conditions":["sustained_regression"]},
+    {"name":"exact twenty percent does not fire","overrides":{"seed":{"experiments_used":5,"current_q":0.8,"q_history":[1.0],"evaluated_events":[{"status":"discarded"},{"status":"discarded"},{"status":"discarded"},{"status":"discarded"},{"status":"discarded"}]}},"conditions":[]},
+    {"name":"recovery at peak","overrides":{"seed":{"experiments_used":5,"current_q":1.0,"q_history":[1.0],"evaluated_events":[{"status":"discarded"},{"status":"discarded"},{"status":"discarded"},{"status":"discarded"},{"status":"discarded"}]}},"conditions":[]},
+    {"name":"shortcut boundary","overrides":{"seed":{"flagged_keeps_count":3},"session":{"shortcut_quarantine_threshold":3},"ai_judgments":{"shortcut_prone":true}},"conditions":["shortcut_quarantine"]},
+    {"name":"budget underperform","overrides":{"seed":{"budget_remaining":0,"current_q":0.1},"session":{"median_q":0.4,"std_q":0.05}},"conditions":["budget_exhausted_underperform"]},
+    {"name":"budget threshold equality","overrides":{"seed":{"budget_remaining":0,"current_q":0.3},"session":{"median_q":0.4,"std_q":0.05}},"conditions":[]},
+    {"name":"user confirmed","overrides":{"user_kill_request":{"requested_at":"2026-01-01T00:00:00Z","confirmed":true}},"conditions":["user_requested"]},
+    {"name":"ordered multiple","overrides":{"seed":{"diagnosed_gave_up_experiment_count":2,"flagged_keeps_count":3,"budget_remaining":0,"current_q":0.1},"session":{"shortcut_quarantine_threshold":3,"median_q":0.4,"std_q":0.05},"ai_judgments":{"direction_unrecoverable":true,"shortcut_prone":true},"user_kill_request":{"confirmed":true}},"conditions":["crash_give_up","shortcut_quarantine","budget_exhausted_underperform","user_requested"]},
+    {"name":"integral floats canonicalize","overrides":{"seed":{"id":2.0,"experiments_used":2.0,"flagged_keeps_count":0.0,"diagnosed_gave_up_experiment_count":0.0,"budget_remaining":1.0},"session":{"shortcut_quarantine_threshold":3.0}},"seed_id":2,"conditions":[]},
+    {"name":"bool integer rejected","overrides":{"seed":{"experiments_used":true}},"rc":2,"error":"experiments_used"},
+    {"name":"non-integral float rejected","overrides":{"seed":{"experiments_used":2.5}},"rc":2,"error":"experiments_used"},
+    {"name":"bool number rejected","overrides":{"seed":{"current_q":true}},"rc":2,"error":"current_q"},
+    {"name":"missing confirmed rejected","overrides":{"user_kill_request":{"requested_at":"2026-01-01T00:00:00Z"}},"rc":2,"error":"confirmed"},
+    {"name":"inconsistent last five rejected","overrides":{"seed":{"experiments_used":5,"evaluated_events":[]}},"rc":2,"error":"at least 5"}
+  ],
+  "legacy_fixtures": [
+    {"name":"kill_then_schedule_recipe","N":4,"pool":2,"seed_ids":[1,2,3,4]},
+    {"name":"pool_below_p3","N":3,"pool":2,"seed_ids":[1,2,3]},
+    {"name":"pool_exhausted","N":3,"pool":0,"seed_ids":[1,2,3]},
+    {"name":"pool_just_above_p3","N":3,"pool":3,"seed_ids":[1,2,3]}
+  ]
+}

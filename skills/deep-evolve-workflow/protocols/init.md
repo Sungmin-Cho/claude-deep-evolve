@@ -1250,7 +1250,7 @@ Routing:
 
 - **`VERSION_TIER == v3_1_plus`** → **Read `protocols/coordinator.md`** (multi-seed
   coordination: prose-contract subagent dispatch over N seed worktrees +
-  `scheduler-decide.py` + cross-seed forum + session-end synthesis cascade).
+  `scheduler.decide` + cross-seed forum + session-end synthesis cascade).
   Coordinator's own version gate re-validates the tier as defense-in-depth.
 
 - **`VERSION_TIER == v3_0`** → **Read `protocols/inner-loop.md`** (single-seed AAR

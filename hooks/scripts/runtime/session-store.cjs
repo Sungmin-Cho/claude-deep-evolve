@@ -19,6 +19,7 @@ const COORDINATION_FILES = new Set([
   'strategy.yaml',
   'journal.jsonl',
   'forum.jsonl',
+  'kill_queue.jsonl',
   'kill_requests.jsonl',
 ]);
 
@@ -367,6 +368,7 @@ function normalizeLockOptions(options = {}) {
     now: options.now || Date.now,
     pid: options.pid || process.pid,
     randomNonce: options.randomNonce || nonce,
+    randomWaiterNonce: options.randomWaiterNonce || nonce,
     isPidAlive: options.isPidAlive || defaultIsPidAlive,
     timeoutMs: options.timeoutMs === undefined ? LOCK_TIMEOUT_MS : options.timeoutMs,
     staleMs: options.staleMs === undefined ? STALE_LOCK_MS : options.staleMs,
@@ -380,22 +382,89 @@ function normalizeLockOptions(options = {}) {
   };
 }
 
+function createWaitTicket(lockPath, options) {
+  const directory = path.dirname(lockPath);
+  const prefix = `${path.basename(lockPath)}.wait.`;
+  for (;;) {
+    const createdAt = String(Math.max(0, Math.trunc(options.now()))).padStart(16, '0');
+    const name = `${prefix}${createdAt}.${options.pid}.${options.randomWaiterNonce()}`;
+    const ticketPath = path.join(directory, name);
+    try {
+      options.io.mkdirSync(ticketPath);
+      return { directory, prefix, name, path: ticketPath };
+    } catch (error) {
+      if (!(error && error.code === 'EEXIST')) throw error;
+    }
+  }
+}
+
+function removeWaitTicket(ticket, io) {
+  try { io.rmdirSync(ticket.path); }
+  catch {}
+}
+
+function orderedWaitTickets(ticket, options) {
+  let names;
+  try { names = options.io.readdirSync(ticket.directory); }
+  catch (error) {
+    if (error && error.code === 'ENOENT') return [];
+    throw error;
+  }
+  return names
+    .filter((name) => name.startsWith(ticket.prefix) && waitTicketOwner(ticket, name))
+    .sort();
+}
+
+function waitTicketOwner(ticket, name) {
+  const suffix = name.slice(ticket.prefix.length);
+  const match = /^(\d{16})\.(\d+)\.([^.]+)$/.exec(suffix);
+  if (!match) return null;
+  return { createdAt: Number(match[1]), pid: Number(match[2]) };
+}
+
+function pruneAbandonedWaitTicket(ticket, name, options) {
+  const owner = waitTicketOwner(ticket, name);
+  if (!owner || name === ticket.name) return false;
+  const abandoned = !options.isPidAlive(owner.pid)
+    || options.now() - owner.createdAt >= options.staleMs;
+  if (!abandoned) return false;
+  try { options.io.rmdirSync(path.join(ticket.directory, name)); }
+  catch (error) {
+    if (!(error && error.code === 'ENOENT')) return false;
+  }
+  return true;
+}
+
 function acquireDirectoryLock(lockPath, rawOptions = {}) {
   const options = normalizeLockOptions(rawOptions);
   const deadline = options.now() + options.timeoutMs;
+  const ticket = createWaitTicket(lockPath, options);
   let recoveryRaced = false;
-  for (;;) {
-    const handle = tryCreateLock(lockPath, options);
-    if (handle) return handle;
-    const snapshot = lockSnapshot(lockPath, options.io);
-    const reason = recoveryRaced ? null : recoveryReason(snapshot, options.now(), options.staleMs, options.isPidAlive);
-    if (reason) {
-      const recovered = recoverStaleLock(lockPath, snapshot, reason, options);
-      if (recovered.recovered) continue;
-      if (recovered.raced) recoveryRaced = true;
+  try {
+    for (;;) {
+      const ordered = orderedWaitTickets(ticket, options);
+      const head = ordered[0];
+      if (head && head !== ticket.name) {
+        if (pruneAbandonedWaitTicket(ticket, head, options)) continue;
+      } else {
+        const handle = tryCreateLock(lockPath, options);
+        if (handle) return handle;
+        const snapshot = lockSnapshot(lockPath, options.io);
+        const reason = recoveryRaced ? null : recoveryReason(snapshot, options.now(), options.staleMs, options.isPidAlive);
+        if (reason) {
+          const recovered = recoverStaleLock(lockPath, snapshot, reason, options);
+          if (recovered.recovered) continue;
+          if (recovered.raced) recoveryRaced = true;
+        }
+      }
+      if (options.now() >= deadline) return { ok: false, retryable: true, code: 'lock_held' };
+      // FIFO tickets prevent the current owner from cutting back in line.
+      // Poll the queue head at a small bounded cadence so handoff latency does
+      // not consume the caller's real acquisition budget under suite load.
+      options.sleep(Math.min(options.retryDelayMs, 5));
     }
-    if (options.now() >= deadline) return { ok: false, retryable: true, code: 'lock_held' };
-    options.sleep(options.retryDelayMs);
+  } finally {
+    removeWaitTicket(ticket, options.io);
   }
 }
 
@@ -908,6 +977,7 @@ function patchSession(sessionPath, mutator, options = {}) {
 
 module.exports = {
   withDirectoryLock,
+  renameWithRetry,
   atomicWriteFile,
   persistCommitMarker,
   validateCommitMarker,

@@ -1,0 +1,24 @@
+{
+  "preflight": [
+    {"name":"P3 floor","input":{"self_seed_id":2,"self_experiments_used":2,"candidates":[{"seed_id":1,"commit":"abc","flagged":false,"legibility_passed":true}],"journal":[],"forum":[]},"reason":"p3_floor","eligible":0,"p3_gate_open":false},
+    {"name":"P2 flagged","input":{"self_seed_id":2,"self_experiments_used":3,"candidates":[{"seed_id":1,"commit":"abc","flagged":true,"legibility_passed":true}],"journal":[],"forum":[]},"reason":"p2_flagged","eligible":0,"p3_gate_open":true},
+    {"name":"P2 legibility","input":{"self_seed_id":2,"self_experiments_used":3,"candidates":[{"seed_id":1,"commit":"abc","flagged":false,"legibility_passed":false}],"journal":[],"forum":[]},"reason":"p2_legibility","eligible":0},
+    {"name":"planned dedup","input":{"self_seed_id":2,"self_experiments_used":5,"candidates":[{"seed_id":1,"commit":"abc","flagged":false,"legibility_passed":true}],"journal":[{"event":"borrow_planned","seed_id":2,"source_commit":"abc"}],"forum":[]},"reason":"dedup_planned","eligible":0},
+    {"name":"executed dedup forum only","input":{"self_seed_id":2,"self_experiments_used":5,"candidates":[{"seed_id":1,"commit":"abc","flagged":false,"legibility_passed":true}],"journal":[],"forum":[{"event":"cross_seed_borrow","to_seed":2,"source_commit":"abc"}]},"reason":"dedup_executed","eligible":0},
+    {"name":"misplaced journal execution ignored","input":{"self_seed_id":2,"self_experiments_used":5,"candidates":[{"seed_id":1,"commit":"abc","flagged":false,"legibility_passed":true}],"journal":[{"event":"cross_seed_borrow","to_seed":2,"source_commit":"abc"}],"forum":[]},"eligible":1},
+    {"name":"different borrower ignored","input":{"self_seed_id":2,"self_experiments_used":5,"candidates":[{"seed_id":1,"commit":"abc","flagged":false,"legibility_passed":true}],"journal":[],"forum":[{"event":"cross_seed_borrow","to_seed":3,"source_commit":"abc"}]},"eligible":1},
+    {"name":"self borrow","input":{"self_seed_id":2,"self_experiments_used":5,"candidates":[{"seed_id":2,"commit":"abc","flagged":false,"legibility_passed":true}],"journal":[],"forum":[]},"reason":"self_seed","eligible":0},
+    {"name":"missing source commit","input":{"self_seed_id":2,"self_experiments_used":5,"candidates":[{"seed_id":1,"flagged":false,"legibility_passed":true}],"journal":[],"forum":[]},"reason":"missing_source_commit","eligible":0},
+    {"name":"malformed history entries ignored","input":{"self_seed_id":2,"self_experiments_used":5,"candidates":[{"seed_id":1,"commit":"abc","flagged":false,"legibility_passed":true}],"journal":[null,{},"bad",{"event":"borrow_planned","seed_id":99,"source_commit":null}],"forum":[false]},"eligible":1},
+    {"name":"bool self id rejected","input":{"self_seed_id":true,"self_experiments_used":5,"candidates":[],"journal":[],"forum":[]},"rc":2,"error":"self_seed_id"},
+    {"name":"bool experiments rejected","input":{"self_seed_id":2,"self_experiments_used":true,"candidates":[],"journal":[],"forum":[]},"rc":2,"error":"self_experiments_used"},
+    {"name":"missing forum rejected","input":{"self_seed_id":2,"self_experiments_used":5,"candidates":[],"journal":[]},"rc":2,"error":"forum"}
+  ],
+  "abandoned": [
+    {"name":"under threshold","events":[{"event":"borrow_planned","seed_id":2,"source_commit":"abc","block_id":3}],"current_block_id":5,"expected":0},
+    {"name":"strictly older than threshold","events":[{"event":"borrow_planned","seed_id":2,"source_commit":"abc","block_id":2}],"current_block_id":5,"expected":1,"planned":2},
+    {"name":"executed suppresses","events":[{"event":"borrow_planned","seed_id":2,"source_commit":"abc","block_id":1},{"event":"cross_seed_borrow","to_seed":2,"source_commit":"abc"}],"current_block_id":5,"expected":0},
+    {"name":"prior abandonment suppresses","events":[{"event":"borrow_planned","seed_id":2,"source_commit":"abc","block_id":1},{"event":"borrow_abandoned","seed_id":2,"source_commit":"abc"}],"current_block_id":5,"expected":0},
+    {"name":"latest plan block wins","events":[{"event":"borrow_planned","seed_id":2,"source_commit":"abc","block_id":1},{"event":"borrow_planned","seed_id":2,"source_commit":"abc","block_id":4}],"current_block_id":6,"expected":0}
+  ]
+}

@@ -102,7 +102,7 @@ Set `outer_interval` to `session.yaml.outer_loop.interval` (default 20).
 event appended from within the inner loop MUST carry `"seed_id": <int>`. See
 the Block-Parameters Intake step (Section C, first sub-step below) for the
 `SEED_ID` derivation and the `append_journal_event` invocation pattern.
-`scheduler-signals.py` relies on this tag for per-seed recent_Q_trend and
+`scheduler.signals` relies on this tag for per-seed recent_Q_trend and
 forum_activity computation (foundation Gap 4 closure).
 
 ### Branch & Clean-Tree Guard
@@ -234,7 +234,7 @@ This step is the contract enforcement point for § 4.1 worktree isolation and
    (`{seed_id:...} + $rest`), a stale seed_id in the payload would silently
    defeat the auto-inject.
 
-   `scheduler-signals.py` keys `recent_Q_trend` off of `kept.seed_id`; a
+   `scheduler.signals` keys `recent_Q_trend` off of `kept.seed_id`; a
    missing or wrong tag silently returns neutral trend and the Adaptive
    Scheduler makes blind decisions. Tag at emission; never post-hoc.
 
@@ -273,7 +273,7 @@ already enforces this separation; Step 0.5 only runs when that gate matches
   5.f): Step 1 is "avoid already kept ideas before exploring"; the post-keep
   borrow is "after a keep, evaluate adapting others' ideas". Both honor P2
   (no flagged propagation): Step 1 filters by `flagged=false`; the borrow
-  step is enforced via `borrow-preflight.py`.
+  step is enforced via `scheduler.borrow-preflight`.
 
   v2 and v3.0.x sessions: `$VERSION_TIER` is not "v3_1_plus" so forum.jsonl does not exist; skip this bullet.
 - Append to `journal.jsonl`: `{"id": <next_id>, "status": "planned", "idea": "<description>", "candidates_considered": <N>, "timestamp": "<now>"}`
@@ -543,7 +543,7 @@ IF $VERSION starts with "3.":
   Rationale: your seed has just accepted an experiment. Other seeds' recent keeps
   may contain ideas you can productively adapt. Step 5.f decides (this turn)
   whether to plan a `semantic_borrow` for your NEXT experiment, enforced by
-  `hooks/scripts/borrow-preflight.py` to prevent § 7.4 P2 flagged propagation and
+  `scheduler.borrow-preflight` to prevent § 7.4 P2 flagged propagation and
   P3 under-exploration borrow cascades.
 
   1. **Pre-condition gate** (cheap local checks before any subprocess):
@@ -552,15 +552,10 @@ IF $VERSION starts with "3.":
      - If N=1 (you are the only seed), skip Step 5.f entirely — there is nothing
        to borrow.
 
-  2. **Collect candidates** (from the shared forum). Derive the preflight
-     script path directly from `$DEEP_EVOLVE_HELPER_PATH` (they share the
-     `hooks/scripts/` directory), avoiding a `DEEP_EVOLVE_REPO` indirection
-     that is easy to get wrong by dirname-count. Guard the `tail_forum`
+  2. **Collect candidates** (from the shared forum). Guard the `tail_forum`
      invocation against transient failures (empty/missing forum.jsonl is a
      valid state):
      ```bash
-     HELPER_SCRIPTS_DIR="$(dirname "$DEEP_EVOLVE_HELPER_PATH")"  # <repo>/hooks/scripts
-     PREFLIGHT_SCRIPT="$HELPER_SCRIPTS_DIR/borrow-preflight.py"
      CANDIDATES_JSON=$(bash "$DEEP_EVOLVE_HELPER_PATH" tail_forum 40 2>/dev/null \
        | jq -s --argjson sid "$SEED_ID" \
          '[.[] | select(.event=="seed_keep" and .seed_id != $sid)] | .[-10:]' \
@@ -576,26 +571,31 @@ IF $VERSION starts with "3.":
      forum.jsonl, NOT journal). Guard the subprocess call so operator
      errors surface as warnings rather than masquerading as "no eligible
      candidates":
-     ```bash
-     JOURNAL_RELEVANT=$(jq -s --argjson sid "$SEED_ID" \
-       '[.[] | select(.event=="borrow_planned" and .seed_id==$sid)
-             , .[] | select(.event=="borrow_abandoned" and .seed_id==$sid)]' \
-       "$SESSION_ROOT/journal.jsonl" 2>/dev/null || echo '[]')
-     FORUM_RELEVANT=$(jq -s --argjson sid "$SEED_ID" \
-       '[.[] | select(.event=="cross_seed_borrow" and .to_seed==$sid)]' \
-       "$SESSION_ROOT/forum.jsonl" 2>/dev/null || echo '[]')
-     if ! PREFLIGHT=$(python3 "$PREFLIGHT_SCRIPT" \
-         --args "$(jq -nc \
-           --argjson sid "$SEED_ID" \
-           --argjson used "$SELF_EXPERIMENTS_USED" \
-           --argjson cands "$CANDIDATES_JSON" \
-           --argjson journal "$JOURNAL_RELEVANT" \
-           --argjson forum "$FORUM_RELEVANT" \
-           '{self_seed_id:$sid, self_experiments_used:$used, candidates:$cands, journal:$journal, forum:$forum}')"); then
-       echo "warn: borrow-preflight.py exited non-zero — skipping Step 5.f this turn" >&2
-       return 0 2>/dev/null || :
-     fi
+     Collect `JOURNAL_RELEVANT` as the valid `borrow_planned` and
+     `borrow_abandoned` rows for this seed, and `FORUM_RELEVANT` as the valid
+     `cross_seed_borrow` rows whose `to_seed` is this seed. Then dispatch
+     `runtime-op: scheduler.borrow-preflight`. Materialize the request with the
+     named values retaining their JSON types, write it beneath
+     `PROJECT_ROOT/.deep-evolve/.runtime-requests/`, and invoke
+     `node "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deep-evolve-runtime.cjs" --request
+     "<absolute-request-path>"`:
+     ```text
+     request = {
+       schema_version: "1.0",
+       operation: "scheduler.borrow-preflight",
+       context: {project_root: PROJECT_ROOT},
+       payload: {
+         self_seed_id: SEED_ID,
+         self_experiments_used: SELF_EXPERIMENTS_USED,
+         candidates: CANDIDATES_JSON,
+         journal: JOURNAL_RELEVANT,
+         forum: FORUM_RELEVANT
+       }
+     }
      ```
+     Retain both the process rc and sole JSON response. On rc 0 require
+     `ok:true` and bind `PREFLIGHT` to `result`. On rc 1 or rc 2,
+     warn that `scheduler.borrow-preflight` failed and skip Step 5.f this turn.
      `$SELF_EXPERIMENTS_USED` must be derived before this block from session.yaml
      (requires `$VERSION_TIER` == "v3_1_plus" — virtual_parallel block exists):
      ```bash
@@ -657,7 +657,7 @@ IF $VERSION starts with "3.":
      by coordinator at epoch boundary from forum scan).
 
   7. **Abandonment**: if you never execute Phase 2 within 2 blocks of the
-     `borrow_planned`, `borrow-abandoned-scan.py` (T15b) emits a
+     `borrow_planned`, `scheduler.borrow-abandoned` (T15b) emits a
      `borrow_abandoned` event at the coordinator's post-dispatch turn. You do
      not need to emit it yourself.
 

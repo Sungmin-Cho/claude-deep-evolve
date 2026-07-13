@@ -28,8 +28,23 @@ def test_package_files_exclude_tests_and_pycache_from_hooks_payload():
         "and runtime scripts explicitly"
     )
     assert "hooks/hooks.json" in files
-    assert "hooks/scripts/*.py" in files
-    assert "hooks/scripts/*.sh" in files
+    assert "hooks/scripts/*.py" not in files
+    assert "hooks/scripts/*.sh" not in files
+    for adapter in (
+        "hooks/scripts/kill-request-writer.sh",
+        "hooks/scripts/protect-readonly.sh",
+        "hooks/scripts/session-helper.sh",
+    ):
+        assert adapter in files
+    for oracle in (
+        "scheduler-signals.py",
+        "scheduler-decide.py",
+        "kill-conditions.py",
+        "borrow-preflight.py",
+        "borrow-abandoned-scan.py",
+        "convergence-detect.py",
+    ):
+        assert not any(entry.endswith(oracle) for entry in files)
 
 
 # === Cross-file version drift guard ============================================

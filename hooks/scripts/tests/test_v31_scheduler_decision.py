@@ -491,30 +491,13 @@ def test_required_by_decision_keys_match_allowed_decision():
 
 # ---------- G12 re-review G1 fix: errexit safety ----------
 
-def test_coordinator_errexit_safe_pattern_documented():
-    """G12 re-review G1 fix (2026-04-26): coordinator.md must use the
-    errexit-safe `if cmd; then rc=0; else rc=$?; fi` pattern around
-    scheduler-decide.py invocation. Pre-G1 used bare `validated=$(...)
-    rc=$?` which under set -e exits BEFORE rc=$? executes — empirically
-    verified.
-
-    This is a content-level test (coordinator.md is markdown executed
-    by AI agent, not directly bash-tested). Asserts the pattern is
-    present + the legacy bare pattern is absent."""
+def test_coordinator_dispatcher_decision_rc_contract_documented():
+    """The Node dispatcher keeps rc=0 accepted, rc=1 business rejection,
+    and rc=2 operator failure without relying on shell errexit capture."""
     coord = ROOT / "skills/deep-evolve-workflow/protocols/coordinator.md"
     rm = coord.read_text(encoding="utf-8")
-    # Errexit-safe pattern: `if validated=$(...)` — captures rc safely.
-    # The scheduler-decide.py path is rooted at ${CLAUDE_PLUGIN_ROOT} and quoted
-    # (S-1 fix + quoting hardening); tolerate the optional prefix and quote so
-    # this test asserts the errexit-safe shape, not the (now-absolute) path literal.
-    import re
-    safe_pattern = re.search(
-        r'if\s+validated=\$\(\s*"?(?:\$\{CLAUDE_PLUGIN_ROOT\}/)?hooks/scripts/scheduler-decide\.py',
-        rm,
-    )
-    assert safe_pattern, (
-        "coordinator.md must use errexit-safe `if validated=$(...) ...; "
-        "then rc=0; else rc=$?; fi` pattern around scheduler-decide.py "
-        "invocation (G1 fix per 2026-04-26 re-review). Bare `var=$(...)` "
-        "+ `rc=$?` triggers errexit before rc capture."
-    )
+    assert "runtime-op: scheduler.decide" in rm
+    assert 'operation: "scheduler.decide"' in rm
+    assert "validated_response.rc == 1" in rm
+    assert "validated_response.rc != 0" in rm
+    assert "validated = validated_response.body.result" in rm

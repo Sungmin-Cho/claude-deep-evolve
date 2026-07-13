@@ -249,7 +249,7 @@ def test_positive_legacy_seed_id_fixtures_remain_schedulable_across_consumers(tm
     coordinator = (PROTOCOLS / "coordinator.md").read_text(encoding="utf-8")
     resume = (PROTOCOLS / "resume.md").read_text(encoding="utf-8")
     synthesis = (PROTOCOLS / "synthesis.md").read_text(encoding="utf-8")
-    assert "scheduler-signals.py" in coordinator
+    assert "runtime-op: scheduler.signals" in coordinator
     assert "signals.active_seed_count == 0" in coordinator
     assert "active_seed_state.py" in resume
     assert "ACTIVE_SEED_COUNT > 0" in resume

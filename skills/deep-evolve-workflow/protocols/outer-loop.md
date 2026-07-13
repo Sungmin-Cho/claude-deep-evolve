@@ -139,8 +139,8 @@ Do NOT abort the epoch transition.
 ### 6.5.0.2 Convergence detection (wires T19)
 
 Compute pair-wise AI similarity among THIS EPOCH'S cross-seed `seed_keep`
-events, extract `inspired_by` trailers from the kept commits, then invoke
-`convergence-detect.py`:
+events, extract `inspired_by` trailers from the kept commits, then invoke the
+registered convergence classifier:
 
 1. **Collect this epoch's keeps** (depends on G6.5 `8752ee4` foundation
    patch that added `epoch` field to the seed_keep forum schema):
@@ -236,30 +236,34 @@ events, extract `inspired_by` trailers from the kept commits, then invoke
    fi
    ```
 
-5. **Invoke the classifier**:
-   ```bash
-   if [ "$VERSION_TIER" = "v3_1_plus" ]; then
-     if ! CLASSIFY=$(python3 "$HELPER_SCRIPTS_DIR/convergence-detect.py" \
-         --args "$(jq -nc \
-           --argjson keeps "$EPOCH_KEEPS" \
-           --argjson sims "$SIMILARITIES_JSON" \
-           --argjson ibm "$INSPIRED_BY_MAP" \
-           --argjson csb "$CROSS_SEED_BORROWS" \
-           --argjson epoch "$CURRENT_GEN" \
-           '{keeps:$keeps, similarities:$sims, inspired_by_map:$ibm,
-             cross_seed_borrow_events:$csb, threshold:0.85, p3_floor:3,
-             epoch:$epoch}')"); then
-       rc=$?
-       echo "error: convergence-detect.py failed (rc=$rc) in epoch $CURRENT_GEN — skipping 6.5.0.2 this epoch" >&2
-       # rc=2 operator/schema error or rc=1 business failure: do NOT emit
-       # any convergence_event this epoch. Coordinator proceeds to 6.5.0.3
-       # (N re-eval) with empty convergence signal. This preserves progress
-       # without masking the fact that classification failed — the stderr
-       # line is load-bearing for operator debugging.
-       CLASSIFY='{"convergence_events": []}'
-     fi
-   fi
+5. **Invoke the classifier** (`runtime-op: scheduler.classify-convergence`):
+   materialize this request object with the named values retaining their JSON
+   types (arrays/objects/numbers), write it beneath
+   `PROJECT_ROOT/.deep-evolve/.runtime-requests/`, and invoke
+   `node "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deep-evolve-runtime.cjs" --request
+   "<absolute-request-path>"`:
+   ```text
+   request = {
+     schema_version: "1.0",
+     operation: "scheduler.classify-convergence",
+     context: {project_root: PROJECT_ROOT},
+     payload: {
+       keeps: EPOCH_KEEPS,
+       similarities: SIMILARITIES_JSON,
+       inspired_by_map: INSPIRED_BY_MAP,
+       cross_seed_borrow_events: CROSS_SEED_BORROWS,
+       threshold: 0.85,
+       p3_floor: 3,
+       epoch: CURRENT_GEN
+     }
+   }
    ```
+   Retain both the process rc and sole JSON response. On rc 0 require `ok:true`
+   and bind `CLASSIFY` to `result`.
+   On rc 1 or rc 2, emit `scheduler.classify-convergence failed (rc=<rc>) in
+   epoch <CURRENT_GEN>`, bind `CLASSIFY={"convergence_events":[]}`, and proceed
+   to 6.5.0.3 without emitting a convergence event. This preserves progress
+   without hiding the operator diagnostic.
 
 6. **Emit each convergence_event** to BOTH journal and forum per spec § 7.2.
    Wrap the writes in `(unset SEED_ID; ...)` subshells — the coordinator

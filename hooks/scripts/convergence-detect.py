@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""convergence-detect.py — 3-class convergence classifier (spec § 7.5).
+"""ORACLE-ONLY Unix parity helper; supported runtime lives in scheduler.cjs.
+
+convergence-detect.py — 3-class convergence classifier (spec § 7.5).
 
 Pure function: no git, no LLM, no session.yaml access. Caller pre-computes
 AI similarities + inspired_by map + cross_seed_borrow forum slice and passes

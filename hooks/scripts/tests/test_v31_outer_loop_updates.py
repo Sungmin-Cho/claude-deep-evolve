@@ -36,8 +36,8 @@ def test_step_6_5_0_invokes_convergence_detect():
     m = re.search(r"(Step 6\.5\.0.*?)(?=^## Step 6\.5\.1\b)", c,
                   re.DOTALL | re.MULTILINE)
     body = m.group(1)
-    assert "convergence-detect.py" in body, (
-        "Step 6.5.0 must invoke T19 convergence-detect.py"
+    assert "runtime-op: scheduler.classify-convergence" in body, (
+        "Step 6.5.0 must invoke T19 scheduler.classify-convergence"
     )
 
 
@@ -101,12 +101,11 @@ def test_step_6_5_0_t19_invocation_is_rc_guarded():
     m = re.search(r"(Step 6\.5\.0.*?)(?=^## Step 6\.5\.1\b)", c,
                   re.DOTALL | re.MULTILINE)
     body = m.group(1)
-    assert re.search(r"if\s*!\s*CLASSIFY=\$\(python3.*convergence-detect\.py",
-                     body, re.DOTALL), (
-        "Step 6.5.0.2 step 5 must wrap convergence-detect.py in "
-        "`if ! CLASSIFY=$(...); then` rc guard"
+    assert "runtime-op: scheduler.classify-convergence" in body
+    assert "On rc 1 or rc 2" in body, (
+        "Step 6.5.0.2 step 5 must preserve nonzero dispatcher rc handling"
     )
-    assert "error: convergence-detect.py failed" in body, (
+    assert "scheduler.classify-convergence failed" in body, (
         "T19 failure must emit an `error:` prefixed stderr line"
     )
 

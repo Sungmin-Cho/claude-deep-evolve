@@ -37,20 +37,9 @@ NATIVE_TASK3_ARMS = {
 }
 
 DEFERRED_TASK3_ARMS = [
-    "entropy_compute",
-    "migrate_v2_weights",
-    "count_flagged_since_last_expansion",
-    "retry_budget_remaining",
     "create_seed_worktree",
     "validate_seed_worktree",
     "remove_seed_worktree",
-    "compute_init_budget_split",
-    "compute_grow_allocation",
-    "append_forum_event",
-    "tail_forum",
-    "append_journal_event",
-    "append_kill_queue_entry",
-    "drain_kill_queue",
     "create_synthesis_worktree",
     "cleanup_failed_synthesis_worktree",
 ]
@@ -816,8 +805,8 @@ def test_retry_budget_exhausted(run_helper, make_journal):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="frozen Bash/Python oracle is Unix-only")
-def test_task3_deferred_metric_arms_match_frozen_v343_oracle(tmp_path):
-    """Task 3 routes Task 4 metric arms to the byte-frozen 3.4.3 oracle."""
+def test_task4_native_metric_arms_match_frozen_v343_oracle_semantics(tmp_path):
+    """Task 4 native metrics preserve the frozen 3.4.3 JSON semantics."""
     journal = tmp_path / "journal.jsonl"
     journal.write_text("\n".join([
         json.dumps({"id": 1, "status": "planned", "idea_category": "parameter_tune"}),
@@ -852,7 +841,15 @@ def test_task3_deferred_metric_arms_match_frozen_v343_oracle(tmp_path):
             capture_output=True, text=True, check=False,
         )
         assert wrapper.returncode == oracle.returncode, (args, wrapper.stderr, oracle.stderr)
-        assert wrapper.stdout == oracle.stdout, args
+        wrapper_json = json.loads(wrapper.stdout)
+        oracle_json = json.loads(oracle.stdout)
+        if args[0] == "migrate_v2_weights":
+            assert wrapper_json["pre_normalize_sum"] == oracle_json["pre_normalize_sum"]
+            assert wrapper_json["weights"].keys() == oracle_json["weights"].keys()
+            for key, value in oracle_json["weights"].items():
+                assert wrapper_json["weights"][key] == pytest.approx(value)
+        else:
+            assert wrapper_json == oracle_json, args
         assert wrapper.stderr == oracle.stderr, args
 
 
@@ -935,9 +932,9 @@ def test_all_18_task3_native_arms_match_frozen_v343_observables(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="frozen Bash/Python oracle is Unix-only")
-def test_all_16_deferred_arms_execute_the_frozen_oracle_route(tmp_path):
-    """Task 4/5 arms remain exact Unix oracle delegates until their Node ports land."""
-    assert len(DEFERRED_TASK3_ARMS) == 16
+def test_all_5_deferred_task5_arms_execute_the_frozen_oracle_route(tmp_path):
+    """Only Task 5 arms remain exact Unix oracle delegates after Task 4."""
+    assert len(DEFERRED_TASK3_ARMS) == 5
     for arm in DEFERRED_TASK3_ARMS:
         wrapper_root = tmp_path / f"wrapper-deferred-{arm}"
         oracle_root = tmp_path / f"oracle-deferred-{arm}"

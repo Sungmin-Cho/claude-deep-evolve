@@ -34,6 +34,25 @@ const TASK3_OPERATIONS = [
   'virtual.append-seed',
   'virtual.rebuild-seeds',
   'virtual.set-field',
+  'metrics.entropy',
+  'metrics.migrate-v2-weights',
+  'metrics.count-flagged',
+  'metrics.retry-budget',
+  'metrics.init-budget-split',
+  'metrics.grow-allocation',
+  'coord.append-journal',
+  'coord.append-forum',
+  'coord.tail-forum',
+  'coord.quarantine-malformed',
+  'coord.queue-user-kill',
+  'coord.queue-kill',
+  'coord.drain-kill-queue',
+  'scheduler.signals',
+  'scheduler.decide',
+  'scheduler.kill-conditions',
+  'scheduler.borrow-preflight',
+  'scheduler.borrow-abandoned',
+  'scheduler.classify-convergence',
 ];
 
 const LEGACY_ARMS = [
@@ -123,11 +142,40 @@ function captureMain(argv, dependencies = {}) {
   }
 }
 
-test('exports the immutable Task 3 registry and runtime version', () => {
+test('exports the immutable Task 4 registry and runtime version', () => {
   assert.deepEqual([...OPERATIONS].sort(), [...TASK3_OPERATIONS].sort());
   assert.equal(Object.isFrozen(OPERATIONS), true);
   assert.throws(() => OPERATIONS.push('metrics.entropy'), TypeError);
   assert.equal(RUNTIME_VERSION, require('../package.json').version);
+});
+
+test('Task 4 active protocols route retired scheduling oracles through exact dispatcher operations', () => {
+  const protocols = path.resolve(__dirname, '..', 'skills', 'deep-evolve-workflow', 'protocols');
+  const routes = [
+    ['coordinator.md', 'scheduler-signals.py', 'scheduler.signals'],
+    ['coordinator.md', 'scheduler-decide.py', 'scheduler.decide'],
+    ['coordinator.md', 'borrow-abandoned-scan.py', 'scheduler.borrow-abandoned'],
+    ['outer-loop.md', 'convergence-detect.py', 'scheduler.classify-convergence'],
+    ['inner-loop.md', 'borrow-preflight.py', 'scheduler.borrow-preflight'],
+  ];
+  const retired = [...routes.map(([, oracle]) => oracle), 'kill-conditions.py'];
+  const activeFiles = fs.readdirSync(protocols)
+    .filter((name) => name.endsWith('.md'))
+    .map((name) => [name, fs.readFileSync(path.join(protocols, name), 'utf8')]);
+  const activeText = activeFiles.map(([, text]) => text).join('\n');
+
+  for (const oracle of retired) {
+    assert.doesNotMatch(activeText, new RegExp(oracle.replace('.', '\\.'), 'g'), oracle);
+  }
+  for (const [file, , operation] of routes) {
+    assert.equal(OPERATIONS.includes(operation), true, operation);
+    const source = fs.readFileSync(path.join(protocols, file), 'utf8');
+    assert.match(source, new RegExp(`runtime-op:\\s*${operation.replace('.', '\\.')}(?:\\s|\x60|$)`), `${file} must route ${operation}`);
+    assert.match(source, /deep-evolve-runtime\.cjs/, `${file} must invoke the packaged Node dispatcher`);
+  }
+
+  const packaged = JSON.stringify(require('../package.json').files);
+  for (const oracle of retired) assert.doesNotMatch(packaged, new RegExp(oracle.replace('.', '\\.')));
 });
 
 test('routes all 33 legacy subcommands plus help, including deferred arms', () => {
@@ -137,10 +185,7 @@ test('routes all 33 legacy subcommands plus help, including deferred arms', () =
     assert.match(LEGACY_ROUTES[arm], /^(?:native|legacy)$/);
   }
   for (const arm of [
-    'migrate_v2_weights',
     'create_seed_worktree',
-    'compute_init_budget_split',
-    'append_forum_event',
     'create_synthesis_worktree',
   ]) {
     assert.equal(LEGACY_ROUTES[arm], 'legacy');
@@ -152,12 +197,15 @@ test('routes all 33 legacy subcommands plus help, including deferred arms', () =
     'set_virtual_parallel_field',
     'init_virtual_parallel_block',
     'rebuild_seeds_from_journal',
+    'migrate_v2_weights',
+    'compute_init_budget_split',
+    'append_forum_event',
   ]) {
     assert.equal(LEGACY_ROUTES[arm], 'native');
   }
 });
 
-test('the compatibility split is exactly 18 native arms and 16 deferred oracle routes', () => {
+test('the compatibility split is exactly 29 native arms and 5 deferred oracle routes', () => {
   const native = LEGACY_ARMS.filter((arm) => LEGACY_ROUTES[arm] === 'native');
   const deferred = LEGACY_ARMS.filter((arm) => LEGACY_ROUTES[arm] === 'legacy');
   assert.deepEqual(native, [
@@ -174,20 +222,15 @@ test('the compatibility split is exactly 18 native arms and 16 deferred oracle r
     'append_meta_archive_local',
     'render_inherited_context',
     'lineage_tree',
+    'entropy_compute',
+    'migrate_v2_weights',
+    'count_flagged_since_last_expansion',
+    'retry_budget_remaining',
     'resolve_helper_path',
     'append_seed_to_session_yaml',
     'set_virtual_parallel_field',
     'init_virtual_parallel_block',
     'rebuild_seeds_from_journal',
-  ]);
-  assert.deepEqual(deferred, [
-    'entropy_compute',
-    'migrate_v2_weights',
-    'count_flagged_since_last_expansion',
-    'retry_budget_remaining',
-    'create_seed_worktree',
-    'validate_seed_worktree',
-    'remove_seed_worktree',
     'compute_init_budget_split',
     'compute_grow_allocation',
     'append_forum_event',
@@ -195,6 +238,11 @@ test('the compatibility split is exactly 18 native arms and 16 deferred oracle r
     'append_journal_event',
     'append_kill_queue_entry',
     'drain_kill_queue',
+  ]);
+  assert.deepEqual(deferred, [
+    'create_seed_worktree',
+    'validate_seed_worktree',
+    'remove_seed_worktree',
     'create_synthesis_worktree',
     'cleanup_failed_synthesis_worktree',
   ]);

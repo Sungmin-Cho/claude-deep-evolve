@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Collect per-seed + session-wide signals for scheduler's decision prompt.
+"""ORACLE-ONLY Unix parity helper; supported runtime lives in scheduler.cjs.
+
+Collect per-seed + session-wide signals for scheduler's decision prompt.
 
 Outputs a JSON structure consumed by the scheduler prompt builder (T10).
 Implements § 6.3 per-seed signals and § 6.4 session-wide signals.

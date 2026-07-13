@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Validate + clamp AI scheduler decisions (spec section 6.2).
+"""ORACLE-ONLY Unix parity helper; supported runtime lives in scheduler.cjs.
+
+Validate + clamp AI scheduler decisions (spec section 6.2).
 
 Accepts a decision JSON (structure per section 6.2), validates required fields,
 clamps block_size to allowed set {1,2,3,5,8} with lower-tie-break, emits

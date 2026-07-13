@@ -618,7 +618,7 @@ If `session.yaml.status == active`:
 - **`VERSION_TIER == v3_1_plus` and `ACTIVE_SEED_COUNT > 0`** → **Read
   `protocols/coordinator.md`** (resume the
   multi-seed coordinator. Coordinator's main loop is journal-event idempotent;
-  `scheduler-signals.py` synthesizes `in_flight_block` from journal so resume
+  `scheduler.signals` synthesizes `in_flight_block` from journal so resume
   detects partially-dispatched seeds and skips already-completed blocks. Step 3.5
   reconciliation above has already validated yaml/journal seed-set drift via
   prefer-journal SOT.)

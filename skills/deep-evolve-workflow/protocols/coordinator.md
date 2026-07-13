@@ -62,6 +62,14 @@ In plugin-cache install this resolves to
 `~/.claude/plugins/cache/deep-evolve/hooks/scripts/session-helper.sh`; in
 dev-repo dogfood it resolves to `<repo>/hooks/scripts/session-helper.sh`.
 
+For each `runtime-op:` step below, `dispatch_runtime(request)` means: write the
+fully materialized request object as UTF-8 JSON beneath
+`PROJECT_ROOT/.deep-evolve/.runtime-requests/`, invoke
+`node "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deep-evolve-runtime.cjs" --request
+"<absolute-request-path>"`, retain its process rc, and parse its sole stdout
+JSON object. Do not inline the request into a command string. An invalid JSON
+response or rc 2 is an operator error and stops the coordinator.
+
 ## Main Loop
 
 Coordinator runs in the main Claude Code session. Per-dispatch pseudocode:
@@ -69,10 +77,15 @@ Coordinator runs in the main Claude Code session. Per-dispatch pseudocode:
 ```
 while session_active:
   # 1. Collect signals
-  signals = $("${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scheduler-signals.py" \
-    --session-yaml "$SESSION_ROOT/session.yaml" \
-    --journal "$SESSION_ROOT/journal.jsonl" \
-    --forum "$SESSION_ROOT/forum.jsonl")
+  # runtime-op: scheduler.signals
+  signals_response = dispatch_runtime({
+    schema_version: "1.0",
+    operation: "scheduler.signals",
+    context: {project_root: PROJECT_ROOT},
+    payload: {session_id: SESSION_ID}
+  })
+  require signals_response.rc == 0 and signals_response.body.ok == true
+  signals = signals_response.body.result
 
   # Canonical zero-active gate. It MUST run before kill handling, any AI
   # decision, validation, or dispatch. A terminal-only session proceeds
@@ -95,40 +108,33 @@ while session_active:
 
   # 5. Validate + clamp
   # G12 final review F2 fix (2026-04-26) + re-review G1 fix (2026-04-26):
-  # scheduler-decide.py emits rc=1 on business rejection (accepted: false)
-  # per the rc=0=accepted contract. Capture rc safely under errexit:
+  # scheduler.decide emits rc=1 on business rejection and places the rejected
+  # decision in error.details. Preserve the rc=0=accepted contract:
   #   rc=0  → decision accepted, validated.accepted = true, proceed to case
   #   rc=1  → decision rejected (validated.accepted = false), log + continue
   #   rc=2  → operator error (malformed input), abort coordinator
   #
-  # G1 fix: wrap in `if cmd; then ... else rc=$?; fi` pattern. Bare
-  # `var=$(failing_cmd); rc=$?` triggers errexit BEFORE rc=$? executes
-  # under `set -e` / `set -Eeuo pipefail` (commonly used in helper
-  # scripts), aborting the coordinator on every business rejection.
-  # Empirical verification (re-review 2026-04-26-152334): `bash -e -c
-  # 'var=$(false); echo REACHED'` exits without printing REACHED.
-  # The if/else pattern below is errexit-safe — the substitution failure
-  # is consumed by the if condition, not propagated to errexit.
-  if validated=$("${CLAUDE_PLUGIN_ROOT}/hooks/scripts/scheduler-decide.py" \
-      --decision "$decision" \
-      --signals "$signals"); then
-    rc=0
-  else
-    rc=$?
-  fi
-  if [ $rc -eq 1 ]; then
+  # runtime-op: scheduler.decide
+  validated_response = dispatch_runtime({
+    schema_version: "1.0",
+    operation: "scheduler.decide",
+    context: {project_root: PROJECT_ROOT},
+    payload: {decision: decision, signals: signals}
+  })
+  if validated_response.rc == 1:
+    require validated_response.body.ok == false
+    require validated_response.body.error.code == "scheduler_decision_rejected"
     # Business rejection (e.g., kill_target == chosen_seed_id, allocation
     # below P3 floor). Log and continue to next iteration; AI scheduler
     # will propose a different decision next turn.
-    log "scheduler_decision_rejected: $(echo "$validated" | jq -r .reason)"
+    log "scheduler_decision_rejected: ${validated_response.body.error.message}"
     continue
-  elif [ $rc -ne 0 ]; then
-    echo "error: scheduler-decide.py operator error (rc=$rc)" >&2
-    exit 1
-  fi
+  if validated_response.rc != 0 or validated_response.body.ok != true:
+    abort "scheduler.decide operator error"
+  validated = validated_response.body.result
 
   # Defense-in-depth: assert validated.accepted == true before applying.
-  # F2 fix: even if scheduler-decide.py somehow emits rc=0 with
+  # F2 fix: even if scheduler.decide somehow emits rc=0 with
   # accepted:false (regression), the case statement should NOT route a
   # rejected decision as executable.
   if [ "$(echo "$validated" | jq -r .accepted)" != "true" ]; then
@@ -160,11 +166,20 @@ while session_active:
   "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh" validate_seed_worktree $chosen_seed_id $pre_dispatch_head
 
   # 7.5. Scan for stale borrow_planned events (spec § 7.4 P1, T15b wiring)
-  scan_result=$(python3 "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/borrow-abandoned-scan.py" \
-    --journal-path "$SESSION_ROOT/journal.jsonl" \
-    --current-block-id "$current_block_id" \
-    --staleness-blocks 2)
-  for event in $(echo "$scan_result" | jq -c '.abandoned_events[]'); do
+  # runtime-op: scheduler.borrow-abandoned
+  scan_response = dispatch_runtime({
+    schema_version: "1.0",
+    operation: "scheduler.borrow-abandoned",
+    context: {project_root: PROJECT_ROOT},
+    payload: {
+      events: parse_valid_jsonl("$SESSION_ROOT/journal.jsonl"),
+      current_block_id: current_block_id,
+      staleness_blocks: 2
+    }
+  })
+  require scan_response.rc == 0 and scan_response.body.ok == true
+  scan_result = scan_response.body.result
+  for event in scan_result.abandoned_events; do
     bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-helper.sh" append_journal_event "$event"
   done
 
@@ -196,8 +211,8 @@ replay-stable predicates rather than an ad-hoc stop.
 
 | # | Condition | Predicate |
 |---|---|---|
-| a | **No schedulable seed remains** | no `session.yaml.virtual_parallel.seeds[].status` equals `active` — every seed is terminal or paused: `killed_<reason>` (incl. `killed_shortcut_quarantine`), `completed_early`, or `quarantined` (the coordinator sets `quarantined` on contamination — see § Post-dispatch validation). Only `active` seeds are schedulable (`scheduler-decide.py` / `scheduler-signals.py` treat `active` as the live status), so once none remain the loop cannot dispatch and makes no progress. This is broader than "all killed": a mix of `completed_early` + `quarantined` seeds with leftover budget would otherwise satisfy neither (a) nor (b) and hang. |
-| b | **Budget exhausted** | `signals.budget_unallocated == 0` **AND** every seed's `remaining_budget` (`allocated_budget - experiments_used`, already surfaced per-seed by `scheduler-signals.py`) is `<= 0`. The shared pool and every per-seed allocation are spent. |
+| a | **No schedulable seed remains** | no `session.yaml.virtual_parallel.seeds[].status` equals `active` — every seed is terminal or paused: `killed_<reason>` (incl. `killed_shortcut_quarantine`), `completed_early`, or `quarantined` (the coordinator sets `quarantined` on contamination — see § Post-dispatch validation). Only `active` seeds are schedulable (`scheduler.decide` / `scheduler.signals` treat `active` as the live status), so once none remain the loop cannot dispatch and makes no progress. This is broader than "all killed": a mix of `completed_early` + `quarantined` seeds with leftover budget would otherwise satisfy neither (a) nor (b) and hang. |
+| b | **Budget exhausted** | `signals.budget_unallocated == 0` **AND** every seed's `remaining_budget` (`allocated_budget - experiments_used`, already surfaced per-seed by `scheduler.signals`) is `<= 0`. The shared pool and every per-seed allocation are spent. |
 | c | **Epoch cap reached** | `session.yaml.evaluation_epoch.current >= evaluation_epoch.max_epochs`, **only when** the operator configured `max_epochs`. When the field is absent the epoch cap is inactive (termination falls to a/b/d). |
 | d | **Wall-clock cap reached** | `now − session.yaml.created_at >= wall_clock_cap_minutes`, **only when** the operator configured `wall_clock_cap_minutes`. `created_at` is the same ISO-8601 field completion.md uses for `duration_minutes`. Absent ⇒ inactive. |
 

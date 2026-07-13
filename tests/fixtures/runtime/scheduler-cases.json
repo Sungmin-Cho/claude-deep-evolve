@@ -1,0 +1,134 @@
+{
+  "entropy": [
+    {
+      "name": "mixed categories",
+      "events": [
+        {"status":"planned","idea_category":"parameter_tune"},
+        {"status":"planned","idea_category":"parameter_tune"},
+        {"status":"planned","idea_category":"algorithm_swap"},
+        {"status":"planned","idea_category":"algorithm_swap"},
+        {"status":"planned","idea_category":"other"}
+      ],
+      "window_size": 20,
+      "expected": {"entropy_bits":1.521928,"active_categories":3,"sample_size":5}
+    },
+    {
+      "name": "insufficient sample",
+      "events": [{"status":"planned","idea_category":"parameter_tune"}],
+      "window_size": 20,
+      "expected": {"entropy_bits":null,"active_categories":1,"reason":"insufficient_sample","sample_size":1}
+    },
+    {
+      "name": "window is applied after planned filtering",
+      "events": [
+        {"status":"planned","idea_category":"algorithm_swap"},
+        {"status":"planned","idea_category":"parameter_tune"},
+        {"status":"planned","idea_category":"parameter_tune"},
+        {"status":"planned","idea_category":"parameter_tune"},
+        {"status":"planned","idea_category":"parameter_tune"},
+        {"status":"planned","idea_category":"parameter_tune"}
+      ],
+      "window_size": 5,
+      "expected": {"entropy_bits":0,"active_categories":1,"sample_size":5}
+    }
+  ],
+  "weights": [
+    {
+      "name":"normalized v2 distribution",
+      "input":{"parameter_tuning":0.4,"simplification":0.3,"algorithm_swap":0.2,"structural_change":0.1},
+      "pre_normalize_sum":1.2
+    },
+    {
+      "name":"all structural remains normalized with floors",
+      "input":{"parameter_tuning":0,"simplification":0,"algorithm_swap":0,"structural_change":1},
+      "pre_normalize_sum":1.2
+    }
+  ],
+  "count_flagged": [
+    {
+      "name":"last reset wins",
+      "events":[{"event":"shortcut_flagged"},{"event":"shortcut_escalation"},{"event":"shortcut_flagged"},{"event":"tier3_flagged_reset"},{"event":"shortcut_flagged"},{"event":"shortcut_flagged"}],
+      "expected":{"count":2,"last_reset_idx":3}
+    },
+    {
+      "name":"no reset",
+      "events":[{"event":"shortcut_flagged"},{"event":"kept"},{"event":"shortcut_flagged"}],
+      "expected":{"count":2,"last_reset_idx":-1}
+    }
+  ],
+  "retry_budget": [
+    {
+      "name":"crashes do not consume diagnose budget",
+      "events":[{"event":"diagnose_retry_started"},{"event":"seed_block_failed"},{"event":"diagnose_retry_started"}],
+      "cap":10,
+      "expected":{"used":2,"remaining":8,"cap":10}
+    },
+    {
+      "name":"remaining clamps at zero",
+      "events":[{"event":"diagnose_retry_started"},{"event":"diagnose_retry_started"},{"event":"diagnose_retry_started"}],
+      "cap":2,
+      "expected":{"used":3,"remaining":0,"cap":2}
+    }
+  ],
+  "init_budget": [
+    {"name":"equal","total":12,"n":3,"expected":[4,4,4]},
+    {"name":"remainder goes to last seeds","total":14,"n":3,"expected":[4,5,5]},
+    {"name":"exact P3 floor","total":9,"n":3,"expected":[3,3,3]},
+    {"name":"below P3 floor","total":8,"n":3,"rc":1,"error":"P3 floor"},
+    {"name":"zero N","total":12,"n":0,"rc":2,"error":"positive integer"},
+    {"name":"bool N","total":12,"n":true,"rc":2,"error":"integer"},
+    {"name":"negative total","total":-1,"n":1,"rc":2,"error":"non-negative integer"}
+  ],
+  "grow_budget": [
+    {"name":"sufficient pool","pool":12,"n_current":2,"expected":3},
+    {"name":"P3 floor wins","pool":3,"n_current":3,"expected":3},
+    {"name":"below P3","pool":2,"n_current":3,"rc":1,"error":"P3"},
+    {"name":"zero current N","pool":10,"n_current":0,"rc":2,"error":"positive integer"},
+    {"name":"bool pool","pool":true,"n_current":1,"rc":2,"error":"integer"}
+  ],
+  "decisions": [
+    {"name":"schedule accepted","input":{"decision":"schedule","chosen_seed_id":1,"block_size":3,"reasoning":"best","signals_used":[]},"accepted":true,"block_size":3},
+    {"name":"lower tie at four","input":{"decision":"schedule","chosen_seed_id":1,"block_size":4,"reasoning":"tie","signals_used":[]},"accepted":true,"block_size":3,"clamped":true},
+    {"name":"lower tie at six","input":{"decision":"schedule","chosen_seed_id":1,"block_size":6,"reasoning":"tie","signals_used":[]},"accepted":true,"block_size":5,"clamped":true},
+    {"name":"seven clamps up","input":{"decision":"schedule","chosen_seed_id":1,"block_size":7,"reasoning":"near","signals_used":[]},"accepted":true,"block_size":8,"clamped":true},
+    {"name":"zero clamps to one","input":{"decision":"schedule","chosen_seed_id":1,"block_size":0,"reasoning":"near","signals_used":[]},"accepted":true,"block_size":1,"clamped":true},
+    {"name":"kill path accepted","input":{"decision":"kill_then_schedule","kill_target":3,"chosen_seed_id":1,"block_size":3,"reasoning":"kill","signals_used":[]},"accepted":true},
+    {"name":"same kill target is business rejection","input":{"decision":"kill_then_schedule","kill_target":3,"chosen_seed_id":3,"block_size":3,"reasoning":"bad","signals_used":[]},"accepted":false,"rc":1,"error":"kill_target"},
+    {"name":"grow exact floor accepted","input":{"decision":"grow_then_schedule","new_seed_id":4,"new_seed_allocation":3,"chosen_seed_id":4,"block_size":3,"reasoning":"grow","signals_used":[]},"accepted":true},
+    {"name":"grow omitted allocation accepted","input":{"decision":"grow_then_schedule","new_seed_id":4,"chosen_seed_id":4,"block_size":3,"reasoning":"grow","signals_used":[]},"accepted":true},
+    {"name":"grow below floor rejected","input":{"decision":"grow_then_schedule","new_seed_id":4,"new_seed_allocation":2,"chosen_seed_id":4,"block_size":3,"reasoning":"grow","signals_used":[]},"accepted":false,"rc":1,"error":"P3"},
+    {"name":"missing chosen","input":{"decision":"schedule","block_size":3,"reasoning":"bad","signals_used":[]},"rc":2,"error":"chosen_seed_id"},
+    {"name":"bool chosen","input":{"decision":"schedule","chosen_seed_id":true,"block_size":3,"reasoning":"bad","signals_used":[]},"rc":2,"error":"integer"},
+    {"name":"missing kill target","input":{"decision":"kill_then_schedule","chosen_seed_id":1,"block_size":3,"reasoning":"bad","signals_used":[]},"rc":2,"error":"kill_target"},
+    {"name":"missing new seed","input":{"decision":"grow_then_schedule","chosen_seed_id":1,"block_size":3,"reasoning":"bad","signals_used":[]},"rc":2,"error":"new_seed_id"},
+    {"name":"unknown decision","input":{"decision":"wibble","chosen_seed_id":1,"block_size":3,"reasoning":"bad","signals_used":[]},"rc":2,"error":"decision"},
+    {"name":"non integer block","input":{"decision":"schedule","chosen_seed_id":1,"block_size":"three","reasoning":"bad","signals_used":[]},"rc":2,"error":"block_size"}
+  ],
+  "signals": [
+    {
+      "name":"aliases trends fairness and in-flight",
+      "session":{"virtual_parallel":{"n_current":2,"budget_unallocated":1,"seeds":[{"id":1,"status":"active","experiments_used":4,"keeps":1,"allocated_budget":8,"current_q":0.5},{"seed_id":2.0,"status":"active","experiments_used":2,"experiments_used_this_epoch":0,"keeps":1,"allocated_budget":6,"current_q":0.4}]}},
+      "journal":[{"event":"evaluated","seed_id":1,"id":1,"score":0.4,"ts":"2026-01-01T00:00:00Z"},{"status":"kept","seed_id":1,"id":1,"ts":"2026-01-01T00:00:01Z"},{"event":"kept","seed_id":1,"id":2,"q":0.45,"ts":"2026-01-01T00:00:02Z"},{"event":"seed_scheduled","chosen_seed_id":2,"ts":"2026-01-01T00:00:03Z"}],
+      "forum":[{"event":"seed_keep","ts":"2026-01-01T00:00:03Z"}],
+      "expected":{"active_seed_count":2,"schedulable_seed_ids":[1,2],"n_current":2,"zero_active":false,"budget_unallocated":1,"forum_activity":1}
+    },
+    {
+      "name":"canonical zero active",
+      "session":{"virtual_parallel":{"x-active-seed-count":0,"seeds":[{"id":1,"status":"killed_user_requested"},{"id":2,"status":"completed_early"}]}},
+      "journal":[],"forum":[],
+      "expected":{"active_seed_count":0,"schedulable_seed_ids":[],"n_current":0,"zero_active":true}
+    }
+  ],
+  "convergence": [
+    {"name":"empty","input":{"keeps":[],"similarities":[],"inspired_by_map":{},"cross_seed_borrow_events":[],"epoch":2},"judged":null},
+    {"name":"below threshold","input":{"keeps":[{"commit":"a","seed_id":1,"experiments_used_before_keep":5},{"commit":"b","seed_id":2,"experiments_used_before_keep":5}],"similarities":[{"commit_a":"a","commit_b":"b","score":0.8}],"inspired_by_map":{},"cross_seed_borrow_events":[],"threshold":0.85,"epoch":2},"judged":null},
+    {"name":"evidence based at P3 boundary","input":{"keeps":[{"commit":"a","seed_id":1,"experiments_used_before_keep":3,"description":"alpha"},{"commit":"b","seed_id":2,"experiments_used_before_keep":3,"description":"beta"}],"similarities":[{"commit_a":"a","commit_b":"b","score":0.9}],"inspired_by_map":{},"cross_seed_borrow_events":[],"threshold":0.85,"p3_floor":3,"epoch":2},"judged":"evidence_based"},
+    {"name":"borrow chain inspired-by","input":{"keeps":[{"commit":"src","seed_id":1,"experiments_used_before_keep":5},{"commit":"borrow","seed_id":2,"experiments_used_before_keep":4}],"similarities":[{"commit_a":"src","commit_b":"borrow","score":0.9}],"inspired_by_map":{"borrow":"src"},"cross_seed_borrow_events":[]},"judged":"borrow_chain_convergence","ancestor":"src"},
+    {"name":"borrow chain forum","input":{"keeps":[{"commit":"src","seed_id":1,"experiments_used_before_keep":5},{"commit":"borrow","seed_id":2,"experiments_used_before_keep":5}],"similarities":[{"commit_a":"src","commit_b":"borrow","score":0.9}],"inspired_by_map":{},"cross_seed_borrow_events":[{"source_commit":"src","target_commit":"borrow"}]},"judged":"borrow_chain_convergence","ancestor":"src"},
+    {"name":"contagion below P3","input":{"keeps":[{"commit":"a","seed_id":1,"experiments_used_before_keep":5},{"commit":"b","seed_id":2,"experiments_used_before_keep":2}],"similarities":[{"commit_a":"a","commit_b":"b","score":0.9}],"inspired_by_map":{},"cross_seed_borrow_events":[]},"judged":"contagion_suspected"},
+    {"name":"transitive union find","input":{"keeps":[{"commit":"a","seed_id":1,"experiments_used_before_keep":5},{"commit":"b","seed_id":2,"experiments_used_before_keep":5},{"commit":"c","seed_id":3,"experiments_used_before_keep":5}],"similarities":[{"commit_a":"a","commit_b":"b","score":0.9},{"commit_a":"b","commit_b":"c","score":0.9}],"inspired_by_map":{},"cross_seed_borrow_events":[]},"judged":"evidence_based","seed_ids":[1,2,3]},
+    {"name":"bool threshold rejected","input":{"keeps":[],"similarities":[],"inspired_by_map":{},"cross_seed_borrow_events":[],"threshold":true},"rc":2,"error":"threshold"},
+    {"name":"string seed rejected","input":{"keeps":[{"commit":"a","seed_id":"1"}],"similarities":[],"inspired_by_map":{},"cross_seed_borrow_events":[]},"rc":2,"error":"seed_id"},
+    {"name":"missing commit rejected","input":{"keeps":[{"seed_id":1}],"similarities":[],"inspired_by_map":{},"cross_seed_borrow_events":[]},"rc":2,"error":"commit"}
+  ]
+}

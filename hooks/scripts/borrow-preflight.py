@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""borrow-preflight.py — filter borrow candidates by P2/P3 and dedup (spec § 7.4).
+"""ORACLE-ONLY Unix parity helper; supported runtime lives in scheduler.cjs.
+
+borrow-preflight.py — filter borrow candidates by P2/P3 and dedup (spec § 7.4).
 
 This runs BEFORE the AI's Step 5.f semantic-borrow prompt so the prompt never
 sees flagged candidates, never runs when the seed hasn't cleared P3 floor, and

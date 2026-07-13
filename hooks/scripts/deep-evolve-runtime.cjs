@@ -21,6 +21,29 @@ const {
   validateStoredSession,
   withDirectoryLock,
 } = require('./runtime/session-store.cjs');
+const {
+  appendJsonl: appendJournalJsonl,
+  readJsonl: readJournalJsonl,
+  tailJsonl,
+  quarantineMalformed,
+  queueKill,
+  queueUserKill,
+  drainKillQueue,
+} = require('./runtime/journal-store.cjs');
+const {
+  entropy,
+  migrateV2Weights,
+  countFlagged,
+  retryBudget,
+  initBudgetSplit,
+  growAllocation,
+  collectSchedulerSignals,
+  decideScheduler,
+  evaluateKillConditions,
+  borrowPreflight,
+  findBorrowAbandoned,
+  classifyConvergence,
+} = require('./runtime/scheduler.cjs');
 const { findProjectRoot, isPathInside } = require('./runtime/runtime-paths.cjs');
 
 const RUNTIME_VERSION = require('../../package.json').version;
@@ -43,7 +66,31 @@ const OPERATIONS = Object.freeze([
   'virtual.append-seed',
   'virtual.rebuild-seeds',
   'virtual.set-field',
+  'metrics.entropy',
+  'metrics.migrate-v2-weights',
+  'metrics.count-flagged',
+  'metrics.retry-budget',
+  'metrics.init-budget-split',
+  'metrics.grow-allocation',
+  'coord.append-journal',
+  'coord.append-forum',
+  'coord.tail-forum',
+  'coord.quarantine-malformed',
+  'coord.queue-user-kill',
+  'coord.queue-kill',
+  'coord.drain-kill-queue',
+  'scheduler.signals',
+  'scheduler.decide',
+  'scheduler.kill-conditions',
+  'scheduler.borrow-preflight',
+  'scheduler.borrow-abandoned',
+  'scheduler.classify-convergence',
 ]);
+
+const TASK4_OWNS_RECOVERY = new Set(OPERATIONS.filter((operation) =>
+  operation.startsWith('metrics.')
+  || operation.startsWith('coord.')
+  || operation.startsWith('scheduler.')));
 
 const NATIVE_LEGACY_ARMS = [
   'help',
@@ -64,16 +111,10 @@ const NATIVE_LEGACY_ARMS = [
   'set_virtual_parallel_field',
   'init_virtual_parallel_block',
   'rebuild_seeds_from_journal',
-];
-
-const DEFERRED_LEGACY_ARMS = [
   'entropy_compute',
   'migrate_v2_weights',
   'count_flagged_since_last_expansion',
   'retry_budget_remaining',
-  'create_seed_worktree',
-  'validate_seed_worktree',
-  'remove_seed_worktree',
   'compute_init_budget_split',
   'compute_grow_allocation',
   'append_forum_event',
@@ -81,6 +122,12 @@ const DEFERRED_LEGACY_ARMS = [
   'append_journal_event',
   'append_kill_queue_entry',
   'drain_kill_queue',
+];
+
+const DEFERRED_LEGACY_ARMS = [
+  'create_seed_worktree',
+  'validate_seed_worktree',
+  'remove_seed_worktree',
   'create_synthesis_worktree',
   'cleanup_failed_synthesis_worktree',
 ];
@@ -2630,6 +2677,175 @@ const HANDLERS = Object.freeze({
     payloadFor(request, ['session_id'])),
   'virtual.set-field': (request, project) => operationVirtualSetField(project,
     payloadFor(request, ['session_id', 'key', 'value'])),
+  'metrics.entropy': (request) => {
+    const payload = payloadFor(request, ['events', 'window_size']);
+    return { result: entropy(payload.events, payload.window_size === undefined ? 20 : payload.window_size), warnings: [] };
+  },
+  'metrics.migrate-v2-weights': (request) => {
+    const payload = payloadFor(request, ['weights']);
+    return { result: migrateV2Weights(payload.weights), warnings: [] };
+  },
+  'metrics.count-flagged': (request) => {
+    const payload = payloadFor(request, ['events']);
+    return { result: countFlagged(payload.events), warnings: [] };
+  },
+  'metrics.retry-budget': (request) => {
+    const payload = payloadFor(request, ['events', 'cap']);
+    return { result: retryBudget(payload.events, payload.cap === undefined ? 10 : payload.cap), warnings: [] };
+  },
+  'metrics.init-budget-split': (request) => {
+    const payload = payloadFor(request, ['total', 'n']);
+    return { result: { allocations: initBudgetSplit(payload.total, payload.n) }, warnings: [] };
+  },
+  'metrics.grow-allocation': (request) => {
+    const payload = payloadFor(request, ['pool', 'n_current']);
+    return { result: { allocation: growAllocation(payload.pool, payload.n_current) }, warnings: [] };
+  },
+  'coord.append-journal': (request, project, dependencies) => {
+    const payload = payloadFor(request, ['session_id', 'event', 'seed_id']);
+    const sessionId = ensureSessionId(payload.session_id);
+    sessionInfo(project, sessionId, { requireDirectory: true });
+    const appended = appendJournalJsonl({
+      stateRoot: project.stateRoot,
+      relativePath: `${sessionId}/journal.jsonl`,
+      event: payload.event,
+      sessionId,
+      seedId: payload.seed_id,
+      now: dependencies.now || Date.now,
+    });
+    return { result: appended.record, warnings: [] };
+  },
+  'coord.append-forum': (request, project, dependencies) => {
+    const payload = payloadFor(request, ['session_id', 'event', 'seed_id']);
+    const sessionId = ensureSessionId(payload.session_id);
+    sessionInfo(project, sessionId, { requireDirectory: true });
+    const appended = appendJournalJsonl({
+      stateRoot: project.stateRoot,
+      relativePath: `${sessionId}/forum.jsonl`,
+      event: payload.event,
+      sessionId,
+      seedId: payload.seed_id,
+      now: dependencies.now || Date.now,
+    });
+    return { result: appended.record, warnings: [] };
+  },
+  'coord.tail-forum': (request, project) => {
+    const payload = payloadFor(request, ['session_id', 'limit']);
+    const sessionId = ensureSessionId(payload.session_id);
+    sessionInfo(project, sessionId, { requireDirectory: true });
+    const tailed = tailJsonl({
+      stateRoot: project.stateRoot,
+      relativePath: `${sessionId}/forum.jsonl`,
+      limit: payload.limit === undefined ? 20 : payload.limit,
+    });
+    return { result: { records: tailed.records }, warnings: tailed.warnings };
+  },
+  'coord.quarantine-malformed': (request, project, dependencies) => {
+    const payload = payloadFor(request, ['session_id', 'file', 'malformed']);
+    const sessionId = ensureSessionId(payload.session_id);
+    sessionInfo(project, sessionId, { requireDirectory: true });
+    const result = quarantineMalformed({
+      stateRoot: project.stateRoot,
+      relativePath: `${sessionId}/${payload.file}`,
+      malformed: payload.malformed,
+      now: dependencies.now,
+      randomNonce: dependencies.randomNonce,
+      platform: dependencies.platform,
+      io: dependencies.io,
+      onPhase: dependencies.onQuarantinePhase,
+      beforeInstall: dependencies.beforeQuarantineInstall,
+    });
+    return { result, warnings: [] };
+  },
+  'coord.queue-user-kill': (request, project, dependencies) => {
+    const payload = payloadFor(request, ['session_id', 'seed_id']);
+    const sessionId = ensureSessionId(payload.session_id);
+    sessionInfo(project, sessionId, { requireDirectory: true });
+    return {
+      result: queueUserKill({
+        stateRoot: project.stateRoot,
+        sessionId,
+        seedId: payload.seed_id,
+        now: dependencies.now || Date.now,
+        randomUUID: dependencies.randomUUID || crypto.randomUUID,
+      }),
+      warnings: [],
+    };
+  },
+  'coord.queue-kill': (request, project, dependencies) => {
+    const payload = payloadFor(request, ['session_id', 'seed_id', 'condition', 'final_q', 'experiments_used']);
+    const sessionId = ensureSessionId(payload.session_id);
+    sessionInfo(project, sessionId, { requireDirectory: true });
+    return {
+      result: queueKill({
+        stateRoot: project.stateRoot,
+        sessionId,
+        seedId: payload.seed_id,
+        condition: payload.condition,
+        finalQ: payload.final_q,
+        experimentsUsed: payload.experiments_used,
+        now: dependencies.now || Date.now,
+        randomUUID: dependencies.randomUUID || crypto.randomUUID,
+      }),
+      warnings: [],
+    };
+  },
+  'coord.drain-kill-queue': (request, project, dependencies) => {
+    const payload = payloadFor(request, ['session_id', 'completed_seed_id']);
+    const sessionId = ensureSessionId(payload.session_id);
+    sessionInfo(project, sessionId, { requireDirectory: true });
+    return {
+      result: drainKillQueue({
+        stateRoot: project.stateRoot,
+        sessionId,
+        completedSeedId: payload.completed_seed_id,
+        now: dependencies.now || Date.now,
+        onPhase: dependencies.onDrainPhase,
+      }),
+      warnings: [],
+    };
+  },
+  'scheduler.signals': (request, project) => {
+    const payload = payloadFor(request, ['session_id']);
+    const sessionId = ensureSessionId(payload.session_id);
+    const info = sessionInfo(project, sessionId, { requireDirectory: true });
+    const session = parseStateDocument(fs.readFileSync(info.sessionPath, 'utf8'), { sourcePath: info.sessionPath });
+    const journal = readJournalJsonl({ stateRoot: project.stateRoot, relativePath: `${sessionId}/journal.jsonl`, skipMalformed: true });
+    const forum = readJournalJsonl({ stateRoot: project.stateRoot, relativePath: `${sessionId}/forum.jsonl`, skipMalformed: true });
+    return {
+      result: collectSchedulerSignals(session, journal.records, forum.records),
+      warnings: [...journal.warnings, ...forum.warnings],
+    };
+  },
+  'scheduler.decide': (request) => {
+    const payload = payloadFor(request, ['decision', 'signals']);
+    const result = decideScheduler(payload.decision, payload.signals === undefined ? null : payload.signals);
+    if (!result.accepted) throw businessError('scheduler_decision_rejected', result.reason, result);
+    return { result, warnings: [] };
+  },
+  'scheduler.kill-conditions': (request) => {
+    const payload = payloadFor(request, ['seed', 'session', 'ai_judgments', 'user_kill_request']);
+    return { result: evaluateKillConditions(payload), warnings: [] };
+  },
+  'scheduler.borrow-preflight': (request) => {
+    const payload = payloadFor(request, ['self_seed_id', 'self_experiments_used', 'candidates', 'journal', 'forum']);
+    return { result: borrowPreflight(payload), warnings: [] };
+  },
+  'scheduler.borrow-abandoned': (request) => {
+    const payload = payloadFor(request, ['events', 'current_block_id', 'staleness_blocks']);
+    return {
+      result: findBorrowAbandoned(payload.events, payload.current_block_id,
+        payload.staleness_blocks === undefined ? 2 : payload.staleness_blocks),
+      warnings: [],
+    };
+  },
+  'scheduler.classify-convergence': (request) => {
+    const payload = payloadFor(request, [
+      'keeps', 'similarities', 'inspired_by_map', 'cross_seed_borrow_events',
+      'threshold', 'p3_floor', 'epoch',
+    ]);
+    return { result: classifyConvergence(payload), warnings: [] };
+  },
 });
 
 function dispatch(request, dependencies = {}) {
@@ -2643,7 +2859,9 @@ function dispatch(request, dependencies = {}) {
   try {
     validateRequest(request);
     const project = resolveProject(request.context);
-    const recovery = recoverProject(project, dependencies);
+    const recovery = TASK4_OWNS_RECOVERY.has(request.operation)
+      ? null
+      : recoverProject(project, dependencies);
     const outcome = HANDLERS[request.operation](request, project, dependencies, recovery);
     return successResponse(request.operation, outcome.result, outcome.warnings || []);
   } catch (error) {
@@ -3377,6 +3595,226 @@ function writeLegacyJqParseFailure() {
   return 5;
 }
 
+function task4LegacyEvents(filePath) {
+  if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
+  const warnings = [];
+  return parseJsonl(fs.readFileSync(filePath, 'utf8'), path.basename(filePath), {
+    skipMalformed: true,
+    warnings,
+  });
+}
+
+function task4LegacySession(env, cwd) {
+  if (!env.SESSION_ROOT) throw operatorError('session_root_missing', 'SESSION_ROOT not set');
+  let sessionRoot;
+  try { sessionRoot = fs.realpathSync(env.SESSION_ROOT); }
+  catch { throw operatorError('session_root_missing', `SESSION_ROOT does not exist: ${env.SESSION_ROOT}`); }
+  const stateRoot = path.dirname(sessionRoot);
+  if (path.basename(stateRoot) !== '.deep-evolve') {
+    throw operatorError('session_root_invalid', 'SESSION_ROOT must be a direct child of .deep-evolve');
+  }
+  const projectRoot = path.dirname(stateRoot);
+  const discovered = findProjectRoot(cwd) || projectRoot;
+  if (fs.realpathSync(discovered) !== fs.realpathSync(projectRoot)) {
+    throw operatorError('session_root_invalid', 'SESSION_ROOT does not belong to the current project');
+  }
+  return { projectRoot, stateRoot, sessionRoot, sessionId: path.basename(sessionRoot) };
+}
+
+function legacyJsonArgument(raw, label) {
+  let value;
+  try { value = JSON.parse(raw); }
+  catch { throw operatorError('invalid_json', `${label}: invalid JSON`); }
+  if (!plainObject(value)) throw operatorError('invalid_object', `${label} must be a JSON object`);
+  return value;
+}
+
+function legacyPythonJson(value) {
+  if (value === null) return 'null';
+  if (value === true) return 'true';
+  if (value === false) return 'false';
+  if (typeof value === 'number') return JSON.stringify(value);
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(legacyPythonJson).join(', ')}]`;
+  if (plainObject(value)) {
+    return `{${Object.entries(value).map(([key, entry]) => `${JSON.stringify(key)}: ${legacyPythonJson(entry)}`).join(', ')}}`;
+  }
+  throw operatorError('invalid_json_value', 'legacy JSON output contains an unsupported value');
+}
+
+function runTask4Legacy(subcommand, args, env, cwd, dependencies) {
+  if (subcommand === 'entropy_compute') {
+    const events = task4LegacyEvents(args[0]);
+    if (events === null) {
+      process.stderr.write('{"error":"missing or nonexistent journal path"}\n');
+      return 1;
+    }
+    const windowSize = args[1] === undefined ? 20 : Number(args[1]);
+    if (!Number.isInteger(windowSize)) {
+      process.stderr.write('entropy_compute: window_size must be an integer\n');
+      return 2;
+    }
+    process.stdout.write(`${legacyPythonJson(entropy(events, windowSize))}\n`);
+    return 0;
+  }
+  if (subcommand === 'migrate_v2_weights') {
+    if (!args[0] || !fs.existsSync(args[0]) || !fs.statSync(args[0]).isFile()) {
+      process.stderr.write('{"error":"missing or nonexistent v2 weights JSON"}\n');
+      return 1;
+    }
+    let weights;
+    try { weights = JSON.parse(fs.readFileSync(args[0], 'utf8')); }
+    catch {
+      process.stderr.write('migrate_v2_weights: invalid JSON\n');
+      return 2;
+    }
+    process.stdout.write(`${legacyPythonJson(migrateV2Weights(weights))}\n`);
+    return 0;
+  }
+  if (subcommand === 'count_flagged_since_last_expansion') {
+    const events = task4LegacyEvents(args[0]);
+    if (events === null) {
+      process.stderr.write('{"error":"missing or nonexistent journal path"}\n');
+      return 1;
+    }
+    process.stdout.write(`${legacyPythonJson(countFlagged(events))}\n`);
+    return 0;
+  }
+  if (subcommand === 'retry_budget_remaining') {
+    const events = task4LegacyEvents(args[0]);
+    if (events === null) {
+      process.stderr.write('{"error":"missing or nonexistent journal path"}\n');
+      return 1;
+    }
+    const cap = args[1] === undefined ? 10 : Number(args[1]);
+    if (!Number.isInteger(cap) || cap < 0) {
+      process.stderr.write('retry_budget_remaining: cap must be a non-negative integer\n');
+      return 2;
+    }
+    process.stdout.write(`${legacyPythonJson(retryBudget(events, cap))}\n`);
+    return 0;
+  }
+  if (subcommand === 'compute_init_budget_split') {
+    if (args.length < 2) {
+      process.stderr.write('usage: compute_init_budget_split <total> <N>\n');
+      return 2;
+    }
+    if (!/^\d+$/.test(args[0]) || !/^[1-9]\d*$/.test(args[1])) {
+      process.stderr.write('compute_init_budget_split: total and N must be non-negative/positive integers\n');
+      return 2;
+    }
+    try {
+      process.stdout.write(initBudgetSplit(Number(args[0]), Number(args[1])).join(' '));
+      return 0;
+    } catch (error) {
+      process.stderr.write(`${error.message}\n`);
+      return error.rc === 1 ? 1 : 2;
+    }
+  }
+  if (subcommand === 'compute_grow_allocation') {
+    if (args.length < 2) {
+      process.stderr.write('usage: compute_grow_allocation <pool> <current_N>\n');
+      return 2;
+    }
+    if (!/^\d+$/.test(args[0]) || !/^[1-9]\d*$/.test(args[1])) {
+      process.stderr.write('compute_grow_allocation: pool and current_N must be non-negative/positive integers\n');
+      return 2;
+    }
+    try {
+      process.stdout.write(`${growAllocation(Number(args[0]), Number(args[1]))}\n`);
+      return 0;
+    } catch (error) {
+      process.stderr.write(`${error.message}\n`);
+      return error.rc === 1 ? 1 : 2;
+    }
+  }
+  if (![
+    'append_forum_event', 'tail_forum', 'append_journal_event',
+    'append_kill_queue_entry', 'drain_kill_queue',
+  ].includes(subcommand)) return null;
+
+  let context;
+  try { context = task4LegacySession(env, cwd); }
+  catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    return 2;
+  }
+  try {
+    if (subcommand === 'append_forum_event') {
+      if (!args[0]) throw operatorError('usage', 'usage: append_forum_event <json>');
+      const event = legacyJsonArgument(args[0], 'append_forum_event');
+      appendJournalJsonl({
+        stateRoot: context.stateRoot,
+        relativePath: `${context.sessionId}/forum.jsonl`,
+        event,
+        now: dependencies.now || Date.now,
+      });
+      return 0;
+    }
+    if (subcommand === 'tail_forum') {
+      const limit = args[0] === undefined ? 20 : Number(args[0]);
+      if (!Number.isInteger(limit) || limit < 0) throw operatorError('invalid_field_type', 'tail_forum N must be a non-negative integer');
+      const tailed = tailJsonl({
+        stateRoot: context.stateRoot,
+        relativePath: `${context.sessionId}/forum.jsonl`,
+        limit,
+      });
+      for (const warning of tailed.warnings) process.stderr.write(`warn: tail_forum: skipped malformed JSONL line ${warning.line}\n`);
+      for (const event of tailed.records) process.stdout.write(`${JSON.stringify(event)}\n`);
+      return 0;
+    }
+    if (subcommand === 'append_journal_event') {
+      if (!args[0]) throw operatorError('usage', 'usage: append_journal_event <json>');
+      if (!env.SESSION_ID) throw operatorError('session_id_missing', 'SESSION_ID not set');
+      const event = legacyJsonArgument(args[0], 'append_journal_event');
+      let seedId;
+      if (env.SEED_ID !== undefined && env.SEED_ID !== '') {
+        if (!/^[1-9]\d*$/.test(env.SEED_ID)) throw operatorError('invalid_seed_id', 'SEED_ID must be a positive integer');
+        seedId = Number(env.SEED_ID);
+      }
+      appendJournalJsonl({
+        stateRoot: context.stateRoot,
+        relativePath: `${context.sessionId}/journal.jsonl`,
+        event,
+        sessionId: env.SESSION_ID,
+        seedId,
+        now: dependencies.now || Date.now,
+      });
+      return 0;
+    }
+    if (subcommand === 'append_kill_queue_entry') {
+      if (args.length < 4) throw operatorError('usage', 'usage: append_kill_queue_entry <seed_id> <condition> <final_q> <experiments_used>');
+      if (!/^[1-9]\d*$/.test(args[0]) || !/^-?\d+(?:\.\d+)?$/.test(args[2]) || !/^\d+$/.test(args[3])) {
+        throw operatorError('invalid_field_type', 'append_kill_queue_entry numeric field is invalid');
+      }
+      queueKill({
+        stateRoot: context.stateRoot,
+        sessionId: context.sessionId,
+        seedId: Number(args[0]),
+        condition: args[1],
+        finalQ: Number(args[2]),
+        experimentsUsed: Number(args[3]),
+        now: dependencies.now || Date.now,
+        randomUUID: dependencies.randomUUID || crypto.randomUUID,
+      });
+      return 0;
+    }
+    if (!args[0] || !/^[1-9]\d*$/.test(args[0])) throw operatorError('invalid_field_type', 'drain_kill_queue completed_seed_id must be a positive integer');
+    if (!env.SESSION_ID) throw operatorError('session_id_missing', 'drain_kill_queue: SESSION_ID not set');
+    const result = drainKillQueue({
+      stateRoot: context.stateRoot,
+      sessionId: context.sessionId,
+      completedSeedId: Number(args[0]),
+      now: dependencies.now || Date.now,
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return 0;
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    return error.rc === 1 ? 1 : 2;
+  }
+}
+
 function runNativeLegacy(subcommand, args, env = process.env, cwd = process.cwd(), dryRun = false,
   dependencies = {}) {
   let response;
@@ -3412,6 +3850,9 @@ function runNativeLegacy(subcommand, args, env = process.env, cwd = process.cwd(
     process.stdout.write(`${fs.realpathSync(path.join(__dirname, 'session-helper.sh'))}\n`);
     return 0;
   }
+
+  const task4Status = runTask4Legacy(subcommand, args, env, cwd, dependencies);
+  if (task4Status !== null) return task4Status;
 
   const virtualArm = [
     'append_seed_to_session_yaml',
@@ -3997,8 +4438,61 @@ function writeCliResponse(response) {
   process.stdout.write(`${JSON.stringify(response)}\n`);
 }
 
+function runLegacyOperation(argv, env = process.env) {
+  const operation = argv[0];
+  const args = argv.slice(1);
+  if (operation !== 'coord.queue-user-kill') {
+    process.stderr.write(`unsupported legacy operation: ${operation || '(missing)'}\n`);
+    return 2;
+  }
+  if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
+    process.stdout.write('usage: kill-request-writer.sh --seed=<positive-int>\n');
+    return 0;
+  }
+  if (args.length !== 1 || !args[0].startsWith('--seed=')) {
+    const unknown = args.find((arg) => !arg.startsWith('--seed='));
+    process.stderr.write(unknown
+      ? `error: unknown argument: ${unknown}\n`
+      : 'error: --seed=<id> is required\n');
+    return 2;
+  }
+  const token = args[0].slice('--seed='.length);
+  if (!/^[1-9][0-9]*$/.test(token)) {
+    process.stderr.write(`error: --seed must be a positive integer with no leading zeros, got: ${token}\n`);
+    return 2;
+  }
+  if (!env.SESSION_ROOT) {
+    process.stderr.write('error: SESSION_ROOT not set\n');
+    return 2;
+  }
+  let sessionRoot;
+  try { sessionRoot = fs.realpathSync(env.SESSION_ROOT); }
+  catch {
+    process.stderr.write(`error: SESSION_ROOT does not exist: ${env.SESSION_ROOT}\n`);
+    return 2;
+  }
+  const stateRoot = path.dirname(sessionRoot);
+  if (path.basename(stateRoot) !== '.deep-evolve') {
+    process.stderr.write('error: SESSION_ROOT must be a direct child of .deep-evolve\n');
+    return 2;
+  }
+  const projectRoot = path.dirname(stateRoot);
+  const response = dispatch({
+    schema_version: '1.0',
+    operation,
+    context: { project_root: projectRoot },
+    payload: { session_id: path.basename(sessionRoot), seed_id: Number(token) },
+  });
+  if (!response.ok) {
+    process.stderr.write(`error: ${response.error.message}\n`);
+    return response.exitCode;
+  }
+  return 0;
+}
+
 function main(argv = process.argv.slice(2), dependencies = {}) {
   if (argv[0] === '--legacy-session-helper') return runLegacyHelper(argv.slice(1), dependencies);
+  if (argv[0] === '--legacy-operation') return runLegacyOperation(argv.slice(1));
   if (argv[0] !== '--request' || argv.length !== 2) {
     const response = failureResponse(null, operatorError('invalid_cli', 'usage: deep-evolve-runtime.cjs --request <path>'));
     writeCliResponse(response);
