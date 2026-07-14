@@ -1,7 +1,7 @@
 {
   "name": "deep-evolve",
   "version": "3.4.3",
-  "description": "Autonomous Experimentation Protocol — goal-driven experiment loops that systematically improve any project through measured code modifications; skill-based entry (cross-platform: Claude Code / Codex / Copilot / Gemini)",
+  "description": "Autonomous Experimentation Protocol — shared Claude Code and Codex agent policies for goal-driven measured improvement loops",
   "author": {
     "name": "sungmin"
   },

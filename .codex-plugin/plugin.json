@@ -30,9 +30,9 @@
       "Write"
     ],
     "defaultPrompt": [
-      "$deep-evolve:deep-evolve-workflow \"improve this project\"",
-      "$deep-evolve:deep-evolve-workflow resume",
-      "$deep-evolve:deep-evolve-workflow history"
+      "$deep-evolve:deep-evolve \"improve this project\"",
+      "$deep-evolve:deep-evolve resume",
+      "$deep-evolve:deep-evolve history"
     ],
     "brandColor": "#0F766E",
     "screenshots": []

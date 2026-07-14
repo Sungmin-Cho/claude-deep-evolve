@@ -2,109 +2,78 @@
 name: deep-evolve-workflow
 version: "3.4.3"
 description: |
-  This skill should be used when the user wants to run autonomous, measured
-  code-improvement experiments — analyzing the project, generating an evaluation
-  harness, and iterating until a goal metric improves. Also handles session
-  resume, history queries, lineage tracking, outer-loop strategy evolution,
-  and meta-archive transfer across projects. The actual entry point is the
-  sibling `deep-evolve` skill (`skills/deep-evolve/SKILL.md`, `user-invocable: true`,
-  invoked as `/deep-evolve` in Claude Code or `Skill({ skill: "deep-evolve:deep-evolve" })`
-  cross-platform).
-  Trigger phrases: "deep evolve", "deep-evolve", "autonomous experiment",
-  "자율 실험", "auto improve", "자동 개선", "experiment loop", "실험 루프",
-  "코드 최적화", "strategy evolution", "전략 진화", "meta-archive",
-  "session history", "resume", "이어서 실험", or `/deep-evolve` invocation.
+  Host-neutral workflow policy for bounded measured code-improvement experiments.
+  The public entry is /deep-evolve in Claude Code and $deep-evolve:deep-evolve in Codex.
 ---
 
 # Deep Evolve: Autonomous Experimentation Protocol
 
-Goal-driven experiment loops that systematically improve any project through
-measured code modifications. The user runs `/deep-evolve`; this skill governs
-how the LLM analyzes the project, builds an evaluation harness, runs the
-experiment loop, and reports results.
+Improve a project through bounded experiments while preserving one fixed score
+authority per evaluation epoch. Read `protocols/runtime-contract.md` first.
 
 ## Workflow
 
-```
-/deep-evolve → 프로젝트 분석 (init) → 평가 harness 생성 → 자율 실험 루프 (inner/outer) → 완료 보고
-```
+Entry → analysis/atomic init → fixed evaluator/baseline → inner experiments and
+outer strategy evolution → optional cross-seed synthesis → immutable completion.
 
-## Routing Table
+## Routing table
 
-All routing is owned by the `deep-evolve` entry skill (`skills/deep-evolve/SKILL.md`, Step 1: State Detection & Routing).
-This table lists every protocol file under `protocols/` and when it is entered.
-
-| 진입 트리거 | Protocol 파일 | 책임 |
+| Trigger | Protocol | Responsibility |
 |---|---|---|
-| 새 세션 (no active) | `protocols/init.md` | 프로젝트 분석, 평가 harness scaffolding, baseline 측정, Step 12에서 VERSION_TIER로 분기 |
-| `v3_1_plus` 활성 세션 | `protocols/coordinator.md` | multi-seed dispatch + scheduler-decide + cross-seed forum + synthesis cascade |
-| `v3_0` / `pre_v3` 활성 세션, 또는 coordinator의 per-seed 서브에이전트 | `protocols/inner-loop.md` | 단일 seed AAR Inner Loop (Steps 1-6), Section B(Resume), Section D(Prepare Expansion) |
-| `outer_loop_interval` 도달 시 | `protocols/outer-loop.md` | 전략(strategy.yaml) 갱신, program.md 진화, Tier 1-3 자동 확장 |
-| `/deep-evolve resume` 또는 `paused` 세션 | `protocols/resume.md` | journal-event idempotent 재진입, Step 3.5 reconciliation, Step 5에서 status × VERSION_TIER 분기 |
-| `v3_1_plus` 세션 종료 직전 | `protocols/synthesis.md` | cross-seed cascade fallback + baseline 통합 |
-| 세션 완료 처리 | `protocols/completion.md` | 최종 보고서, evolve-receipt envelope, archive 처리 |
-| `/deep-evolve history [...]` | `protocols/history.md` | 세션 목록, lineage tree, 통계 |
-| 분기/복원 | `protocols/archive.md` | Code Archive backtrack, branch_fork 이벤트 |
-| `/deep-evolve --archive-prune` 또는 cross-project lookup | `protocols/transfer.md` | A.2.5 meta-archive lookup, E.0 recording, Section F prune |
-| 다른 protocol에서 참조 (라우팅 대상 아님) | `protocols/taxonomy.md` | 공용 상수 (status enum, journal event type 등) |
+| new/initializing | `protocols/init.md` | analysis, atomic state, evaluator, baseline, seeds |
+| active multi-seed | `protocols/coordinator.md` | scheduler, kill, block/epoch transactions |
+| assigned/single seed | `protocols/inner-loop.md` | one-idea experiments, typed terminals |
+| paused/epoch boundary | `protocols/outer-loop.md` | Q, entropy, strategy/program/evaluator evolution |
+| resume | `protocols/resume.md` | migration, alignment, orphan, strict rebuild |
+| termination | `protocols/synthesis.md` | audit, baseline, integration, P7 fallback |
+| finalization | `protocols/completion.md` | D0 publication, D1 completion, archive/cleanup |
+| history/status | `protocols/history.md` | read-only list/detail/lineage/export |
+| stepping stone | `protocols/archive.md` | backtrack, save, restore, fork |
+| shared knowledge | `protocols/transfer.md` | lookup, record, feedback, soft prune |
+| categories/insights | `protocols/taxonomy.md` | ten tokens, migration, local insights |
 
-## State Machine
+## State and ownership invariants
 
-`session.yaml.status` 가 다음 5가지 상태를 순환한다. 각 상태별 라우팅 결정은
-`skills/deep-evolve/SKILL.md` Step 1 의 AskUserQuestion 분기를 따른다.
+1. Atomic initialization owns immutable session metadata and the full budget.
+2. Typed operations own baseline, experiment, user-kill, block, epoch, and
+   completion transitions; generic append is never a second writer.
+3. The shared reducer alone derives seed counters, Q, borrow counts, allocation,
+   reclaimed budget, and positive/zero active-count representation.
+4. Every mutation uses operation ID, exact preimages, literal paths, and replay.
+5. Protected evaluator/program/strategy/seal changes occur only at their meta gate.
+6. One experiment is one coherent candidate commit and one typed terminal.
+7. Resume validates bytes, Git identity, journal/result order, and projections.
+8. Missing interaction capability asks the root and stops before mutation.
+9. Claude named agents and Codex generic subagents execute the same policy.
 
-```
-initializing → active → paused (outer loop 중) → active → completed / aborted
-```
+## Stable interaction inventory
 
-- `initializing` — Init 도중 중단. Step 11(baseline writeback)부터 재실행
-- `active` — Inner Loop 진행. resume/completion/abort 분기
-- `paused` — Outer Loop 진행. journal-event idempotent로 안전하게 재진입
-- `completed` — 정상 종료
-- `aborted` — 사용자 중단
+The options and adapters live only in `protocols/runtime-contract.md`. Active
+callers use these exact references:
 
-## 핵심 불변식
+- `interaction-id: active-session-action`, `interaction-id: analysis-confirmation`
+- `interaction-id: archive-cleanup`, `interaction-id: archive-prune`
+- `interaction-id: branch-alignment-resolution`, `interaction-id: completion-outcome`
+- `interaction-id: completion-preserve-or-discard`, `interaction-id: completion-reverse-handoff`
+- `interaction-id: contagion-action`, `interaction-id: diminishing-returns-action`
+- `interaction-id: dirty-worktree-resolution`, `interaction-id: evaluation-method`
+- `interaction-id: experiment-count`, `interaction-id: finished-session-action`
+- `interaction-id: goal-selection`, `interaction-id: harness-regeneration`
+- `interaction-id: harness-confirmation`, `interaction-id: head-mismatch-resolution`
+- `interaction-id: init-recovery`, `interaction-id: inner-resume-action`
+- `interaction-id: legacy-layout-migration`, `interaction-id: lineage-adoption`
+- `interaction-id: n-confirmation`, `interaction-id: orphan-experiment-resolution`
+- `interaction-id: outer-loop-trigger`, `interaction-id: paused-session-action`
+- `interaction-id: post-outer-action`, `interaction-id: program-update`
+- `interaction-id: program-update-after-view`, `interaction-id: review-change-action`
+- `interaction-id: review-failure-merge`, `interaction-id: review-failure-pr`
+- `interaction-id: rollback-ancestor`, `interaction-id: seed-kill-confirmation`
+- `interaction-id: seed-worktree-recovery`, `interaction-id: session-route`
+- `interaction-id: synthesis-regression-action`, `interaction-id: target-file-selection`
+- `interaction-id: transfer-adoption`, `interaction-id: unexpected-head-recovery`
 
-상세 정의는 `skills/deep-evolve/SKILL.md` "핵심 불변식" 섹션 참조.
+## Evaluation domains
 
-1. **고정 평가, 가변 코드**: prepare.py는 ground truth. target 파일만 수정한다
-2. **Scoring Contract**: score는 항상 higher-is-better. minimize 메트릭은 `BASELINE_SCORE / raw_score` 변환
-3. **보호 파일**: `prepare.py`, `prepare-protocol.md`, `program.md`, `strategy.yaml` 은 `DEEP_EVOLVE_META_MODE` 없이 수정 불가 (protect-readonly hook)
-4. **측정 기반**: 모든 변경은 score로 평가. 개선 없으면 discard
-5. **간결함 우선**: 동일 score에 더 단순한 코드 = keep
-6. **이력 학습**: discard 이유를 기억하고 같은 실수 반복 안 함
-7. **Resume 불변식**: Outer Loop sub-step 들은 journal 이벤트(`outer_loop`, `strategy_update`, `strategy_judgment`, `notable_marked`, `program_skip`)로 식별 → 재진입 idempotent
-
-## 사용자 명령 (`/deep-evolve` 인자 매트릭스)
-
-| 인자 | 의미 |
-|---|---|
-| (없음) | 새 세션 시작 또는 활성 세션 재개 |
-| `<숫자>` (예: `50`) | 요청 실험 횟수 |
-| `"<목표>"` | 새 목표로 세션 시작 |
-| `resume` | 명시적 resume (첫 토큰이 정확히 `resume`일 때만) |
-| `history` | 세션 이력 조회 |
-| `history <session-id>` | 특정 세션 상세 |
-| `history --lineage` | lineage tree |
-| `--no-parallel` | A.2.6 가상-병렬 disable, 단일 seed 강제 |
-| `--n-min=<1-9>` | 가상-병렬 최소 동시 seed 수 |
-| `--n-max=<1-9>` | 가상-병렬 최대 동시 seed 수 (N_MIN ≤ N_MAX 보증) |
-| `--kill-seed=<id>` | 진행 중인 seed 종료 요청을 큐에 작성 (T23) 후 즉시 exit |
-| `--status` | 활성 세션 read-only 대시보드 (status-dashboard.py) |
-| `--archive-prune` | meta-archive prune (transfer.md Section F) |
-
-## 지원 도메인
-
-| 도메인 | 예시 | 평가 모드 |
-|--------|------|-----------|
-| ML 훈련 | val_bpb 최소화 | cli (stdout 파싱) |
-| 테스트 | 커버리지 80%+ | cli (테스트 실행) |
-| 코드 품질 | 보안/패턴 개선 | cli (시나리오 통과율) |
-| 전략 최적화 | sharpe ratio 최대화 | cli (백테스트 결과) |
-| 게임 엔진 | 리플레이 정확도, 프레임 타임 | protocol (Unity MCP, Unreal 등) |
-| GUI 앱 | UI 상태 검증, 접근성 | protocol (브라우저/앱 자동화) |
-| 외부 시스템 | API 정확도, 파이프라인 결과 | protocol (MCP/HTTP) |
-
-**평가 모드**:
-- `cli` — 셸 명령으로 메트릭 획득 (대부분의 프로젝트)
-- `protocol` — MCP/도구 기반 평가 프로토콜 (에디터/런타임 의존 프로젝트)
+CLI mode accepts a structured evaluator whose typed output maps to one score.
+Protocol mode accepts a fixed already-configured tool sequence. The plugin adds
+no MCP server, package dependency, or host-specific state path.

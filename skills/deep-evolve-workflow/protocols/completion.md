@@ -7,6 +7,12 @@ returned `session` and `session_sha256` as one authenticated snapshot. Do not
 reuse shell state from an earlier tool call. The v3 report section is emitted
 only when `session.deep_evolve_version` starts with `3.`.
 
+For below-v3.5 compatibility only, `runtime-op: session.mark-status` may expose
+the historical lifecycle transition. Strict v3.5 completion must not call it as
+a duplicate writer; the single `session.complete` transaction below owns final
+status, outcome, Git identity, report/receipt references, synthesis, strategy,
+registry, journal, and D0-to-D1 authority.
+
 ## Pre-completion: Meta Archive Update
 
 Before generating the report, execute **Meta Archive Update (E.0)** from

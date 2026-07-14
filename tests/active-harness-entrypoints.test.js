@@ -5,8 +5,36 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const templateRoot = path.resolve(__dirname, '..', 'templates');
-const task6Surfaces = [path.join(templateRoot, 'prepare-protocol.md')];
+const root = path.resolve(__dirname, '..');
+const templateRoot = path.join(root, 'templates');
+const workflowRoot = path.join(root, 'skills', 'deep-evolve-workflow');
+const protocolRoot = path.join(workflowRoot, 'protocols');
+const protocolNames = [
+  'archive.md',
+  'completion.md',
+  'coordinator.md',
+  'history.md',
+  'init.md',
+  'inner-loop.md',
+  'outer-loop.md',
+  'resume.md',
+  'runtime-contract.md',
+  'synthesis.md',
+  'taxonomy.md',
+  'transfer.md',
+];
+const finalActiveHarnessSurfaces = [
+  path.join(templateRoot, 'prepare-protocol.md'),
+  path.join(root, 'skills', 'deep-evolve', 'SKILL.md'),
+  path.join(workflowRoot, 'SKILL.md'),
+  ...protocolNames.map((name) => path.join(protocolRoot, name)),
+  path.join(root, 'agents', 'evolve-coordinator.md'),
+  path.join(root, 'agents', 'evolve-seed.md'),
+  path.join(root, 'README.md'),
+  path.join(root, 'README.ko.md'),
+  path.join(root, 'CLAUDE.md'),
+  path.join(root, 'AGENTS.md'),
+];
 
 const EXECUTION_VERB = /\b(?:run|execute|invoke|allow)\b/i;
 const ACTIVE_WORDING = /\b(?:ground\s+truth|active|supported)\b/i;
@@ -80,11 +108,17 @@ function scanHarnessEntrypoints(files) {
   return result;
 }
 
-test('Task 6 template surface has no active Python harness instruction', () => {
-  const scan = scanHarnessEntrypoints(task6Surfaces);
+test('Task 7 final active surface has no missing file or active Python harness instruction', () => {
+  const missing = finalActiveHarnessSurfaces
+    .filter((file) => !fs.existsSync(file))
+    .map((file) => path.relative(root, file).split(path.sep).join('/'));
+  const scan = scanHarnessEntrypoints(finalActiveHarnessSurfaces.filter((file) => fs.existsSync(file)));
+  const evidence = { missing, ...scan };
+  assert.deepEqual(missing, [], JSON.stringify(evidence, null, 2));
   assert.equal(scan.active_prepare_py_instructions, 0, JSON.stringify(scan.violations, null, 2));
   assert.deepEqual(scan.violations, []);
-  assert.equal(scan.executable_forms.every((form) => form.kind === 'node:prepare.cjs'), true);
+  assert.equal(scan.executable_forms.length > 0, true, 'final surface must prescribe direct Node prepare.cjs at least once');
+  assert.deepEqual([...new Set(scan.executable_forms.map((form) => form.kind))], ['node:prepare.cjs']);
 });
 
 test('scanner distinguishes marked migration history from executable or active Python wording', () => {
@@ -112,4 +146,8 @@ test('scanner distinguishes marked migration history from executable or active P
   }
 });
 
-module.exports = { scanHarnessEntrypoints };
+module.exports = {
+  finalActiveHarnessSurfaces,
+  scanActiveHarnessInstructions: scanHarnessEntrypoints,
+  scanHarnessEntrypoints,
+};

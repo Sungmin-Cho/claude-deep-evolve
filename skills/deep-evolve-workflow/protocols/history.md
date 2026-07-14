@@ -1,92 +1,50 @@
-# History Protocol (v2.2.0)
+# History Protocol
 
-Displays session history for the current project.
+History is read-only. It renders canonical responses and authenticated receipt
+bytes without repairing, normalizing, pruning, or patching state.
 
-## Step 0 — Parse args
+## Parse and load
 
-Arguments from dispatcher (HISTORY_ARGS):
-- no args / "list" → MODE=list
-- `<session-id>` → MODE=detail, TARGET=<id>
-- `--lineage` → MODE=list, LINEAGE_VIEW=true
-- `--export=md` or `--export=json` → MODE=list, EXPORT=<fmt>
+- No ID or `list`: call `runtime-op: session.list` with optional exact status.
+- Literal session ID: call `runtime-op: session.read` for detail.
+- `--lineage`: call `runtime-op: session.lineage-tree` and render returned lines.
+- Status view: call `runtime-op: coord.status` and render its dashboard/warnings.
+- Export mode accepts only a literal contained destination and `md` or `json`.
 
-## Step 1 — Load data
+Do not enumerate state directories as fallback. rc 1 means unavailable; rc 2,
+unknown schema, malformed response, containment failure, or digest mismatch
+stops the requested view.
 
-Primary source: `sessions.jsonl` (via `session-helper.sh list_sessions`)
-- Includes active/paused sessions (X10)
+## Strict completion receipt resolution
 
-For detail mode, first use the packaged `deep-evolve-runtime.cjs` dispatcher:
+For v3.5, resolve only `completion.receipt.relative_path` beneath the
+authenticated session root and require `completion.receipt.sha256`. Reject a
+missing file, symlink, path escape, mismatched digest, or envelope identity.
+Strict v3.5 never falls back to `evolve-receipt.json`; it also never guesses the
+newest receipt.
 
-```yaml
-runtime-op: session.read
-payload:
-  session_id: <TARGET>
-```
+Below v3.5 compatibility may display `evolve-receipt.json` only when the session
+schema explicitly lacks a strict completion reference. The native Read adapter
+yields display evidence only and never state authority.
 
-For a strict completed session, resolve only
-`result.session.completion.receipt.relative_path` beneath the authenticated
-session root and verify its bytes against
-`result.session.completion.receipt.sha256`. Reject missing files, symlinks,
-containment escapes, digest mismatches, or malformed receipt references. A
-strict session never falls back to evolve-receipt.json. A below v3.5 session may use evolve-receipt.json as the compatibility path when no strict receipt
-reference exists.
+## Rendered views
 
-- **Envelope-aware (v3.2.0+)**: after path and digest authentication, detect an
-  M3 envelope (`schema_version == "1.0"` AND
-  `envelope.producer == "deep-evolve"` AND
-  `envelope.artifact_kind == "evolve-receipt"` AND
-  `envelope.schema.name == envelope.artifact_kind`). When matched, query under
-  `.payload.*` for legacy fields. Pre-3.2.0 receipts continue at root level.
-  Use the same `_RECEIPT_QUERY_BASE` jq pattern as session-helper.sh:
+List mode includes session/goal/date, lifecycle, experiment totals, keep rate,
+Q/score movement, outcome, and warning marker. Detail mode includes:
 
-  ```bash
-  jq -r '
-    (if (.schema_version == "1.0")
-        and ((.envelope|type) == "object")
-        and ((.payload|type) == "object")
-        and (.envelope.producer == "deep-evolve")
-        and (.envelope.artifact_kind == "evolve-receipt")
-        and (.envelope.schema.name == .envelope.artifact_kind)
-     then .payload else . end) as $r |
-    $r.receipt_schema_version // 1
-  ' "$receipt"
-  ```
+- goal, targets, dates, lineage, final branch/full commit, and outcome;
+- top/bottom or full experiment table from the authenticated result schema;
+- generation and evaluation-epoch snapshots, Q components/history, entropy,
+  shortcuts, diagnoses, legibility, notable keeps, and evaluator expansions;
+- seed allocations/status/borrow evidence, synthesis selection/fallback;
+- report, receipt, archive, transfer, handoff, and runtime warning identities.
 
-- Check `receipt_schema_version` (X14): if unknown version, warn and proceed best-effort
+Detail/export also carries local code/strategy archive sizes, transfer source
+and first-block effectiveness, meta-archive total/active/pruned and usage/success
+statistics, soft-prune reasons, and completion snapshot identities when present.
+Missing optional older-version fields render as compatibility gaps, never
+fabricated zeroes in an authenticated strict-v3.5 record.
 
-## Step 2 — Render
-
-### MODE=list
-
-```
-deep-evolve Session History (this project)
-
-┌────┬────────────────────────┬────────────┬────────┬───────┬─────────┬──────────┬──────────┐
-│ #  │ Session / Goal         │ Date       │ Exps   │ Keep  │ Q Δ     │ Score Δ% │ Outcome  │
-├────┼────────────────────────┼────────────┼────────┼───────┼─────────┼──────────┼──────────┤
-│ 1  │ <session> [⚠]          │ <date>     │ N/?    │ N%    │ <val>   │ <val>%   │ <status> │
-└────┴────────────────────────┴────────────┴────────┴───────┴─────────┴──────────┴──────────┘
-```
-
-⚠ = runtime_warnings가 있는 세션
-
-If LINEAGE_VIEW:
-  Run `session-helper.sh lineage_tree` → append lineage chain
-
-Aggregate (완료 세션 기준):
-  총 세션, 누적 실험, 평균 keep rate, Q 개선 추이
-
-### MODE=detail
-
-Read receipt. Display sections:
-- Header (goal, dates, outcome)
-- Experiments table (top-10 + bottom-5 by default; `--full` for all)
-- Generation snapshots (each with Q, trigger, summary)
-- Notable keeps
-- Runtime warnings (if any)
-- Parent session info
-
-### EXPORT
-
-- `--export=md`: Write history table + aggregate to `.deep-evolve/history-<ISO>.md`
-- `--export=json`: Write sessions array + receipts to `.deep-evolve/history-<ISO>.json`
+Aggregates count only schema-valid sessions and preserve unknown/newer entries
+as warnings. Exports are newly rendered views; they never replace source
+records or become completion authority.
