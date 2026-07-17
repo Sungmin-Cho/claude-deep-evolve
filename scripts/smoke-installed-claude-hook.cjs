@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const EXPECTED_VERSION = 'codex-cli 0.144.1';
+const EXPECTED_VERSION = '2.1.207 (Claude Code)';
 const MARKETPLACE_NAME = 'deep-evolve-loopback';
 const COPY_ENTRIES = [
   'package.json',
@@ -21,7 +21,7 @@ const COPY_ENTRIES = [
 const CREDENTIAL_NAME = /(?:^auth\.json$|oauth|credential|token|keychain)/i;
 const TEST_FAKE_HOST_ENV = 'DEEP_EVOLVE_TEST_ONLY_FAKE_HOST';
 
-function fatal(message, code = 'installed_codex_smoke_failed') {
+function fatal(message, code = 'installed_claude_smoke_failed') {
   const error = new Error(message);
   error.code = code;
   return error;
@@ -30,10 +30,6 @@ function fatal(message, code = 'installed_codex_smoke_failed') {
 function valueAfter(argv, flag) {
   const index = argv.indexOf(flag);
   return index === -1 ? null : argv[index + 1] || null;
-}
-
-function hasFlag(argv, flag) {
-  return argv.includes(flag);
 }
 
 function sha256(value) {
@@ -47,28 +43,6 @@ function sha256File(target) {
 function writeJson(target, value) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function diagnostic(argv) {
-  const projectRoot = valueAfter(argv, '--project-root');
-  const target = valueAfter(argv, '--target');
-  if (!projectRoot || !target) throw fatal('--project-root and --target are required');
-  const { evaluateHook } = require('../hooks/scripts/protect-readonly.cjs');
-  const result = evaluateHook({
-    tool_name: 'apply_patch',
-    tool_input: {
-      command: `*** Begin Patch\n*** Update File: ${path.resolve(target)}\n@@\n-before\n+after\n*** End Patch`,
-    },
-  }, {}, path.resolve(projectRoot));
-  const marked = result.exitCode === 2 && /Deep Evolve Guard/.test(result.output);
-  process.stderr.write('[deep-evolve/codex-smoke] diagnostic only; this does not prove installed-host hook registration.\n');
-  process.stdout.write(`${JSON.stringify({
-    diagnostic_only: true,
-    ok: marked,
-    guard_exit_code: result.exitCode,
-    marker: marked ? 'Deep Evolve Guard' : null,
-  })}\n`);
-  if (!marked) throw fatal('diagnostic guard marker was absent');
 }
 
 function assertSourceEntry(sourceRoot, relative) {
@@ -117,17 +91,12 @@ function marketplaceCopy(sourceRoot, marketplaceRoot) {
   for (const relative of COPY_ENTRIES) {
     copyEntry(assertSourceEntry(sourceRoot, relative), path.join(pluginRoot, relative));
   }
-  const manifestRoot = path.join(marketplaceRoot, '.agents', 'plugins');
+  const manifestRoot = path.join(marketplaceRoot, '.claude-plugin');
   fs.mkdirSync(manifestRoot, { recursive: true });
   writeJson(path.join(manifestRoot, 'marketplace.json'), {
     name: MARKETPLACE_NAME,
-    interface: { displayName: 'Deep Evolve Loopback' },
-    plugins: [{
-      name: 'deep-evolve',
-      source: { source: 'local', path: './plugins/deep-evolve' },
-      policy: { installation: 'AVAILABLE', authentication: 'ON_USE' },
-      category: 'Coding',
-    }],
+    owner: { name: MARKETPLACE_NAME },
+    plugins: [{ name: 'deep-evolve', source: './plugins/deep-evolve' }],
   });
   return { pluginRoot, manifest: fileManifest(pluginRoot) };
 }
@@ -169,10 +138,10 @@ function parseJsonOutput(output, label) {
 }
 
 function assertEnabledPlugin(output) {
-  const parsed = parseJsonOutput(output, 'codex plugin list');
+  const parsed = parseJsonOutput(output, 'claude plugin list');
   const serialized = JSON.stringify(parsed);
   if (!serialized.includes('deep-evolve') || !serialized.includes(MARKETPLACE_NAME)) {
-    throw fatal('Codex plugin list did not retain the expected marketplace identity',
+    throw fatal('Claude plugin list did not retain the expected marketplace identity',
       'unsupported_pinned_host_install_contract');
   }
   const candidates = collectObjects(parsed).filter((value) => {
@@ -181,7 +150,7 @@ function assertEnabledPlugin(output) {
   });
   if (!candidates.some((value) => value.enabled === true
     || String(value.status || '').toLowerCase() === 'enabled')) {
-    throw fatal('Codex plugin list did not report deep-evolve enabled',
+    throw fatal('Claude plugin list did not report deep-evolve enabled',
       'unsupported_pinned_host_install_contract');
   }
 }
@@ -220,12 +189,21 @@ function authenticateInstalledCache({ candidates, sourceManifest }) {
       'unsupported_pinned_host_install_contract');
   }
   const installed = matches[0];
-  const hooks = JSON.parse(fs.readFileSync(path.join(installed, 'hooks', 'hooks.json'), 'utf8'));
+  const plugin = JSON.parse(fs.readFileSync(path.join(installed, '.claude-plugin', 'plugin.json'),
+    'utf8'));
+  if (plugin.hooks !== './hooks/hooks.claude.json' || plugin.hooks === './hooks/hooks.json') {
+    throw fatal('installed Claude plugin does not point only to hooks.claude.json',
+      'unsupported_pinned_host_install_contract');
+  }
+  const hooks = JSON.parse(fs.readFileSync(path.join(installed, 'hooks', 'hooks.claude.json'),
+    'utf8'));
   const commands = collectObjects(hooks)
-    .map((value) => value.command)
-    .filter((value) => typeof value === 'string');
-  if (commands.length !== 1 || !commands[0].includes('${PLUGIN_ROOT}')) {
-    throw fatal('installed Codex default hook manifest is not exact',
+    .filter((value) => value.type === 'command')
+    .map((value) => ({ command: value.command, args: value.args }));
+  if (commands.length !== 1 || commands[0].command !== 'node'
+    || !Array.isArray(commands[0].args) || commands[0].args.length !== 1
+    || !commands[0].args[0].includes('${CLAUDE_PLUGIN_ROOT}')) {
+    throw fatal('installed Claude hook command is not the shell-free shared Node guard',
       'unsupported_pinned_host_install_contract');
   }
   return { root: installed, manifest: fileManifest(installed) };
@@ -239,15 +217,15 @@ function credentialArtifacts(roots) {
     for (const entry of entries) {
       const target = path.join(directory, entry.name);
       if (entry.isSymbolicLink()) {
-        output.push({ path: target, kind: 'symlink_mount' });
+        output.push({ path: target, kind: 'keychain_mount_or_symlink' });
       } else if (entry.isDirectory()) {
         if (CREDENTIAL_NAME.test(entry.name)) {
-          output.push({ path: target, kind: 'credential_directory' });
+          output.push({ path: target, kind: 'credential_or_OAuth_directory' });
         } else {
           visit(target);
         }
       } else if (entry.isFile() && CREDENTIAL_NAME.test(entry.name)) {
-        output.push({ path: target, kind: 'credential_artifact' });
+        output.push({ path: target, kind: 'credential_or_OAuth_artifact' });
       }
     }
   };
@@ -300,11 +278,8 @@ function runCommand({ command, prefix, args, cwd, env, timeoutMs, artifactDir, l
       };
       fs.writeFileSync(path.join(artifactDir, `${label}.stdout.log`), result.stdout);
       fs.writeFileSync(path.join(artifactDir, `${label}.stderr.log`), result.stderr);
-      if (timedOut) {
-        reject(fatal(`${label} timed out`, 'host_timeout'));
-      } else {
-        resolve(result);
-      }
+      if (timedOut) reject(fatal(`${label} timed out`, 'host_timeout'));
+      else resolve(result);
     });
   });
 }
@@ -337,7 +312,7 @@ async function acceptance(argv) {
   const hostCommand = valueAfter(argv, '--host-command');
   const hostPrefix = valueAfter(argv, '--host-prefix');
   const artifactDir = valueAfter(argv, '--artifact-dir');
-  const testFakeHost = hasFlag(argv, '--test-fake-host');
+  const testFakeHost = argv.includes('--test-fake-host');
   if (!hostCommand || !artifactDir) {
     throw fatal('--host-command and --artifact-dir are required');
   }
@@ -355,7 +330,7 @@ async function acceptance(argv) {
   }
   fs.mkdirSync(path.resolve(artifactDir), { recursive: true });
   const exactArtifactDir = fs.realpathSync(path.resolve(artifactDir));
-  const isolatedRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deep evolve codex ')));
+  const isolatedRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deep evolve claude ')));
   if (isInside(exactArtifactDir, sourceRoot)) {
     throw fatal('artifact directory must not be inside the repository');
   }
@@ -363,8 +338,8 @@ async function acceptance(argv) {
   const receipt = {
     schema_version: 1,
     kind: 'deep_evolve_installed_host_smoke',
-    host: 'codex',
-    version: '0.144.1',
+    host: 'claude',
+    version: '2.1.207',
     diagnostic_only: testFakeHost,
     capture_source: testFakeHost ? 'test_fake_host_non_authority' : 'actual_exact_pinned_host',
     fixture_authority: false,
@@ -373,22 +348,24 @@ async function acceptance(argv) {
     command_receipts: [],
     ok: false,
   };
-  writeJson(path.join(exactArtifactDir, 'codex-smoke-opening.json'), receipt);
+  writeJson(path.join(exactArtifactDir, 'claude-smoke-opening.json'), receipt);
 
   let driver = null;
   try {
     const home = path.join(isolatedRoot, 'home with spaces');
-    const codexHome = path.join(isolatedRoot, 'codex home with spaces');
+    const claudeConfigDir = path.join(isolatedRoot, 'claude config with spaces');
     const projectRoot = path.join(isolatedRoot, 'project with spaces');
     const marketplaceRoot = path.join(isolatedRoot, 'marketplace with spaces');
-    for (const directory of [home, codexHome, projectRoot]) fs.mkdirSync(directory, { recursive: true });
+    for (const directory of [home, claudeConfigDir, projectRoot]) {
+      fs.mkdirSync(directory, { recursive: true });
+    }
     const project = createActiveProject(projectRoot);
     const before = fs.readFileSync(project.targetPath);
     const beforeSha256 = sha256(before);
     const copied = marketplaceCopy(sourceRoot, marketplaceRoot);
     writeJson(path.join(exactArtifactDir, 'marketplace-copy-manifest.json'), copied.manifest);
 
-    const credentialRoots = [home, codexHome];
+    const credentialRoots = [home, claudeConfigDir];
     const openingCredentials = credentialArtifacts(credentialRoots);
     if (openingCredentials.length !== 0) {
       throw fatal('isolated roots unexpectedly contain an auth or credential artifact',
@@ -398,108 +375,112 @@ async function acceptance(argv) {
     const helperPath = path.join(sourceRoot, 'scripts', 'host-loopback-model.cjs');
     const {
       LOOPBACK_MODEL,
-      buildCodexConfig,
       buildIsolatedHostEnv,
       createLoopbackDriver,
       normalizeActualHostRecords,
     } = require(helperPath);
-    const driverReceiptPath = path.join(exactArtifactDir, 'codex-loopback-driver-receipt.json');
+    const driverReceiptPath = path.join(exactArtifactDir, 'claude-loopback-driver-receipt.json');
     if (!testFakeHost) {
       driver = await createLoopbackDriver({
-        host: 'codex', targetPath: project.targetPath, receiptPath: driverReceiptPath,
+        host: 'claude', targetPath: project.targetPath, receiptPath: driverReceiptPath,
       });
     }
-    const driverOrigin = testFakeHost ? 'http://127.0.0.1:9' : driver.origin;
-    const driverProxyOrigin = testFakeHost ? 'http://127.0.0.1:9' : driver.proxyOrigin;
-    const env = buildIsolatedHostEnv({
-      host: 'codex', home, codexHome,
-      claudeConfigDir: path.join(isolatedRoot, 'unused claude config'),
-      origin: driverOrigin,
-      proxyOrigin: driverProxyOrigin,
+    const hostEnv = buildIsolatedHostEnv({
+      host: 'claude', home,
+      codexHome: path.join(isolatedRoot, 'unused codex home'),
+      claudeConfigDir,
+      origin: testFakeHost ? 'http://127.0.0.1:9' : driver.origin,
+      proxyOrigin: testFakeHost ? 'http://127.0.0.1:9' : driver.proxyOrigin,
     });
-    for (const directory of [env.APPDATA, env.LOCALAPPDATA, env.TMP]) {
+    for (const directory of [hostEnv.APPDATA, hostEnv.LOCALAPPDATA, hostEnv.TMP]) {
       fs.mkdirSync(directory, { recursive: true });
     }
-    const codexConfig = buildCodexConfig({ origin: driverOrigin });
-    const codexConfigPath = path.join(codexHome, 'config.toml');
-    fs.writeFileSync(codexConfigPath, codexConfig);
+    const installEnv = { ...hostEnv };
+    delete installEnv.ANTHROPIC_API_KEY;
+    delete installEnv.ANTHROPIC_BASE_URL;
     writeJson(path.join(exactArtifactDir, 'isolated-opening-inventory.json'),
       fileManifest(isolatedRoot));
     writeJson(path.join(exactArtifactDir, 'credential-scan-opening.json'), openingCredentials);
 
-    const context = {
+    const baseContext = {
       command: fs.realpathSync(path.resolve(hostCommand)),
       prefix: hostPrefix ? [fs.realpathSync(path.resolve(hostPrefix))] : [],
       cwd: projectRoot,
-      env,
       artifactDir: exactArtifactDir,
       commandReceipts: receipt.command_receipts,
     };
-    const version = await requireSuccess(context, ['--version'], 'codex-version');
+    const installContext = { ...baseContext, env: installEnv };
+    const version = await requireSuccess(installContext, ['--version'], 'claude-version');
     if (version.stdout.trim() !== EXPECTED_VERSION || version.stderr !== '') {
-      throw fatal(`unexpected Codex version output: ${JSON.stringify(version.stdout)}`,
+      throw fatal(`unexpected Claude version output: ${JSON.stringify(version.stdout)}`,
         'unsupported_pinned_host_install_contract');
     }
 
-    await requireSuccess(context,
-      ['plugin', 'marketplace', 'add', marketplaceRoot, '--json'], 'codex-marketplace-add');
-    await requireSuccess(context,
-      ['plugin', 'add', `deep-evolve@${MARKETPLACE_NAME}`, '--json'], 'codex-plugin-add');
-    const list = await requireSuccess(context,
-      ['plugin', 'list', '--marketplace', MARKETPLACE_NAME, '--json'], 'codex-plugin-list');
+    await requireSuccess(installContext,
+      ['plugin', 'marketplace', 'add', marketplaceRoot, '--scope', 'user'],
+      'claude-marketplace-add');
+    await requireSuccess(installContext,
+      ['plugin', 'install', `deep-evolve@${MARKETPLACE_NAME}`, '--scope', 'user'],
+      'claude-plugin-install');
+    await requireSuccess(installContext,
+      ['plugin', 'enable', `deep-evolve@${MARKETPLACE_NAME}`, '--scope', 'user'],
+      'claude-plugin-enable');
+    const list = await requireSuccess(installContext,
+      ['plugin', 'list', '--json'], 'claude-plugin-list');
     assertEnabledPlugin(list.stdout);
 
-    const candidates = findPluginRoots([codexHome, home], '.codex-plugin/plugin.json', [
+    const candidates = findPluginRoots([claudeConfigDir, home], '.claude-plugin/plugin.json', [
       fs.realpathSync(copied.pluginRoot),
       fs.realpathSync(sourceRoot),
     ]);
     const installed = authenticateInstalledCache({ candidates, sourceManifest: copied.manifest });
     if (fs.realpathSync(installed.root) === fs.realpathSync(copied.pluginRoot)
       || fs.realpathSync(installed.root) === fs.realpathSync(sourceRoot)) {
-      throw fatal('Codex must execute an installed cache distinct from the source tree',
+      throw fatal('Claude must execute an installed cache distinct from the source tree',
         'unsupported_pinned_host_install_contract');
     }
     writeJson(path.join(exactArtifactDir, 'installed-cache-manifest.json'), installed.manifest);
 
     const fixedPrompt = [
-      'Use apply_patch exactly once.',
+      'Use Edit exactly once.',
       `Change only the exact file ${project.targetPath}.`,
       'Replace its single line before with the single line after.',
       'Do not use another tool and do not modify another file.',
     ].join(' ');
     const hostArgs = [
-      '--ask-for-approval',
-      'never',
-      'exec',
-      '--json',
-      '--ephemeral',
-      '--dangerously-bypass-hook-trust',
-      '--sandbox',
-      'workspace-write',
-      '--skip-git-repo-check',
-      '-C',
-      projectRoot,
+      '-p',
+      '--output-format',
+      'stream-json',
+      '--include-hook-events',
+      '--no-session-persistence',
+      '--no-chrome',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'bypassPermissions',
+      '--tools',
+      'Edit,Write,MultiEdit',
+      '--model',
+      LOOPBACK_MODEL,
+      '--setting-sources',
+      'user',
       fixedPrompt,
     ];
+    const hostContext = { ...baseContext, env: hostEnv };
     const preInvocationCredentials = credentialArtifacts(credentialRoots);
     writeJson(path.join(exactArtifactDir, 'credential-scan-pre-invocation.json'),
       preInvocationCredentials);
     if (preInvocationCredentials.length !== 0) {
-      throw fatal('install persisted an auth or credential artifact before host invocation',
+      throw fatal('install persisted an auth, credential, OAuth, or keychain artifact before host invocation',
         'auth_store_boundary_violation');
     }
-    const host = await requireSuccess(context, hostArgs, 'codex-host-stream', 120_000);
+    const host = await requireSuccess(hostContext, hostArgs, 'claude-host-stream', 120_000);
     const after = fs.readFileSync(project.targetPath);
     const afterSha256 = sha256(after);
     if (!before.equals(after) || beforeSha256 !== afterSha256) {
       throw fatal('protected prepare.cjs bytes changed', 'protected_bytes_changed');
     }
-    if (fs.readFileSync(codexConfigPath, 'utf8') !== codexConfig) {
-      throw fatal('isolated top-level Codex config changed during the host run',
-        'isolated_config_changed');
-    }
     if (!/Deep Evolve Guard/.test(`${host.stdout}\n${host.stderr}`)) {
-      throw fatal('actual Codex stream did not expose one Deep Evolve denial',
+      throw fatal('actual Claude stream did not expose one Deep Evolve denial',
         'missing_actual_hook_denial');
     }
 
@@ -517,7 +498,8 @@ async function acceptance(argv) {
 
     const closingCredentials = credentialArtifacts(credentialRoots);
     if (closingCredentials.length !== 0) {
-      throw fatal('host persisted an auth or credential artifact', 'auth_store_boundary_violation');
+      throw fatal('host persisted an auth, credential, OAuth, or keychain artifact',
+        'auth_store_boundary_violation');
     }
     writeJson(path.join(exactArtifactDir, 'credential-scan-closing.json'), closingCredentials);
     writeJson(path.join(exactArtifactDir, 'isolated-closing-inventory.json'),
@@ -542,14 +524,14 @@ async function acceptance(argv) {
         external_network_attempt_count: 0,
         credential_artifact_count: 0,
       });
-      writeJson(path.join(exactArtifactDir, 'codex-fake-orchestration-receipt.json'), receipt);
+      writeJson(path.join(exactArtifactDir, 'claude-fake-orchestration-receipt.json'), receipt);
       process.stdout.write(`${JSON.stringify(receipt)}\n`);
       return;
     }
 
     const evidence = {
-      host: 'codex',
-      version: '0.144.1',
+      host: 'claude',
+      version: '2.1.207',
       capture_source: 'actual_exact_pinned_host',
       model_source: 'deterministic_loopback_protocol_v1',
       bootstrap_commit: metadata.bootstrapCommit,
@@ -567,10 +549,10 @@ async function acceptance(argv) {
       vendor_cloud_entitlement_proven: false,
     };
     const normalized = normalizeActualHostRecords({
-      host: 'codex', rawJsonl: host.stdout, isolatedRoot: projectRoot, evidence,
+      host: 'claude', rawJsonl: host.stdout, isolatedRoot: projectRoot, evidence,
     });
-    writeJson(path.join(exactArtifactDir, 'codex-normalized-records.json'), normalized);
-    fs.writeFileSync(path.join(exactArtifactDir, 'normalized-apply-patch-attempt.jsonl'),
+    writeJson(path.join(exactArtifactDir, 'claude-normalized-records.json'), normalized);
+    fs.writeFileSync(path.join(exactArtifactDir, 'normalized-protected-edit-attempt.jsonl'),
       `${JSON.stringify(normalized.attempt)}\n`);
     fs.writeFileSync(path.join(exactArtifactDir, 'normalized-hook-denial.jsonl'),
       `${JSON.stringify(normalized.denial)}\n`);
@@ -580,6 +562,7 @@ async function acceptance(argv) {
     Object.assign(receipt, {
       ok: true,
       loopback_model: LOOPBACK_MODEL,
+      public_sentinel_scope: 'final_loopback_host_step_only',
       bootstrap_commit: metadata.bootstrapCommit,
       run_id: metadata.runId,
       job_id: metadata.jobId,
@@ -595,7 +578,6 @@ async function acceptance(argv) {
       raw_stdout_sha256: sha256(host.stdout),
       raw_stderr_sha256: sha256(host.stderr),
       driver_sha256: evidence.driver_sha256,
-      codex_config_sha256: sha256(codexConfig),
       driver_receipt_sha256: sha256File(driverReceiptPath),
       external_network_attempt_count: 0,
       credential_artifact_count: 0,
@@ -603,11 +585,11 @@ async function acceptance(argv) {
       vendor_cloud_entitlement_proven: false,
       fixture_authority: true,
     });
-    writeJson(path.join(exactArtifactDir, 'codex-smoke-receipt.json'), receipt);
+    writeJson(path.join(exactArtifactDir, 'claude-smoke-receipt.json'), receipt);
     process.stdout.write(`${JSON.stringify(receipt)}\n`);
   } catch (error) {
-    receipt.error = { code: error.code || 'installed_codex_smoke_failed', message: error.message };
-    writeJson(path.join(exactArtifactDir, 'codex-smoke-failure.json'), receipt);
+    receipt.error = { code: error.code || 'installed_claude_smoke_failed', message: error.message };
+    writeJson(path.join(exactArtifactDir, 'claude-smoke-failure.json'), receipt);
     throw error;
   } finally {
     if (driver) await driver.close();
@@ -615,16 +597,7 @@ async function acceptance(argv) {
   }
 }
 
-async function main() {
-  const argv = process.argv.slice(2);
-  if (hasFlag(argv, '--diagnose-command')) {
-    diagnostic(argv);
-    return;
-  }
-  await acceptance(argv);
-}
-
-main().catch((error) => {
-  process.stderr.write(`[deep-evolve/codex-smoke] ${error.code || 'error'}: ${error.message}\n`);
+acceptance(process.argv.slice(2)).catch((error) => {
+  process.stderr.write(`[deep-evolve/claude-smoke] ${error.code || 'error'}: ${error.message}\n`);
   process.exitCode = 2;
 });
