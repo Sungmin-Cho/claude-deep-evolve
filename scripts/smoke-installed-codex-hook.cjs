@@ -3,6 +3,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -20,6 +21,7 @@ const COPY_ENTRIES = [
 ];
 const CREDENTIAL_NAME = /(?:^auth\.json$|oauth|credential|token|keychain)/i;
 const TEST_FAKE_HOST_ENV = 'DEEP_EVOLVE_TEST_ONLY_FAKE_HOST';
+const TEST_BOOTSTRAP_MUTATION_ENV = 'DEEP_EVOLVE_TEST_ONLY_BOOTSTRAP_MUTATION';
 
 function fatal(message, code = 'installed_codex_smoke_failed') {
   const error = new Error(message);
@@ -309,6 +311,46 @@ function runCommand({ command, prefix, args, cwd, env, timeoutMs, artifactDir, l
   });
 }
 
+function startObservedDenyProxy() {
+  const attempts = [];
+  const record = (request) => {
+    attempts.push({ method: request.method || null, url: request.url || null,
+      host: request.headers?.host || null });
+  };
+  const server = http.createServer((request, response) => {
+    record(request);
+    response.writeHead(502, { 'content-type': 'text/plain', connection: 'close' });
+    response.end('external network denied\n');
+  });
+  server.on('connect', (request, socket) => {
+    record(request);
+    socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+  });
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      const address = server.address();
+      resolve({
+        origin: `http://127.0.0.1:${address.port}`,
+        snapshot() {
+          return {
+            schema_version: 1,
+            external_network_attempt_count: attempts.length,
+            external_network_attempts: attempts.map((attempt) => ({ ...attempt })),
+          };
+        },
+        close() {
+          return new Promise((resolveClose, rejectClose) => {
+            server.close((error) => (error ? rejectClose(error) : resolveClose()));
+            if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+          });
+        },
+      });
+    });
+  });
+}
+
 async function requireSuccess(context, args, label, timeoutMs = 60_000) {
   const result = await runCommand({ ...context, args, label, timeoutMs });
   context.commandReceipts.push(commandRecord(context.command, [...context.prefix, ...args], result));
@@ -317,6 +359,195 @@ async function requireSuccess(context, args, label, timeoutMs = 60_000) {
       'unsupported_pinned_host_install_contract');
   }
   return result;
+}
+
+function isolatedGitEnvironment({ home, gitConfigPath, proxyOrigin, trace2Path = null }) {
+  const env = {
+    HOME: home,
+    USERPROFILE: home,
+    PATH: process.env.PATH || '',
+    GIT_CONFIG_GLOBAL: gitConfigPath,
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_ALLOW_PROTOCOL: 'file',
+    GIT_TERMINAL_PROMPT: '0',
+    HTTP_PROXY: proxyOrigin,
+    HTTPS_PROXY: proxyOrigin,
+    ALL_PROXY: proxyOrigin,
+    NO_PROXY: '127.0.0.1,localhost',
+  };
+  for (const key of ['SystemRoot', 'ComSpec', 'PATHEXT']) {
+    if (typeof process.env[key] === 'string' && process.env[key]) env[key] = process.env[key];
+  }
+  if (trace2Path) env.GIT_TRACE2_EVENT = trace2Path;
+  return env;
+}
+
+async function createCodexLocalBootstrap({ isolatedRoot, codexHome, artifactDir, testFakeHost,
+  helper, proxyOrigin, proxySnapshot }) {
+  const mutation = testFakeHost
+    ? (process.env[TEST_BOOTSTRAP_MUTATION_ENV] || 'clean')
+    : 'clean';
+  const proxyReceiptPath = path.join(artifactDir,
+    'codex-local-bootstrap-deny-proxy-receipt.json');
+  const failurePath = path.join(artifactDir, 'codex-local-bootstrap-failure.json');
+  writeJson(proxyReceiptPath, proxySnapshot());
+
+  try {
+    const catalog = helper.buildCodexModelCatalog();
+    helper.validateCodexModelCatalog(catalog);
+    const catalogPath = path.join(codexHome, 'loopback-model-catalog.json');
+    writeJson(catalogPath, catalog);
+
+    const workRepoPath = path.join(isolatedRoot, 'curated-work');
+    const gitRemotesRoot = path.join(isolatedRoot, 'git-remotes');
+    const bareRemotePath = path.join(gitRemotesRoot, 'openai', 'plugins.git');
+    const gitConfigPath = path.join(isolatedRoot, 'git-global.config');
+    fs.mkdirSync(workRepoPath, { recursive: true });
+    fs.mkdirSync(path.dirname(bareRemotePath), { recursive: true });
+    fs.writeFileSync(gitConfigPath, '');
+
+    const curatedFiles = [
+      {
+        path: '.agents/plugins/api_marketplace.json',
+        value: {
+          name: 'openai-api-curated',
+          interface: { displayName: 'OpenAI Curated' },
+          plugins: [],
+        },
+      },
+      {
+        path: '.agents/plugins/marketplace.json',
+        value: { name: 'openai-curated', plugins: [] },
+      },
+    ];
+    for (const entry of curatedFiles) writeJson(path.join(workRepoPath, entry.path), entry.value);
+    if (mutation === 'missing-curated-marketplace') {
+      fs.unlinkSync(path.join(workRepoPath, '.agents/plugins/marketplace.json'));
+    } else if (mutation === 'missing-api-marketplace') {
+      fs.unlinkSync(path.join(workRepoPath, '.agents/plugins/api_marketplace.json'));
+    }
+    for (const entry of curatedFiles) {
+      if (!fs.existsSync(path.join(workRepoPath, entry.path))) {
+        throw fatal(`curated marketplace is missing: ${entry.path}`,
+          'invalid_local_curated_marketplace');
+      }
+    }
+
+    const trace2Path = testFakeHost && process.env.GIT_TRACE2_EVENT
+      ? path.resolve(process.env.GIT_TRACE2_EVENT)
+      : path.join(artifactDir, 'codex-bootstrap-git-trace2.jsonl');
+    const gitEnv = isolatedGitEnvironment({
+      home: path.join(isolatedRoot, 'home with spaces'),
+      gitConfigPath,
+      proxyOrigin,
+      trace2Path,
+    });
+    const gitContext = {
+      command: 'git',
+      prefix: [],
+      cwd: isolatedRoot,
+      env: gitEnv,
+      artifactDir,
+      commandReceipts: [],
+    };
+    await requireSuccess(gitContext, ['init', '--initial-branch=main', workRepoPath],
+      'codex-bootstrap-git-init');
+    await requireSuccess(gitContext, ['-C', workRepoPath, 'add', '--all'],
+      'codex-bootstrap-git-add');
+    await requireSuccess(gitContext, ['-C', workRepoPath,
+      '-c', 'user.name=Deep Evolve', '-c', 'user.email=deep-evolve@example.invalid',
+      'commit', '-m', 'local curated bootstrap'], 'codex-bootstrap-git-commit');
+    await requireSuccess(gitContext, ['init', '--bare', '--initial-branch=main', bareRemotePath],
+      'codex-bootstrap-git-bare-init');
+    await requireSuccess(gitContext, ['-C', workRepoPath, 'remote', 'add', 'origin', bareRemotePath],
+      'codex-bootstrap-git-remote-add');
+    await requireSuccess(gitContext, ['-C', workRepoPath, 'push', 'origin', 'HEAD:main'],
+      'codex-bootstrap-git-push');
+    const localCommitResult = await requireSuccess(gitContext,
+      ['-C', workRepoPath, 'rev-parse', 'HEAD'], 'codex-bootstrap-local-head');
+    const bareHeadResult = await requireSuccess(gitContext,
+      ['--git-dir', bareRemotePath, 'rev-parse', 'HEAD'], 'codex-bootstrap-bare-head');
+    const localCommit = localCommitResult.stdout.trim();
+    const bareRemoteHead = bareHeadResult.stdout.trim();
+    if (!/^[0-9a-f]{40}$/.test(localCommit) || bareRemoteHead !== localCommit) {
+      throw fatal('local curated Git commit and bare remote HEAD differ',
+        'invalid_local_curated_git');
+    }
+
+    const rewriteRoot = mutation === 'missing-local-git-remote'
+      ? path.join(isolatedRoot, 'missing-git-remotes') : gitRemotesRoot;
+    const localRemoteUrl = helper.directoryFileUrl(rewriteRoot);
+    const gitConfigSource = `[url "${localRemoteUrl}"]\n\tinsteadOf = https://github.com/\n`;
+    fs.writeFileSync(gitConfigPath, gitConfigSource);
+    const lsRemoteArgs = ['ls-remote', 'https://github.com/openai/plugins.git', 'HEAD'];
+    const lsRemoteResult = await runCommand({
+      ...gitContext,
+      args: lsRemoteArgs,
+      label: 'codex-bootstrap-git-ls-remote',
+      timeoutMs: 60_000,
+    });
+    if (mutation === 'missing-local-git-remote') {
+      if (lsRemoteResult.code === 0) {
+        throw fatal('missing local Git rewrite root unexpectedly succeeded',
+          'invalid_local_curated_git');
+      }
+      throw fatal(`local git ls-remote failed as required: ${lsRemoteResult.stderr}`,
+        'local_git_transport_failure');
+    }
+    if (lsRemoteResult.code !== 0 || lsRemoteResult.stderr !== ''
+      || lsRemoteResult.stdout !== `${bareRemoteHead}\tHEAD\n`) {
+      throw fatal(`local git ls-remote contract failed: ${lsRemoteResult.stderr}`,
+        'invalid_local_curated_git');
+    }
+    const observedProxy = proxySnapshot();
+    writeJson(proxyReceiptPath, observedProxy);
+    if (observedProxy.external_network_attempt_count !== 0) {
+      throw fatal('local Git bootstrap attempted external network access',
+        'external_network_attempt');
+    }
+
+    const curatedFileHashes = curatedFiles.map((entry) => ({
+      path: entry.path,
+      sha256: sha256File(path.join(workRepoPath, entry.path)),
+    })).sort((left, right) => left.path.localeCompare(right.path));
+    const bootstrap = {
+      schema_version: 1,
+      isolated_root: isolatedRoot,
+      catalog_path: catalogPath,
+      catalog,
+      catalog_sha256: sha256File(catalogPath),
+      git_config_path: gitConfigPath,
+      git_config_source: gitConfigSource,
+      git_config_sha256: sha256(gitConfigSource),
+      work_repo_path: workRepoPath,
+      bare_remote_path: bareRemotePath,
+      local_remote_url: localRemoteUrl,
+      local_commit: localCommit,
+      bare_remote_head: bareRemoteHead,
+      curated_files: curatedFileHashes,
+      ls_remote: {
+        argv: ['git', ...lsRemoteArgs],
+        exit_code: lsRemoteResult.code,
+        stdout: lsRemoteResult.stdout,
+        stdout_sha256: sha256(lsRemoteResult.stdout),
+        stderr: lsRemoteResult.stderr,
+        stderr_sha256: sha256(lsRemoteResult.stderr),
+        external_network_attempt_count: observedProxy.external_network_attempt_count,
+      },
+    };
+    writeJson(path.join(artifactDir, 'codex-local-bootstrap-receipt.json'), bootstrap);
+    return { catalogPath, gitConfigPath, bootstrap };
+  } catch (error) {
+    const observedProxy = proxySnapshot();
+    writeJson(proxyReceiptPath, observedProxy);
+    writeJson(failurePath, {
+      schema_version: 1,
+      mutation,
+      error: { code: error.code || 'local_bootstrap_failed', message: error.message },
+      external_network_attempt_count: observedProxy.external_network_attempt_count,
+    });
+    throw error;
+  }
 }
 
 function requireMetadata(argv) {
@@ -376,7 +607,9 @@ async function acceptance(argv) {
   writeJson(path.join(exactArtifactDir, 'codex-smoke-opening.json'), receipt);
 
   let driver = null;
+  let bootstrapProxy = null;
   try {
+    bootstrapProxy = await startObservedDenyProxy();
     const home = path.join(isolatedRoot, 'home with spaces');
     const codexHome = path.join(isolatedRoot, 'codex home with spaces');
     const projectRoot = path.join(isolatedRoot, 'project with spaces');
@@ -396,13 +629,14 @@ async function acceptance(argv) {
     }
 
     const helperPath = path.join(sourceRoot, 'scripts', 'host-loopback-model.cjs');
+    const helper = require(helperPath);
     const {
       LOOPBACK_MODEL,
       buildCodexConfig,
       buildIsolatedHostEnv,
       createLoopbackDriver,
       normalizeActualHostRecords,
-    } = require(helperPath);
+    } = helper;
     const driverReceiptPath = path.join(exactArtifactDir, 'codex-loopback-driver-receipt.json');
     if (!testFakeHost) {
       driver = await createLoopbackDriver({
@@ -410,17 +644,30 @@ async function acceptance(argv) {
       });
     }
     const driverOrigin = testFakeHost ? 'http://127.0.0.1:9' : driver.origin;
-    const driverProxyOrigin = testFakeHost ? 'http://127.0.0.1:9' : driver.proxyOrigin;
+    const driverProxyOrigin = bootstrapProxy.origin;
+    const localBootstrap = await createCodexLocalBootstrap({
+      isolatedRoot,
+      codexHome,
+      artifactDir: exactArtifactDir,
+      testFakeHost,
+      helper,
+      proxyOrigin: driverProxyOrigin,
+      proxySnapshot: () => bootstrapProxy.snapshot(),
+    });
     const env = buildIsolatedHostEnv({
       host: 'codex', home, codexHome,
       claudeConfigDir: path.join(isolatedRoot, 'unused claude config'),
       origin: driverOrigin,
       proxyOrigin: driverProxyOrigin,
+      gitConfigGlobal: localBootstrap.gitConfigPath,
     });
     for (const directory of [env.APPDATA, env.LOCALAPPDATA, env.TMP]) {
       fs.mkdirSync(directory, { recursive: true });
     }
-    const codexConfig = buildCodexConfig({ origin: driverOrigin });
+    const codexConfig = buildCodexConfig({
+      origin: driverOrigin,
+      modelCatalogPath: localBootstrap.catalogPath,
+    });
     const codexConfigPath = path.join(codexHome, 'config.toml');
     fs.writeFileSync(codexConfigPath, codexConfig);
     writeJson(path.join(exactArtifactDir, 'isolated-opening-inventory.json'),
@@ -489,6 +736,13 @@ async function acceptance(argv) {
         'auth_store_boundary_violation');
     }
     const host = await requireSuccess(context, hostArgs, 'codex-host-stream', 120_000);
+    const observedProxy = bootstrapProxy.snapshot();
+    writeJson(path.join(exactArtifactDir, 'codex-local-bootstrap-deny-proxy-receipt.json'),
+      observedProxy);
+    if (observedProxy.external_network_attempt_count !== 0) {
+      throw fatal('Codex bootstrap or host attempted external network access',
+        'external_network_attempt');
+    }
     const after = fs.readFileSync(project.targetPath);
     const afterSha256 = sha256(after);
     if (!before.equals(after) || beforeSha256 !== afterSha256) {
@@ -606,11 +860,23 @@ async function acceptance(argv) {
     writeJson(path.join(exactArtifactDir, 'codex-smoke-receipt.json'), receipt);
     process.stdout.write(`${JSON.stringify(receipt)}\n`);
   } catch (error) {
+    if (bootstrapProxy) {
+      const observedProxy = bootstrapProxy.snapshot();
+      writeJson(path.join(exactArtifactDir,
+        'codex-local-bootstrap-deny-proxy-receipt.json'), observedProxy);
+      receipt.external_network_attempt_count = observedProxy.external_network_attempt_count;
+      receipt.external_network_attempts = observedProxy.external_network_attempts;
+    }
     receipt.error = { code: error.code || 'installed_codex_smoke_failed', message: error.message };
     writeJson(path.join(exactArtifactDir, 'codex-smoke-failure.json'), receipt);
     throw error;
   } finally {
     if (driver) await driver.close();
+    if (bootstrapProxy) {
+      writeJson(path.join(exactArtifactDir,
+        'codex-local-bootstrap-deny-proxy-receipt.json'), bootstrapProxy.snapshot());
+      await bootstrapProxy.close();
+    }
     fs.rmSync(isolatedRoot, { recursive: true, force: true });
   }
 }

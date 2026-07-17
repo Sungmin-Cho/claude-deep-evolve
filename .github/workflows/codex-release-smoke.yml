@@ -120,7 +120,9 @@ jobs:
             throw "expected one exact Codex native child binary, found $($native.Count)"
           }
           $node = (Get-Command node.exe -ErrorAction Stop).Source
-          $programs = @($native[0].FullName, $node) | Sort-Object -Unique
+          $git = (Get-Command git.exe -ErrorAction Stop).Source
+          $gitSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $git).Hash.ToLowerInvariant()
+          $programs = @($native[0].FullName, $node, $git) | Sort-Object -Unique
           $record = [ordered]@{
             package_root = $packageRoot
             package_version = $packageJson.version
@@ -129,6 +131,8 @@ jobs:
             host_executable_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $native[0].FullName).Hash.ToLowerInvariant()
             node_launcher = $node
             node_launcher_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $node).Hash.ToLowerInvariant()
+            git_executable = $git
+            git_executable_sha256 = $gitSha256
             native_child_binary = $native[0].FullName
             program_paths = $programs
           }
@@ -153,7 +157,7 @@ jobs:
             $index += 1
           }
           if ($rules.Count -lt 2) {
-            throw 'host and Node firewall programs were not both sealed'
+            throw 'host and Node firewall programs were not sealed'
           }
           $rules | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $env:DEEP_EVOLVE_ARTIFACT_DIR 'firewall-rule-names.json')
           [ordered]@{

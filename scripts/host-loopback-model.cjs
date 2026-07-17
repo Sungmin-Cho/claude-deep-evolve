@@ -5,9 +5,38 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const LOOPBACK_MODEL = 'deep-evolve-loopback-contract-v1';
 const PUBLIC_CLAUDE_HEADER = 'deep-evolve-loopback-public-v1';
+
+const EXACT_CODEX_MODEL_CATALOG = Object.freeze({
+  models: [Object.freeze({
+    slug: LOOPBACK_MODEL,
+    display_name: 'Deep Evolve loopback contract',
+    description: 'Deterministic local hook contract model',
+    default_reasoning_level: null,
+    supported_reasoning_levels: [],
+    shell_type: 'disabled',
+    visibility: 'list',
+    supported_in_api: true,
+    priority: 1,
+    availability_nux: null,
+    upgrade: null,
+    base_instructions: 'Use the requested apply_patch tool exactly once.',
+    supports_reasoning_summaries: false,
+    support_verbosity: false,
+    default_verbosity: null,
+    apply_patch_tool_type: 'freeform',
+    truncation_policy: Object.freeze({ mode: 'bytes', limit: 10_000 }),
+    supports_parallel_tool_calls: false,
+    experimental_supported_tools: [],
+    input_modalities: ['text'],
+    supports_search_tool: false,
+    use_responses_lite: false,
+    tool_mode: 'direct',
+  })],
+});
 
 const MAX_BODY_BYTES = 1_048_576;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -66,11 +95,63 @@ function constantTimeTextEqual(left, right) {
   return crypto.timingSafeEqual(leftDigest, rightDigest);
 }
 
-function buildCodexConfig({ origin }) {
+function buildCodexModelCatalog() {
+  return JSON.parse(JSON.stringify(EXACT_CODEX_MODEL_CATALOG));
+}
+
+function exactObjectKeys(value, expected, label) {
+  if (!plainObject(value)) throw fail(`${label} must be a plain object`);
+  const actualKeys = Object.keys(value).sort();
+  const expectedKeys = Object.keys(expected).sort();
+  for (const key of expectedKeys) {
+    if (!Object.hasOwn(value, key)) throw fail(`${label} is missing ${key}`);
+  }
+  for (const key of actualKeys) {
+    if (!Object.hasOwn(expected, key)) throw fail(`${label} has unexpected key ${key}`);
+  }
+}
+
+function validateCodexModelCatalog(value) {
+  exactObjectKeys(value, EXACT_CODEX_MODEL_CATALOG, 'model catalog');
+  if (!Array.isArray(value.models) || value.models.length !== 1) {
+    throw fail('model catalog models must contain exactly one model');
+  }
+  const actual = value.models[0];
+  const expected = EXACT_CODEX_MODEL_CATALOG.models[0];
+  exactObjectKeys(actual, expected, 'model');
+  for (const [key, exact] of Object.entries(expected)) {
+    if (key === 'truncation_policy') {
+      exactObjectKeys(actual[key], exact, 'truncation_policy');
+    }
+    if (JSON.stringify(actual[key]) !== JSON.stringify(exact)) {
+      throw fail(`model ${key} must equal the exact pinned value`);
+    }
+  }
+  return value;
+}
+
+function absolutePlatformPath(value, label) {
+  if (typeof value !== 'string' || (!path.isAbsolute(value) && !path.win32.isAbsolute(value))) {
+    throw fail(`${label} must be an absolute path`);
+  }
+  return value;
+}
+
+function directoryFileUrl(value, { windows = process.platform === 'win32' } = {}) {
+  absolutePlatformPath(value, 'directory');
+  const separator = windows ? path.win32.sep : path.posix.sep;
+  const directory = value.endsWith(separator) ? value : `${value}${separator}`;
+  return pathToFileURL(directory, { windows }).href;
+}
+
+function buildCodexConfig({ origin, modelCatalogPath }) {
   const exactOrigin = loopbackOrigin(origin, 'origin');
+  const exactCatalogPath = absolutePlatformPath(modelCatalogPath, 'modelCatalogPath');
   return [
     `model = "${LOOPBACK_MODEL}"`,
     'model_provider = "deep_evolve_loopback"',
+    `model_catalog_json = ${JSON.stringify(exactCatalogPath)}`,
+    'check_for_update_on_startup = false',
     '',
     '[model_providers.deep_evolve_loopback]',
     'name = "Deep Evolve loopback contract"',
@@ -81,7 +162,8 @@ function buildCodexConfig({ origin }) {
   ].join('\n');
 }
 
-function buildIsolatedHostEnv({ host, home, codexHome, claudeConfigDir, origin, proxyOrigin }) {
+function buildIsolatedHostEnv({ host, home, codexHome, claudeConfigDir, origin, proxyOrigin,
+  gitConfigGlobal }) {
   if (!['codex', 'claude'].includes(host)) throw fail('host must be codex or claude');
   const exactHome = requireAbsolutePath(home, 'home');
   const exactOrigin = loopbackOrigin(origin, 'origin');
@@ -107,6 +189,10 @@ function buildIsolatedHostEnv({ host, home, codexHome, claudeConfigDir, origin, 
 
   if (host === 'codex') {
     env.CODEX_HOME = requireAbsolutePath(codexHome, 'codexHome');
+    env.GIT_CONFIG_GLOBAL = requireAbsolutePath(gitConfigGlobal, 'gitConfigGlobal');
+    env.GIT_CONFIG_NOSYSTEM = '1';
+    env.GIT_ALLOW_PROTOCOL = 'file';
+    env.GIT_TERMINAL_PROMPT = '0';
   } else {
     env.CLAUDE_CONFIG_DIR = requireAbsolutePath(claudeConfigDir, 'claudeConfigDir');
     env.ANTHROPIC_BASE_URL = exactOrigin;
@@ -821,7 +907,10 @@ module.exports = {
   LOOPBACK_MODEL,
   PUBLIC_CLAUDE_HEADER,
   createLoopbackDriver,
+  buildCodexModelCatalog,
+  validateCodexModelCatalog,
   buildCodexConfig,
   buildIsolatedHostEnv,
+  directoryFileUrl,
   normalizeActualHostRecords,
 };

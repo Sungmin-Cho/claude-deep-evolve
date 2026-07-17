@@ -104,64 +104,83 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $artifact = Join-Path $env:RUNNER_TEMP 'deep evolve claude evidence'
           New-Item -ItemType Directory -Force -Path $artifact | Out-Null
-          $globalRoot = (& npm root --global).Trim()
-          $packageRoot = Join-Path $globalRoot '@anthropic-ai\claude-code'
-          $packageJsonPath = Join-Path $packageRoot 'package.json'
-          if (-not (Test-Path -LiteralPath $packageJsonPath -PathType Leaf)) {
-            throw 'exact Claude npm package is absent after installation'
-          }
+          $globalRootRaw = (& npm root --global).Trim()
+          $globalRoot = (Resolve-Path -LiteralPath $globalRootRaw).Path
+          $packageRoot = (Resolve-Path -LiteralPath (Join-Path $globalRoot '@anthropic-ai\claude-code')).Path
+          $packageJsonPath = (Resolve-Path -LiteralPath (Join-Path $packageRoot 'package.json')).Path
           $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
           if ($packageJson.version -ne '2.1.207') {
             throw "unexpected Claude package version: $($packageJson.version)"
           }
-          if ($packageJson.bin -is [string]) {
-            $binRelative = $packageJson.bin
-          } else {
-            $binRelative = $packageJson.bin.claude
+          if ($packageJson.bin.claude -ne 'bin/claude.exe') {
+            throw 'unexpected Claude package bin mapping'
           }
-          $cli = (Resolve-Path -LiteralPath (Join-Path $packageRoot $binRelative)).Path
+          $wrapper = (Resolve-Path -LiteralPath (Join-Path $packageRoot 'cli-wrapper.cjs')).Path
+          $packageBin = (Resolve-Path -LiteralPath (Join-Path $packageRoot 'bin\claude.exe')).Path
           $node = (Get-Command node.exe -ErrorAction Stop).Source
-          $native = @(Get-ChildItem -LiteralPath $packageRoot -Recurse -File -Filter '*.exe')
-          $claudeNative = @($native | Where-Object { $_.Name -eq 'claude.exe' })
-          if ($claudeNative.Count -gt 1) {
-            throw "ambiguous Claude native executable count: $($claudeNative.Count)"
+          $optionalPackageName = '@anthropic-ai/claude-code-win32-x64'
+          $optionalPackageJsonPath = (& $node -e 'const { createRequire } = require("node:module"); const resolver = createRequire(process.argv[1]); process.stdout.write(resolver.resolve(process.argv[2]));' $packageJsonPath "$optionalPackageName/package.json").Trim()
+          $optionalPackageJsonPath = (Resolve-Path -LiteralPath $optionalPackageJsonPath).Path
+          $optionalPackageRoot = Split-Path -Parent $optionalPackageJsonPath
+          $optionalPackageJson = Get-Content -Raw -LiteralPath $optionalPackageJsonPath | ConvertFrom-Json
+          if ($optionalPackageJson.version -ne '2.1.207') {
+            throw "unexpected Claude optional package version: $($optionalPackageJson.version)"
           }
-          if ($claudeNative.Count -eq 1) {
-            $hostCommand = $claudeNative[0].FullName
-            $hostPrefix = ''
-          } else {
-            $hostCommand = $node
-            $hostPrefix = $cli
+          if (@($optionalPackageJson.os).Count -ne 1 -or @($optionalPackageJson.os)[0] -ne 'win32') {
+            throw 'unexpected Claude optional package os metadata'
           }
-          $hostPrefixSha256 = $null
-          if ($hostPrefix) {
-            $hostPrefixSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $hostPrefix).Hash.ToLowerInvariant()
+          if (@($optionalPackageJson.cpu).Count -ne 1 -or @($optionalPackageJson.cpu)[0] -ne 'x64') {
+            throw 'unexpected Claude optional package cpu metadata'
           }
-          $programs = @($hostCommand, $node) + @($native | ForEach-Object { $_.FullName })
-          $programs = @($programs | Sort-Object -Unique)
-          if ($programs.Count -lt 2) {
-            throw 'Claude host and resolved native child paths were not both found'
+          $optionalNative = (Resolve-Path -LiteralPath (Join-Path $optionalPackageRoot 'claude.exe')).Path
+          $expectedNative = @($packageBin, $optionalNative) | Sort-Object -Unique
+          $claudeNative = @(Get-ChildItem -LiteralPath $globalRoot -Recurse -File -Filter 'claude.exe' |
+            ForEach-Object { $_.FullName } | Sort-Object -Unique)
+          if ($claudeNative.Count -ne 2) {
+            throw "expected exactly two Claude native executables, found $($claudeNative.Count)"
           }
+          if (@(Compare-Object -ReferenceObject $expectedNative -DifferenceObject $claudeNative).Count -ne 0) {
+            throw 'Claude native executable paths differ from the authenticated expected set'
+          }
+          $undersized = @($claudeNative | Where-Object { (Get-Item -LiteralPath $_).Length -le 1MB })
+          if ($undersized.Count -ne 0) {
+            throw 'Claude native executable is unexpectedly small'
+          }
+          $claudeNativeHashes = @($claudeNative | ForEach-Object { (Get-FileHash -Algorithm SHA256 -LiteralPath $_).Hash.ToLowerInvariant() })
+          if (@($claudeNativeHashes | Sort-Object -Unique).Count -ne 1) {
+            throw 'Claude native executable hashes differ'
+          }
+          $hostCommand = $node
+          $hostPrefix = $wrapper
+          $programs = @($node, $packageBin, $optionalNative) | Sort-Object -Unique
           $record = [ordered]@{
+            global_root = $globalRoot
             package_root = $packageRoot
+            package_json_path = $packageJsonPath
             package_version = $packageJson.version
             package_json_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $packageJsonPath).Hash.ToLowerInvariant()
+            optional_package_root = $optionalPackageRoot
+            optional_package_json_path = $optionalPackageJsonPath
+            optional_package_version = $optionalPackageJson.version
+            optional_package_json_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $optionalPackageJsonPath).Hash.ToLowerInvariant()
             host_executable = $hostCommand
             host_executable_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $hostCommand).Hash.ToLowerInvariant()
-            host_prefix = $hostPrefix
-            host_prefix_sha256 = $hostPrefixSha256
             node_launcher = $node
             node_launcher_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $node).Hash.ToLowerInvariant()
-            native_child_binaries = @($native | ForEach-Object { $_.FullName })
-            native_child_sha256 = @($native | ForEach-Object {
-              [ordered]@{ path = $_.FullName; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant() }
-            })
+            package_bin = $packageBin
+            package_bin_bytes = (Get-Item -LiteralPath $packageBin).Length
+            package_bin_sha256 = $claudeNativeHashes[0]
+            optional_native = $optionalNative
+            optional_native_bytes = (Get-Item -LiteralPath $optionalNative).Length
+            optional_native_sha256 = $claudeNativeHashes[1]
+            host_prefix = $wrapper
+            host_prefix_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $wrapper).Hash.ToLowerInvariant()
             program_paths = $programs
           }
           $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $artifact 'host-paths.json')
           "DEEP_EVOLVE_ARTIFACT_DIR=$artifact" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "DEEP_EVOLVE_HOST_COMMAND=$hostCommand" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "DEEP_EVOLVE_HOST_PREFIX=$hostPrefix" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "DEEP_EVOLVE_HOST_COMMAND=$($hostCommand)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "DEEP_EVOLVE_HOST_PREFIX=$($hostPrefix)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Establish Internet firewall block
         shell: pwsh
