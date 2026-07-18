@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     name: tests (${{ matrix.os }})
     steps:
@@ -22,24 +22,35 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
-      - name: Show bash version (M5.5 #4 — bash 3.2 visibility)
-        run: bash --version
-
-      - name: Run envelope + handoff round-trip tests
+      - name: Run supported Node runtime tests
         run: npm test
 
-      - name: Set up Python (for pytest hook suite)
+      - name: Verify package boundary
+        run: npm pack --dry-run --ignore-scripts
+
+      - name: Probe the zero-dependency dispatcher
+        run: node -e "const cp=require('node:child_process'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');const root=fs.mkdtempSync(path.join(os.tmpdir(),'deep-evolve-ci-'));const request=path.join(root,'request.json');fs.writeFileSync(request,JSON.stringify({schema_version:'1.0',operation:'metrics.entropy',context:{project_root:root},payload:{events:[],window_size:20}}));const result=cp.spawnSync(process.execPath,['hooks/scripts/deep-evolve-runtime.cjs','--request',request],{encoding:'utf8',shell:false});if(result.status!==0)throw new Error(result.stderr||result.stdout);const response=JSON.parse(result.stdout);if(!response.ok||response.operation!=='metrics.entropy')throw new Error('unexpected dispatcher response');"
+
+  legacy-oracle:
+    name: legacy-oracle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Python for the isolated legacy oracle
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install pytest and runtime test deps
-        # pyyaml: 5 test files (conftest.py + test_v31_fallback_note.py +
-        # test_v31_resume_v31.py + test_v31_scheduler_decision.py +
-        # test_v31_status_subcommand.py) parse / write session.yaml.
+      - name: Install oracle-only dependencies
         run: python -m pip install --upgrade pip pytest pyyaml
 
-      - name: Run pytest hook + helper suite
-        run: pytest hooks/scripts/tests/ -q
+      - name: Run the isolated legacy oracle
+        run: npm run test:legacy

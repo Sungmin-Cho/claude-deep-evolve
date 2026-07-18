@@ -40,6 +40,10 @@ codex plugin install deep-evolve
 
 The repository ships both a Claude Code manifest (`.claude-plugin/plugin.json`) and a Codex-native manifest (`.codex-plugin/plugin.json`); see [`AGENTS.md`](AGENTS.md) for the Codex project guide. Claude Code requires the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code).
 
+Supported execution uses Node 22 on macOS, Linux, and native Windows 11. The
+Windows path does not require Git Bash or Python. Legacy sessions are migrated
+when resumed, preserving their recorded experiment history.
+
 ## Quick start
 
 ```bash
@@ -66,7 +70,9 @@ The repository ships both a Claude Code manifest (`.claude-plugin/plugin.json`) 
 /deep-evolve --status                    # per-seed dashboard (read-only)
 ```
 
-Codex / Copilot CLI / Gemini CLI / Agent SDK callers invoke the same workflow via `Skill({ skill: "deep-evolve:deep-evolve", args: "…" })`.
+Codex invokes the same public workflow as `$deep-evolve:deep-evolve` with the
+same argument string, for example `$deep-evolve:deep-evolve resume`. Claude Code
+continues to use the slash forms above.
 
 ## The methodology
 
@@ -74,7 +80,7 @@ Codex / Copilot CLI / Gemini CLI / Agent SDK callers invoke the same workflow vi
 
 The methodology revolves around a strict separation of concerns:
 
-- **Evaluation harness** — the fixed ground truth. Never modified by the agent during experiments. Two forms: `prepare.py` (CLI-based metrics) or `prepare-protocol.md` (MCP/tool-based protocol).
+- **Evaluation harness** — the fixed ground truth. Never modified by the agent during experiments. Two forms: `prepare.cjs` plus `prepare.config.json` (CLI metrics), or `prepare-protocol.md` (a fixed user-provided tool protocol).
 - **Target files** — the code being improved. Everything is fair game: architecture, parameters, logic, patterns — whatever moves the metric in the right direction.
 - **`program.md`** — instructions for the agent: the goal, constraints, and experiment strategy. Humans program the process, not the code.
 
@@ -112,9 +118,9 @@ deep-evolve doesn't just improve the target code — it evolves the process that
 |---|---|---|---|
 | Parameters | `strategy.yaml` | mutation rate, focus areas, idea bank | Outer Loop mutates per epoch |
 | Strategy text | `program.md` | agent instructions, experiment approach | auto-revised on convergence |
-| Evaluation | `prepare.py` | scenarios, difficulty, coverage | auto-triggered on plateau |
+| Evaluation | `prepare.cjs` + `prepare.config.json` | scenarios, difficulty, coverage | auto-triggered on plateau |
 
-An **Inner Loop** runs experiments under the current `strategy.yaml`; an **Outer Loop** measures improvement velocity Q(v) after each epoch and mutates the strategy. Winning strategies are archived as stepping stones and code states as named git branches, and proven strategies transfer across projects via a shared flock-protected meta-archive.
+An **Inner Loop** runs experiments under the current `strategy.yaml`; an **Outer Loop** measures improvement velocity Q(v) after each epoch and mutates the strategy. Winning strategies are archived as stepping stones and code states as named git branches, and proven strategies transfer through the runtime-owned atomic meta-archive.
 
 ### Virtual parallel exploration
 
@@ -130,7 +136,7 @@ A session can run N=1–9 independent seed worktrees in parallel, coordinated by
 
 ## Supported domains
 
-**CLI mode (`prepare.py`):**
+**CLI mode (`prepare.cjs` plus `prepare.config.json`):**
 
 | Domain | Evaluator | Example metrics |
 |---|---|---|
@@ -147,7 +153,7 @@ A session can run N=1–9 independent seed worktrees in parallel, coordinated by
 | GUI apps | browser/app automation | UI state match rate, accessibility score |
 | External systems | MCP/HTTP calls | API accuracy, pipeline success rate |
 
-Protocol mode evaluates projects that cannot be assessed via CLI (game engines, GUI apps, external runtime dependencies). The appropriate mode is recommended automatically during project analysis.
+Protocol mode evaluates projects that cannot be assessed via CLI (game engines, GUI apps, external runtime dependencies). It runs user-provided tools through the host; deep-evolve does not bundle an MCP server. The appropriate mode is recommended automatically during project analysis.
 
 ## Links
 

@@ -1,0 +1,11 @@
+{
+  "session_id": "claude-protected-edit",
+  "cwd": "{{PROJECT_ROOT}}",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "{{SESSION_ROOT}}/prepare.cjs",
+    "old_string": "before",
+    "new_string": "after"
+  }
+}

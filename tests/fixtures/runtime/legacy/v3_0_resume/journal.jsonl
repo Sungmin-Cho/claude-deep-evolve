@@ -1,0 +1,8 @@
+{"event": "session_started", "session_id": "v3-0-resume-mock", "ts": "2026-04-20T10:00:00Z"}
+{"event": "lineage_set", "session_id": "v3-0-resume-mock", "parent_session_id": null, "ts": "2026-04-20T10:00:01Z"}
+{"event": "baseline_recorded", "score": 1.0, "ts": "2026-04-20T10:05:00Z"}
+{"event": "experiment_planned", "experiment_n": 1, "ts": "2026-04-20T10:10:00Z"}
+{"event": "experiment_completed", "experiment_n": 1, "score": 0.998, "status": "discarded", "ts": "2026-04-20T10:12:00Z"}
+{"event": "experiment_planned", "experiment_n": 2, "ts": "2026-04-20T10:13:00Z"}
+{"event": "experiment_committed", "experiment_n": 2, "score": 1.001, "status": "kept", "commit": "abc1234", "ts": "2026-04-20T10:15:00Z"}
+{"event": "experiment_completed", "experiment_n": 3, "score": 1.000, "status": "marginal", "ts": "2026-04-20T10:18:00Z"}

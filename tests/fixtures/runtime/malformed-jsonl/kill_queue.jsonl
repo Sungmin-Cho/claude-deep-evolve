@@ -1,0 +1,3 @@
+{"entry_id":"a","seed_id":1,"condition":"user_requested","final_q":0.2,"experiments_used":3,"queued_at":"2026-01-01T00:00:00Z"}
+not-json
+{"entry_id":"b","seed_id":2,"condition":"crash_give_up","final_q":0.1,"experiments_used":4,"queued_at":"2026-01-01T00:00:00Z"}

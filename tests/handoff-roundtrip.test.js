@@ -39,12 +39,14 @@ const {
   KIND_DIRECTIONS,
   DE_PARENT_IDENTITIES,
   tryReadEnvelopeRunId,
+  buildHandoffArtifact,
 } = require('../hooks/scripts/emit-handoff.js');
 const {
   validateCompactionPayload,
   VALID_TRIGGERS,
   VALID_STRATEGIES,
   COMPACTION_REQUIRED,
+  buildCompactionArtifact,
 } = require('../hooks/scripts/emit-compaction-state.js');
 
 const EMIT_HANDOFF = path.resolve(__dirname, '..', 'hooks', 'scripts', 'emit-handoff.js');
@@ -584,5 +586,24 @@ describe('full round-trip — forward handoff → reverse handoff → compaction
         .failure,
       undefined,
     );
+  });
+});
+
+describe('runtime handoff builders — authenticated provenance boundary', () => {
+  it('rejects unknown source keys and malformed run ids instead of normalizing them away', () => {
+    assert.throws(() => buildHandoffArtifact({
+      payload: makeReverseHandoffPayload(),
+      sourceArtifacts: [{ path: 'forward.json', digest: 'not-part-of-the-contract' }],
+    }), (error) => error && error.code === 'invalid_source_artifact');
+
+    assert.throws(() => buildCompactionArtifact({
+      payload: {
+        schema_version: '1.0',
+        compacted_at: '2026-07-14T00:00:00Z',
+        trigger: 'loop-epoch-end',
+        preserved_artifact_paths: [],
+      },
+      sourceArtifacts: [{ path: 'receipt.json', run_id: 'bad-run-id' }],
+    }), (error) => error && error.code === 'invalid_source_artifact');
   });
 });

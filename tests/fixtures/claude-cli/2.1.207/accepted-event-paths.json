@@ -1,0 +1,29 @@
+{
+  "host": "claude",
+  "version": "2.1.207",
+  "capture_source": "actual_exact_pinned_host",
+  "model_source": "deterministic_loopback_protocol_v1",
+  "bootstrap_commit": "cf92872e3914af7819444ee44e4f8d3c2c5bb3fa",
+  "run_id": "29627400029",
+  "job_id": "windows-claude-host-smoke",
+  "run_attempt": 1,
+  "same_head_rerun": false,
+  "driver_sha256": "8dd32254ed7e4a6db47a185da30b6de954544b175f771f15dac8e9d7f41cc221",
+  "raw_stream_sha256": "3dc0bf91a053d069f28b904dbf69ea4b156d13e61c727998132eec5fb12f1124",
+  "raw_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "normalization_map": {
+    "project_root": "{{PROJECT_ROOT}}",
+    "session_root": "{{SESSION_ROOT}}",
+    "claude_session_id": "{{CLAUDE_SESSION_ID}}"
+  },
+  "accepted_pointers": [
+    "/hook_event_name",
+    "/tool_name",
+    "/tool_input/file_path",
+    "/tool_input/content"
+  ],
+  "attempt_count": 1,
+  "denial_count": 1,
+  "successful_mutation_count": 0,
+  "vendor_cloud_entitlement_proven": false
+}

@@ -1,6 +1,6 @@
 {
   "name": "deep-evolve",
-  "version": "3.4.3",
+  "version": "3.5.0",
   "description": "Autonomous Experimentation Protocol for measured project improvement loops",
   "author": {
     "name": "sungmin"
@@ -18,7 +18,6 @@
     "metric-driven"
   ],
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Deep Evolve",
     "shortDescription": "Goal-driven autonomous experiment loops",
@@ -31,9 +30,9 @@
       "Write"
     ],
     "defaultPrompt": [
-      "$deep-evolve:deep-evolve-workflow \"improve this project\"",
-      "$deep-evolve:deep-evolve-workflow resume",
-      "$deep-evolve:deep-evolve-workflow history"
+      "$deep-evolve:deep-evolve \"improve this project\"",
+      "$deep-evolve:deep-evolve resume",
+      "$deep-evolve:deep-evolve history"
     ],
     "brandColor": "#0F766E",
     "screenshots": []

@@ -101,9 +101,12 @@ def test_resume_md_routes_v3_1_plus_active_to_coordinator():
     c = RESUME.read_text()
     step5_idx = c.find("## Step 5 — Re-enter experiment loop")
     region = c[step5_idx:]
-    tier_idx = region.find("`VERSION_TIER == v3_1_plus`")
+    tier_idx = region.find(
+        "`VERSION_TIER == v3_1_plus` and `ACTIVE_SEED_COUNT > 0`"
+    )
     assert tier_idx != -1, "Step 5 v3_1_plus arm missing"
-    window = region[tier_idx:tier_idx + 250]
+    next_arm = region.find("\n- **", tier_idx + 1)
+    window = region[tier_idx:next_arm if next_arm != -1 else None]
     assert "coordinator.md" in window, (
         "resume.md Step 5 v3_1_plus arm does not target coordinator.md "
         "(would silently fall back to single-seed inner-loop.md)"
@@ -115,16 +118,13 @@ def test_resume_md_routes_v3_0_pre_v3_active_to_inner_loop():
     c = RESUME.read_text()
     step5_idx = c.find("## Step 5 — Re-enter experiment loop")
     region = c[step5_idx:]
-    # v3_0 + pre_v3 are the legacy single-seed tiers — combined arm is acceptable
-    # (e.g. "VERSION_TIER ∈ {v3_0, pre_v3}" or two separate arms both → inner-loop).
-    assert "v3_0" in region and "pre_v3" in region, (
-        "Step 5 missing legacy tier mentions (v3_0 + pre_v3)"
-    )
-    # inner-loop.md must appear after both legacy tier mentions
-    legacy_combined_idx = max(
-        region.find("v3_0"), region.find("pre_v3")
-    )
-    window = region[legacy_combined_idx:legacy_combined_idx + 400]
+    legacy_marker = "`VERSION_TIER ∈ {v3_0, pre_v3}`"
+    legacy_combined_idx = region.find(legacy_marker)
+    assert legacy_combined_idx != -1, "Step 5 legacy tier arm missing"
+    next_arm = region.find("\n- **", legacy_combined_idx + 1)
+    window = region[
+        legacy_combined_idx:next_arm if next_arm != -1 else None
+    ]
     assert "inner-loop.md" in window, (
         "resume.md Step 5 legacy-tier arm does not preserve inner-loop.md routing"
     )

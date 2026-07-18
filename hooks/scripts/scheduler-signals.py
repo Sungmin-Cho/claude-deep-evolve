@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Collect per-seed + session-wide signals for scheduler's decision prompt.
+"""ORACLE-ONLY Unix parity helper; supported runtime lives in scheduler.cjs.
+
+Collect per-seed + session-wide signals for scheduler's decision prompt.
 
 Outputs a JSON structure consumed by the scheduler prompt builder (T10).
 Implements § 6.3 per-seed signals and § 6.4 session-wide signals.
@@ -8,6 +10,8 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
+from active_seed_state import active_seed_state, normalized_seed_identity
 
 try:
     import yaml
@@ -88,6 +92,10 @@ def main():
 
     vp = session.get("virtual_parallel", {}) or {}
     seeds_cfg = vp.get("seeds", []) or []
+    try:
+        canonical_active = active_seed_state(session)
+    except ValueError as e:
+        _die(str(e))
     journal_events = load_jsonl(args.journal)
     forum_events = load_jsonl(args.forum)
 
@@ -103,10 +111,10 @@ def main():
     # Build per-seed signals
     per_seed = []
     for s in seeds_cfg:
-        if not isinstance(s, dict) or "id" not in s:
-            print(f"warn: skipping malformed seed entry: {s}", file=sys.stderr)
-            continue
-        sid = s["id"]
+        try:
+            sid = normalized_seed_identity(s)
+        except ValueError as e:
+            _die(str(e))
         # Last 5 Q values for this seed (from journal "kept" events)
         seed_kepts = [e for e in journal_events
                       if event_type(e) == "kept" and e.get("seed_id") == sid]
@@ -188,7 +196,11 @@ def main():
                             if event_type(e) == "shortcut_flagged"),
         "forum_activity": len(recent_forum),
         "budget_unallocated": vp.get("budget_unallocated", 0),
-        "n_current": vp.get("n_current", len(seeds_cfg)),
+        "n_current": 0 if canonical_active["zero_active"]
+        else vp.get("n_current", len(seeds_cfg)),
+        "active_seed_count": canonical_active["active_seed_count"],
+        "schedulable_seed_ids": canonical_active["schedulable_seed_ids"],
+        "zero_active": canonical_active["zero_active"],
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
 

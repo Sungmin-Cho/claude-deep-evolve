@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Scan journal for stale borrow_planned events and emit borrow_abandoned.
+"""ORACLE-ONLY Unix parity helper; supported runtime lives in scheduler.cjs.
+
+Scan journal for stale borrow_planned events and emit borrow_abandoned.
 
 Spec § 7.4 P1: coordinator cleans `borrow_planned` older than 2 blocks without
 matching `cross_seed_borrow`. Called from coordinator main loop after each block

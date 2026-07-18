@@ -1,0 +1,27 @@
+{
+  "initial_state": {
+    "schema_version": "1.0",
+    "initialization_id": "01J00000000000000000000000",
+    "target_files": [
+      "src/index.js"
+    ],
+    "eval_mode": "cli",
+    "protocol_tools": [],
+    "total_budget": 30,
+    "metric": {
+      "name": "score",
+      "direction": "maximize"
+    },
+    "outer_loop": {
+      "interval": 20,
+      "auto_trigger": true
+    },
+    "virtual_parallel": {
+      "n_chosen": 1,
+      "project_type": "standard_optimization",
+      "eval_parallelizability": "serialized",
+      "selection_reason": "single canonical seed"
+    },
+    "transfer": null
+  }
+}

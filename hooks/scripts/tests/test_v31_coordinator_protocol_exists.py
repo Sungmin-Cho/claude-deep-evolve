@@ -27,8 +27,9 @@ def test_coordinator_md_has_dispatch_section():
 
 def test_coordinator_md_references_scheduler_signals_and_decide():
     c = COORD.read_text()
-    assert "scheduler-signals" in c
-    assert "scheduler-decide" in c
+    assert "runtime-op: scheduler.signals" in c
+    assert "runtime-op: scheduler.decide" in c
+    assert "deep-evolve-runtime.cjs" in c
 
 
 def test_coordinator_md_has_post_dispatch_validation():

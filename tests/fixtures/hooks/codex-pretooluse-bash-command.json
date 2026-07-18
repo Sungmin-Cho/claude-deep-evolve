@@ -1,0 +1,6 @@
+{
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "cat \"{{SESSION_ROOT}}/prepare-protocol.md\""
+  }
+}

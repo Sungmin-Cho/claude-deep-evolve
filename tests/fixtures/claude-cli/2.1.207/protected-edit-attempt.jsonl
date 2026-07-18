@@ -1,0 +1,1 @@
+{"session_id":"{{CLAUDE_SESSION_ID}}","hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"{{SESSION_ROOT}}\\program.md","content":"after"},"provenance":{"source":"actual_exact_pinned_host_stdout","raw_stream_sha256":"3dc0bf91a053d069f28b904dbf69ea4b156d13e61c727998132eec5fb12f1124"}}

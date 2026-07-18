@@ -1,51 +1,39 @@
-# Idea Category Taxonomy (v3.0.0)
+# Idea Category Taxonomy
 
-Fixed constant referenced by inner-loop.md Step 1.5, outer-loop.md Step 6.5.1/6.5.3,
-transfer.md A.2.5 mapping, session-helper.sh `entropy_compute` + `migrate_v2_weights`.
+Every experiment carries exactly one fixed token. Category is descriptive
+metadata, never permission to widen targets or modify protected authority.
 
-**Never modify without a major version bump.** Outer Loop may rebalance weights but
-the category list itself is fixed protocol.
+## Exact ten tokens
 
-## 10 Categories (v3 taxonomy)
+| Token | Meaning |
+|---|---|
+| `parameter_tune` | adjust an existing number/threshold |
+| `refactor_simplify` | simplify structure while preserving behavior |
+| `add_guard` | add validation, bounds, or assertions |
+| `algorithm_swap` | replace a core algorithm/data structure |
+| `data_preprocessing` | transform or filter input |
+| `caching_memoization` | store, batch, or reuse computation |
+| `error_handling` | improve explicit failure/retry/fallback |
+| `api_redesign` | change an interface or boundary |
+| `test_expansion` | strengthen verification when tests are targets |
+| `other` | none of the first nine |
 
-| # | category | Intent | Typical examples |
-|---|---|---|---|
-| 1 | `parameter_tune` | Number or threshold changes, logic unchanged | learning rate, timeout, threshold |
-| 2 | `refactor_simplify` | Structure change, logic preserved | deduplication, extraction, renames |
-| 3 | `add_guard` | Input/state validation | null checks, bounds, asserts |
-| 4 | `algorithm_swap` | Core algorithm or data structure swap | list→set, quicksort→mergesort |
-| 5 | `data_preprocessing` | Input transformation | tokenization, scaling, filtering |
-| 6 | `caching_memoization` | Storing/reusing results | LRU, memo tables, batching |
-| 7 | `error_handling` | Failure paths | try/catch, retry, fallback |
-| 8 | `api_redesign` | Interface/signature changes | parameter reshuffle, return type, splits |
-| 9 | `test_expansion` | Verification coverage (when target is the test itself) | edge case, property test |
-| 10 | `other` | Anything that does not fit 1–9 | |
+Unknown tokens fail; no alias is invented.
 
-## v2 → v3 Deterministic Mapping
+## v2 mapping and diversity
 
-v2 has 4 categories; v3 has 10. Mapping is applied only at meta-archive read time
-(transfer.md A.2.5) — never rewrites in-flight v2 session state.
+Only `runtime-op: metrics.migrate-v2-weights` converts legacy weights. It maps
+legacy tuning/algorithm/simplification deterministically, divides structural
+change among guard/API/error categories, seeds the four new categories at the
+documented pre-normalization weight, and returns weights plus original sum.
 
-```
-1:1 mapped (v2 weight copied verbatim as pre-normalize value):
-  parameter_tuning    → parameter_tune
-  algorithm_swap      → algorithm_swap
-  simplification      → refactor_simplify
+Outer-loop diversity uses `runtime-op: metrics.entropy`. Its entropy, active
+category count, sample size, and insufficient-sample reason are strategy inputs,
+not score authority.
 
-split (v2 structural_change weight divided equally):
-  structural_change   → add_guard      (+ v2_structural_change / 3)
-                      → api_redesign   (+ v2_structural_change / 3)
-                      → error_handling (+ v2_structural_change / 3)
+## Local insights
 
-floored (4 categories with no v2 source; pre-normalize seed 0.05 each):
-  data_preprocessing
-  caching_memoization
-  test_expansion
-  other
-
-final step: renormalize so sum = 1.0
-```
-
-**Floor is a pre-normalize seed, not a post-normalize invariant.** See
-spec `docs/superpowers/specs/2026-04-22-v3.0.0-aar-inspired-design.md` §5.1
-worked examples for numerical behavior after normalization.
+Publish complete local classified insights through
+`runtime-op: artifact.wrap-insights` with session/preimage/publication/source
+authority. Require immutable path, digest, envelope, publication ID, and replay.
+Cross-plugin feedback remains transfer-owned and is never duplicated here.

@@ -27,6 +27,8 @@ from pathlib import Path
 import pytest
 
 HELPER = Path(__file__).parents[3] / "hooks/scripts/session-helper.sh"
+LEGACY_HELPER = Path(__file__).parents[3] / "legacy/session-helper-v3.4.3.sh"
+RUNTIME = Path(__file__).parents[3] / "hooks/scripts/deep-evolve-runtime.cjs"
 
 
 def _setup_session(tmp_path):
@@ -164,25 +166,7 @@ def test_validate_detects_head_drift_on_seed_branch(tmp_path):
 
 
 def test_validate_clean_tree_passes_after_helper_recreate(tmp_path):
-    """Idempotent reattach: if validate fails (drift detected) and the user
-    re-runs create_seed_worktree (resume path), the helper-under-T2 either
-    no-ops (rc=0) or signals already-exists (rc=1 with structured stderr).
-
-    G12 plan-stage adaptation (T41 spec compliance review 2026-04-26
-    Issue 1, partial-accept): plan line 17378-17389 envisioned strict
-    idempotency (rc2 == 0 silent reattach) as the contract, with comment
-    "Must NOT rc=1 with 'already exists'". Current T2 implementation in
-    `cmd_create_seed_worktree` returns rc=1 with `worktree already exists`
-    when called against an existing seed — this is the structured signal
-    the resume coordinator currently uses to decide between recreate vs
-    reattach. The test relaxes the contract to rc ∈ {0, 1} with
-    parseable error on rc=1, matching helper's actual behavior.
-
-    v3.1.x polish candidate: tighten T2 to silent rc=0 reattach (more
-    idiomatic to the plan's "Idempotent reattach" framing). The reframed
-    test below would still pass post-tightening because rc=0 is the
-    preferred branch in the rc-acceptance set; tightening would only
-    DROP the rc=1 fallback path."""
+    """A recreate reports and preserves the pre-existing branch/worktree."""
     repo, session_root, env = _setup_session(tmp_path)
     out, err, rc = _run_h(env, repo, "create_seed_worktree", "1")
     assert rc == 0, f"first create must succeed (rc={rc}, err={err!r})"
@@ -194,21 +178,26 @@ def test_validate_clean_tree_passes_after_helper_recreate(tmp_path):
     ).stdout
     assert "seed_1" in wt_list_before
 
-    # Re-invoke create on the same seed — must produce structured signal
-    # (rc=0 silent reattach OR rc=1 with parseable "already exists" error).
-    # MUST NOT crash with "$1: unbound variable" or leave partial state.
+    branch = "evolve/sess-t41/seed-1"
+    branch_head_before = subprocess.run(
+        ["git", "rev-parse", branch], cwd=repo, capture_output=True,
+        text=True, check=True,
+    ).stdout.strip()
+
+    # Both the branch and target exist. Branch preservation is the primary
+    # safety diagnosis; the helper must not silently reattach or mutate either.
     out2, err2, rc2 = _run_h(env, repo, "create_seed_worktree", "1")
-    assert rc2 in (0, 1), (
-        f"create_seed_worktree on existing seed must produce structured "
-        f"rc=0 or rc=1 (got rc={rc2}, out={out2!r}, err={err2!r})"
+    assert rc2 == 1, (out2, err2)
+    assert out2 == ""
+    assert err2 == (
+        "pre-existing branch 'evolve/sess-t41/seed-1' preserved; "
+        "investigate orphan state\n"
     )
-    if rc2 != 0:
-        # Structured error path — message must explain why
-        combined = (out2 + err2).lower()
-        assert "already exists" in combined or "exists" in combined, (
-            f"rc=1 must include parseable 'already exists' signal: "
-            f"out={out2!r} err={err2!r}"
-        )
+    branch_head_after = subprocess.run(
+        ["git", "rev-parse", branch], cwd=repo, capture_output=True,
+        text=True, check=True,
+    ).stdout.strip()
+    assert branch_head_after == branch_head_before
 
     # Worktree state must still be intact after the re-invocation
     wt_list_after = subprocess.run(
@@ -316,9 +305,14 @@ def test_w6_trace_create_subcommand_invokes_validate_post_dispatch():
     coord = (Path(__file__).parents[3]
              / "skills/deep-evolve-workflow/protocols/coordinator.md")
     helper_text = HELPER.read_text(encoding="utf-8")
+    legacy_text = LEGACY_HELPER.read_text(encoding="utf-8")
+    runtime_text = RUNTIME.read_text(encoding="utf-8")
     coord_text = coord.read_text(encoding="utf-8")
-    assert "create_seed_worktree" in helper_text
-    assert "validate_seed_worktree" in helper_text
+    assert "--legacy-session-helper" in helper_text
+    assert "create_seed_worktree" in runtime_text
+    assert "validate_seed_worktree" in runtime_text
+    assert "create_seed_worktree" in legacy_text
+    assert "validate_seed_worktree" in legacy_text
     # Coordinator references both (T2 design contract)
     assert (
         "create_seed_worktree" in coord_text

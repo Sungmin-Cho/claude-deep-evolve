@@ -357,10 +357,11 @@ def test_drain_kill_queue_ambient_seed_id_does_not_corrupt(tmp_path):
 
 
 def test_drain_kill_queue_malformed_line_preserved(tmp_path):
-    """C-3: malformed lines must be PRESERVED across drain (never
-    silently deleted — dead-letter partition). The well-formed matching
-    entry still drains; the bogus line survives in the queue for
-    operator inspection."""
+    """Task 4 fail-closed rule: malformed JSONL blocks every mutation.
+
+    The source stays byte-identical and the valid matching row does not drain;
+    only the explicit quarantine operation may repair malformed JSONL.
+    """
     repo, sr, env = _setup(tmp_path)
     (sr / "kill_queue.jsonl").write_text(
         'not-json-but-looks-like-garbage\n'
@@ -368,20 +369,12 @@ def test_drain_kill_queue_malformed_line_preserved(tmp_path):
         '"final_q": 0.4, "experiments_used": 8}\n',
         encoding="utf-8",
     )
+    before = (sr / "kill_queue.jsonl").read_bytes()
     r = _run(["drain_kill_queue", "3"], repo, env)
-    assert r.returncode == 0
-    # Journal got the seed-3 kill
-    events = [json.loads(ln)
-              for ln in (sr / "journal.jsonl")
-              .read_text(encoding="utf-8").strip().splitlines()]
-    killed = [e for e in events if e.get("event") == "seed_killed"]
-    assert len(killed) == 1
-    assert killed[0]["seed_id"] == 3
-    # Malformed line is preserved; the seed-3 well-formed line is gone
-    remaining = (sr / "kill_queue.jsonl").read_text(encoding="utf-8")
-    assert "not-json-but-looks-like-garbage" in remaining, \
-        "malformed line must be preserved (dead-letter) — never silently dropped"
-    assert '"seed_id": 3' not in remaining
+    assert r.returncode == 2
+    assert "malformed" in r.stderr.lower()
+    assert (sr / "kill_queue.jsonl").read_bytes() == before
+    assert not (sr / "journal.jsonl").exists()
 
 
 def test_drain_kill_queue_concurrent_append_not_dropped(tmp_path):

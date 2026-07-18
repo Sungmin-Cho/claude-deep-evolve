@@ -7,7 +7,7 @@ Each scenario is a pair of files:
 
 Driver: `tests/protect-readonly-golden.test.js` discovers pairs by basename,
 materializes the `.deep-evolve/<session_id>/` namespace inside a tmpdir
-(when `state` is present), spawns `protect-readonly.sh` via the
+(when `state` is present), spawns the shared Node hook via the
 `runProtectReadonly` helper, and asserts each expected field.
 
 Pattern reference: claude-deep-work
@@ -26,8 +26,8 @@ Pattern reference: claude-deep-work
                                       // / prepare-protocol.md / program.md / strategy.yaml
                                       // / worktrees/seed_1/program.md
   },
-  "tool_name": "Edit",                // CLAUDE_TOOL_USE_TOOL_NAME
-  "tool_input": {                     // payload JSON-stringified onto stdin
+  "tool_name": "Edit",                // official Claude stdin tool_name
+  "tool_input": {                     // nested into the full stdin envelope
     "file_path": "{{SESSION_ROOT}}/prepare.py"
   },
   "env": {                            // optional — merged AFTER host-env scrub
@@ -38,7 +38,8 @@ Pattern reference: claude-deep-work
 
 ### Template variables
 
-Values inside `tool_input` and `env` are walked for these substrings:
+Values inside `tool_input` are walked for these substrings. `env` values are
+passed literally after host-environment scrubbing:
 
 - `{{SESSION_ROOT}}` → `<tmpRoot>/.deep-evolve/<session_id>`
 - `{{PROJECT_ROOT}}` → `<tmpRoot>` itself
@@ -50,14 +51,14 @@ This lets fixtures reference protected paths portably.
 ```jsonc
 {
   "exit_code": 0,                     // 0 allow, 2 block
-  "decision": "allow",                // optional — "allow" | "block"
+  "decision": "allow",                // optional fixture classification
   "reason_match": "Deep Evolve Guard" // optional — JS regex source string,
-                                       // matched against parsed JSON `reason`
+                                       // matched against stderr on exit 2
 }
 ```
 
-Allow fixtures (no `decision`/`reason_match`) additionally assert that the
-hook emitted no stdout — protect-readonly.sh's allow path is silent.
+Allow fixtures additionally assert that the hook emitted no stdout or stderr.
+Block fixtures assert exit 2, empty stdout, and a sanitized reason on stderr.
 
 ## When adding fixtures
 

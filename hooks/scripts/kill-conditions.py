@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""kill-conditions.py — 5 hard-kill whitelist evaluator (spec § 5.5 + § 5.5a).
+"""ORACLE-ONLY Unix parity helper; supported runtime lives in scheduler.cjs.
+
+kill-conditions.py — 5 hard-kill whitelist evaluator (spec § 5.5 + § 5.5a).
 
 Pure function: no git, no LLM, no session.yaml access. Caller pre-extracts
 last 5 `evaluated` events per seed from journal (diagnose-retry events

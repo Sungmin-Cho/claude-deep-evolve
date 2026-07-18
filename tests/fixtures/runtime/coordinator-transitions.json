@@ -1,0 +1,43 @@
+{
+  "operation_ids": {
+    "begin": "01J00000000000000000000100",
+    "finish": "01J00000000000000000000101",
+    "advance": "01J00000000000000000000102",
+    "experiment": "01J00000000000000000000103",
+    "ack": "01J00000000000000000000104",
+    "rebuild": "01J00000000000000000000105"
+  },
+  "decision_id": "decision-coordinator-1",
+  "reasons": [
+    "block_interval",
+    "tier3_expansion",
+    "manual_boundary",
+    "termination_boundary"
+  ],
+  "invalid_reasons": [
+    "automatic",
+    1,
+    true,
+    null
+  ],
+  "summary": {
+    "experiments_executed": 1,
+    "commits": [],
+    "final_q": 0.85,
+    "forum_events_appended": 1,
+    "borrows_planned": 0,
+    "borrows_executed": 0
+  },
+  "expected_components": {
+    "keep_rate": 1,
+    "normalized_delta": 1,
+    "crash_rate": 0,
+    "idea_diversity": 0
+  },
+  "failed_components": {
+    "keep_rate": 0,
+    "normalized_delta": 0,
+    "crash_rate": 1,
+    "idea_diversity": 0
+  }
+}

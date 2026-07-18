@@ -1,13 +1,12 @@
 """npm package manifest hygiene + cross-file version drift guard.
 
-Asserts the four version sources stay in lockstep, as promised in README §
-3.1.1 ("test_package_manifest.py asserts package.json / plugin.json /
-SKILL.md / HELPER_VERSION synchronization"):
+Asserts the supported version sources stay in lockstep:
 
   * package.json                                            → "version"
   * .claude-plugin/plugin.json                              → "version"
+  * .codex-plugin/plugin.json                               → "version"
   * skills/deep-evolve-workflow/SKILL.md frontmatter        → "version"
-  * hooks/scripts/session-helper.sh                         → HELPER_VERSION
+  * hooks/scripts/deep-evolve-runtime.cjs                   → RUNTIME_VERSION
 
 Drift in any of these caused the v3.3.0–v3.3.2 release-window incident where
 SKILL.md frontmatter advertised v3.2.0 while the plugin manifest had moved on.
@@ -22,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[3]
 
 
-def test_package_files_exclude_tests_and_pycache_from_hooks_payload():
+def test_package_files_keep_only_the_supported_runtime_boundary():
     pkg = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     files = pkg["files"]
     assert "hooks/" not in files, (
@@ -30,8 +29,34 @@ def test_package_files_exclude_tests_and_pycache_from_hooks_payload():
         "and runtime scripts explicitly"
     )
     assert "hooks/hooks.json" in files
-    assert "hooks/scripts/*.py" in files
-    assert "hooks/scripts/*.sh" in files
+    assert "hooks/hooks.claude.json" in files
+    assert "hooks/scripts/*.py" not in files
+    assert "hooks/scripts/*.sh" not in files
+    for adapter in (
+        "hooks/scripts/kill-request-writer.sh",
+        "hooks/scripts/protect-readonly.sh",
+        "hooks/scripts/session-helper.sh",
+    ):
+        assert adapter not in files
+    assert not any(entry.startswith("legacy/") for entry in files)
+    assert "scripts/" not in files
+    assert "scripts/validate-envelope-emit.js" in files
+    for maintainer_script in (
+        "scripts/smoke-installed-codex-hook.cjs",
+        "scripts/smoke-installed-claude-hook.cjs",
+        "scripts/validate-codex-plugin.cjs",
+        "scripts/validate-docs-rulebooks.cjs",
+    ):
+        assert maintainer_script not in files
+    for oracle in (
+        "scheduler-signals.py",
+        "scheduler-decide.py",
+        "kill-conditions.py",
+        "borrow-preflight.py",
+        "borrow-abandoned-scan.py",
+        "convergence-detect.py",
+    ):
+        assert not any(entry.endswith(oracle) for entry in files)
 
 
 # === Cross-file version drift guard ============================================
@@ -44,6 +69,12 @@ def _read_package_version() -> str:
 def _read_plugin_manifest_version() -> str:
     return json.loads(
         (ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )["version"]
+
+
+def _read_codex_manifest_version() -> str:
+    return json.loads(
+        (ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
     )["version"]
 
 
@@ -62,21 +93,29 @@ def _read_skill_version() -> str:
     return m.group(1)
 
 
-_HELPER_VERSION_RE = re.compile(r'^HELPER_VERSION="([^"]+)"\s*$', re.MULTILINE)
+_RUNTIME_VERSION_RE = re.compile(
+    r"^const RUNTIME_VERSION = '([^']+)';\s*$",
+    re.MULTILINE,
+)
 
 
-def _read_helper_version() -> str:
-    helper = (ROOT / "hooks" / "scripts" / "session-helper.sh").read_text(
+def _read_runtime_version() -> str:
+    runtime = (ROOT / "hooks" / "scripts" / "deep-evolve-runtime.cjs").read_text(
         encoding="utf-8"
     )
-    m = _HELPER_VERSION_RE.search(helper)
-    assert m, "session-helper.sh must declare HELPER_VERSION=\"X.Y.Z\""
+    m = _RUNTIME_VERSION_RE.search(runtime)
+    assert m, "deep-evolve-runtime.cjs must declare RUNTIME_VERSION"
     return m.group(1)
 
 
 def test_plugin_and_package_versions_match():
     plugin_v = _read_plugin_manifest_version()
+    codex_v = _read_codex_manifest_version()
     pkg_v = _read_package_version()
+    assert codex_v == plugin_v, (
+        f".codex-plugin/plugin.json version={codex_v!r} drifted from "
+        f".claude-plugin/plugin.json version={plugin_v!r}; bump both together."
+    )
     assert plugin_v == pkg_v, (
         f".claude-plugin/plugin.json version={plugin_v!r} drifted from "
         f"package.json version={pkg_v!r}; bump both together."
@@ -93,11 +132,11 @@ def test_skill_md_version_matches_plugin_manifest():
     )
 
 
-def test_helper_version_matches_plugin_manifest():
+def test_runtime_version_matches_plugin_manifest():
     plugin_v = _read_plugin_manifest_version()
-    helper_v = _read_helper_version()
-    assert helper_v == plugin_v, (
-        f"hooks/scripts/session-helper.sh HELPER_VERSION={helper_v!r} drifted "
+    runtime_v = _read_runtime_version()
+    assert runtime_v == plugin_v, (
+        f"hooks/scripts/deep-evolve-runtime.cjs RUNTIME_VERSION={runtime_v!r} drifted "
         f"from .claude-plugin/plugin.json version={plugin_v!r}; bump "
-        f"HELPER_VERSION whenever the plugin ships."
+        f"RUNTIME_VERSION whenever the plugin ships."
     )

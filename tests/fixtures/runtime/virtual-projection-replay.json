@@ -1,0 +1,184 @@
+{
+  "initial_virtual": {
+    "enabled": true,
+    "n_initial": 3,
+    "n_range": {
+      "min": 1,
+      "max": 9
+    },
+    "project_type": "standard_optimization",
+    "eval_parallelizability": "serialized",
+    "selection_reason": "three deterministic seeds",
+    "budget_total": 16,
+    "budget_unallocated": 16,
+    "synthesis": {
+      "budget_allocated": 6,
+      "regression_tolerance": 0.05
+    },
+    "seeds": [],
+    "x-active-seed-count": 0
+  },
+  "initial_allocations": [
+    5,
+    5,
+    6
+  ],
+  "growth": {
+    "pool_before": 12,
+    "active_count": 3,
+    "allocation": 3
+  },
+  "seed_events": [
+    {
+      "event": "seed_initialized",
+      "operation_id": "01J00000000000000000000031",
+      "seed_id": 1,
+      "creation_kind": "initial",
+      "direction": "guard",
+      "hypothesis": "strict parsing wins",
+      "initial_rationale": "first",
+      "worktree_path": "/tmp/session/worktrees/seed_1",
+      "branch": "evolve/session/seed-1",
+      "ts": "2026-07-13T13:00:00Z",
+      "created_by": "init_batch",
+      "allocated_budget": 5
+    },
+    {
+      "event": "seed_initialized",
+      "operation_id": "01J00000000000000000000032",
+      "seed_id": 2,
+      "creation_kind": "initial",
+      "direction": "replay",
+      "hypothesis": "one reducer prevents drift",
+      "initial_rationale": "second",
+      "worktree_path": "/tmp/session/worktrees/seed_2",
+      "branch": "evolve/session/seed-2",
+      "ts": "2026-07-13T13:00:01Z",
+      "created_by": "init_batch",
+      "allocated_budget": 5
+    },
+    {
+      "event": "seed_initialized",
+      "operation_id": "01J00000000000000000000033",
+      "seed_id": 3,
+      "creation_kind": "initial",
+      "direction": "recovery",
+      "hypothesis": "atomic publication wins",
+      "initial_rationale": "third",
+      "worktree_path": "/tmp/session/worktrees/seed_3",
+      "branch": "evolve/session/seed-3",
+      "ts": "2026-07-13T13:00:02Z",
+      "created_by": "init_batch",
+      "allocated_budget": 6
+    }
+  ],
+  "terminal_event": {
+    "event": "kept",
+    "operation_id": "01J00000000000000000000034",
+    "id": 1,
+    "seed_id": 1,
+    "category": "add_guard",
+    "description": "strict parsing",
+    "rationale": "prevents drift",
+    "pre_commit": "0000000000000000000000000000000000000000",
+    "commit": "1111111111111111111111111111111111111111",
+    "status": "kept",
+    "raw_score": 5,
+    "normalized_score": 5,
+    "score_delta": 1,
+    "loc_delta": 4,
+    "flagged": false,
+    "ts": "2026-07-13T13:01:00Z"
+  },
+  "terminal_result_row": {
+    "commit": "1111111111111111111111111111111111111111",
+    "score": 5,
+    "status": "kept",
+    "category": "add_guard",
+    "score_delta": 1,
+    "loc_delta": 4,
+    "flagged": false,
+    "rationale": "prevents drift",
+    "description": "strict parsing"
+  },
+  "user_kill_event": {
+    "event": "seed_killed",
+    "operation_id": "01J00000000000000000000035",
+    "source": "user_request",
+    "request_id": "request-replay-1",
+    "kill_entry_id": "user-request:04b30d01fe87988a78c7e415eb6b02eb5289c7d681011488b9c77bca3d6c3955",
+    "seed_id": 1,
+    "condition": "user_requested",
+    "ts": "2026-07-13T13:02:00Z",
+    "applied_at": "2026-07-13T13:02:00Z"
+  },
+  "coordinator_events": {
+    "schedule": {
+      "event": "seed_scheduled",
+      "operation_id": "01J00000000000000000000100",
+      "block_id": "block:fixture-1",
+      "decision_id": "decision-fixture-1",
+      "seed_id": 1,
+      "epoch": 1,
+      "pre_dispatch_head": "0000000000000000000000000000000000000000",
+      "block_size": 1,
+      "budget_preimage": 5,
+      "ts": "2026-07-13T13:00:30Z"
+    },
+    "terminal": {
+      "event": "seed_block_completed",
+      "operation_id": "01J00000000000000000000101",
+      "block_id": "block:fixture-1",
+      "schedule_operation_id": "01J00000000000000000000100",
+      "seed_id": 1,
+      "experiment_ids": [1],
+      "commits": ["1111111111111111111111111111111111111111"],
+      "forum_entry_ids": ["experiment:01J00000000000000000000034"],
+      "borrows_given": 0,
+      "borrows_received": 0,
+      "q_components": {
+        "keep_rate": 1,
+        "normalized_delta": 1,
+        "crash_rate": 0,
+        "idea_diversity": 0
+      },
+      "final_q": 0.85,
+      "returned_head": "1111111111111111111111111111111111111111",
+      "status": "completed",
+      "ts": "2026-07-13T13:01:30Z"
+    },
+    "outer_loop": {
+      "event": "outer_loop",
+      "operation_id": "01J00000000000000000000102",
+      "completed_block_ids": ["block:fixture-1"],
+      "generation": 1,
+      "q_components": {
+        "keep_rate": 1,
+        "normalized_delta": 1,
+        "crash_rate": 0,
+        "idea_diversity": 0
+      },
+      "Q": 0.85,
+      "reason": "manual_boundary",
+      "ts": "2026-07-13T13:02:00Z",
+      "epoch": 1
+    },
+    "epoch": {
+      "event": "evaluation_epoch_advanced",
+      "operation_id": "01J00000000000000000000102",
+      "completed_block_ids": ["block:fixture-1"],
+      "generation": 1,
+      "q_components": {
+        "keep_rate": 1,
+        "normalized_delta": 1,
+        "crash_rate": 0,
+        "idea_diversity": 0
+      },
+      "Q": 0.85,
+      "reason": "manual_boundary",
+      "ts": "2026-07-13T13:02:00Z",
+      "from_epoch": 1,
+      "to_epoch": 2
+    }
+  }
+}

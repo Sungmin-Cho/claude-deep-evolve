@@ -105,8 +105,8 @@ def test_step_5_f_cross_seed_borrow_exists():
 
 def test_step_5_f_preflight_invocation_referenced():
     c = _content()
-    assert "borrow-preflight.py" in c, (
-        "Step 5.f must invoke borrow-preflight.py (P2/P3 enforcement)"
+    assert "runtime-op: scheduler.borrow-preflight" in c, (
+        "Step 5.f must invoke scheduler.borrow-preflight (P2/P3 enforcement)"
     )
 
 

@@ -1,0 +1,8 @@
+{"event":"seed_keep","seed_id":1,"commit":"a1","direction":"feature engineering","ts":"2026-04-24T10:00:00Z","epoch":1}
+{"event":"seed_keep","seed_id":2,"commit":"b1","direction":"signal filtering","ts":"2026-04-24T10:05:00Z","epoch":1}
+{"event":"cross_seed_borrow","from_seed":1,"to_seed":2,"source_commit":"a1","target_commit":"b2","ts":"2026-04-24T10:10:00Z","epoch":1}
+{"event":"seed_keep","seed_id":3,"commit":"c1","direction":"ensemble weights","ts":"2026-04-24T10:15:00Z","epoch":1}
+{"event":"cross_seed_borrow","from_seed":1,"to_seed":3,"source_commit":"a1","target_commit":"c2","ts":"2026-04-24T10:20:00Z","epoch":2}
+{"event":"cross_seed_borrow","from_seed":2,"to_seed":3,"source_commit":"b1","target_commit":"c3","ts":"2026-04-24T10:25:00Z","epoch":2}
+{"event":"convergence_event","seed_ids":[1,3],"cluster_commits":["a1","c2"],"direction":"feature engineering","trigger":"semantic similarity >= 0.85","judged_as":"borrow_chain_convergence","shared_ancestors":["a1"],"epoch":2,"ts":"2026-04-24T10:30:00Z"}
+{"event":"seed_discard","seed_id":3,"commit":"c4","reason":"flagged_unexplained","ts":"2026-04-24T10:35:00Z","epoch":2}

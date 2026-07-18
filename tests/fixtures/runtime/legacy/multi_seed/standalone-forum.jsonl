@@ -1,0 +1,4 @@
+{"event":"seed_keep","ts":"2026-04-23T10:00:00","seed_id":1,"commit":"aaa","description":"이동평균 피처","score_delta":0.08,"flagged":false,"legibility_passed":true}
+{"event":"seed_keep","ts":"2026-04-23T10:05:00","seed_id":2,"commit":"bbb","description":"노이즈 필터","score_delta":0.03,"flagged":false,"legibility_passed":true}
+{"event":"seed_discard","ts":"2026-04-23T10:10:00","seed_id":1,"commit":"ccc","reason":"regression","score_delta":-0.02}
+{"event":"cross_seed_borrow","ts":"2026-04-23T10:15:00","from_seed":1,"to_seed":2,"source_commit":"aaa","target_commit":"ddd","mode":"semantic_borrow","inspired_by":"aaa","reason":"seed-2 applied seed-1 idea to different timeframe"}

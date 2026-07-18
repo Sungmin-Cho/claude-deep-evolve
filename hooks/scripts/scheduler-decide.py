@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Validate + clamp AI scheduler decisions (spec section 6.2).
+"""ORACLE-ONLY Unix parity helper; supported runtime lives in scheduler.cjs.
+
+Validate + clamp AI scheduler decisions (spec section 6.2).
 
 Accepts a decision JSON (structure per section 6.2), validates required fields,
 clamps block_size to allowed set {1,2,3,5,8} with lower-tie-break, emits
@@ -126,6 +128,34 @@ def main():
         if not isinstance(v, int) or isinstance(v, bool):
             _die(f"{d['decision']}.{field} must be integer (got: {v!r})")
 
+    signals = None
+    if args.signals is not None:
+        try:
+            signals = json.loads(args.signals)
+        except json.JSONDecodeError as e:
+            _die(f"--signals is not valid JSON: {e}")
+        if not isinstance(signals, dict):
+            _die("--signals must be a JSON object")
+        explicit_ids = signals.get("schedulable_seed_ids")
+        if explicit_ids is None:
+            explicit_ids = [
+                seed.get("id") for seed in (signals.get("seeds", []) or [])
+                if isinstance(seed, dict) and seed.get("status") == "active"
+            ]
+        if not isinstance(explicit_ids, list):
+            _die("--signals.schedulable_seed_ids must be an array")
+        if csid not in explicit_ids:
+            rejection = {
+                "accepted": False,
+                "decision": d["decision"],
+                "reason": (
+                    f"chosen_seed_id ({csid}) is not an active schedulable seed; "
+                    f"active ids are {explicit_ids}"
+                ),
+            }
+            print(json.dumps(rejection, ensure_ascii=False, indent=2))
+            sys.exit(1)
+
     # T42 W-7 hardening: kill_target must differ from chosen_seed_id for
     # kill_then_schedule (killing seed N then scheduling the same seed N is
     # nonsensical -- no kill effect). Rejection signal MUST mention
@@ -226,14 +256,7 @@ def main():
     result["journal_events_to_append"] = journal_events
 
     # Optional fairness + kill-atomicity checks (spec section 6.6, 5.5 W-9)
-    if args.signals is not None:
-        try:
-            signals = json.loads(args.signals)
-        except json.JSONDecodeError as e:
-            _die(f"--signals is not valid JSON: {e}")
-        if not isinstance(signals, dict):
-            _die("--signals must be a JSON object")
-
+    if signals is not None:
         seeds = signals.get("seeds", []) or []
 
         # Soft fairness floor: any active seed with 0 experiments_used_this_epoch

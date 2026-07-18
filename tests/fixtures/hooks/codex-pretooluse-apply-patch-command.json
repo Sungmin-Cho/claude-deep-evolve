@@ -1,0 +1,6 @@
+{
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Update File: {{SESSION_ROOT}}/prepare.cjs\n@@\n-before\n+after\n*** End Patch"
+  }
+}

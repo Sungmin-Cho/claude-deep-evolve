@@ -1,0 +1,39 @@
+{
+  "operation_ids": {
+    "ack_idle": "01J00000000000000000000101",
+    "ack_keep": "01J00000000000000000000102",
+    "ack_in_flight": "01J00000000000000000000103",
+    "drain": "01J00000000000000000000104",
+    "schedule": "01J00000000000000000000105",
+    "terminal": "01J00000000000000000000106",
+    "rebuild": "01J00000000000000000000107"
+  },
+  "pending": [
+    {
+      "entry_id": "request-later",
+      "seed_id": 1,
+      "requested_at": "2026-07-13T16:00:02Z",
+      "acknowledged_at": null,
+      "choice_id": null,
+      "kill_entry_id": null
+    },
+    {
+      "entry_id": "request-earlier",
+      "seed_id": 2,
+      "requested_at": "2026-07-13T16:00:01Z",
+      "acknowledged_at": null,
+      "choice_id": null,
+      "kill_entry_id": null
+    }
+  ],
+  "kill_entry_pattern": "^user-request:[0-9a-f]{64}$",
+  "choices": ["confirm-kill", "keep-seed"],
+  "invalid_choices": ["stop", "confirm", "unknown", 1, true, null],
+  "conditions": [
+    "crash_give_up",
+    "sustained_regression",
+    "shortcut_quarantine",
+    "budget_exhausted_underperform",
+    "user_requested"
+  ]
+}

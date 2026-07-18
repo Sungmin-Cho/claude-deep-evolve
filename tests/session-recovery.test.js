@@ -30,12 +30,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const SESSION_HELPER = path.resolve(
-  __dirname, '..', 'hooks', 'scripts', 'session-helper.sh',
+const RUNTIME = path.resolve(
+  __dirname, '..', 'hooks', 'scripts', 'deep-evolve-runtime.cjs',
 );
 
-if (!fs.existsSync(SESSION_HELPER)) {
-  throw new Error(`session-helper.sh missing at ${SESSION_HELPER}`);
+if (!fs.existsSync(RUNTIME)) {
+  throw new Error(`deep-evolve-runtime.cjs missing at ${RUNTIME}`);
 }
 
 // Scrub env vars that could redirect session resolution away from tmpRoot.
@@ -51,7 +51,7 @@ function scrubbedEnv(extra = {}) {
 }
 
 function runHelper(tmpRoot, subcmd, ...args) {
-  return spawnSync('bash', [SESSION_HELPER, subcmd, ...args], {
+  return spawnSync(process.execPath, [RUNTIME, '--legacy-session-helper', subcmd, ...args], {
     cwd: tmpRoot,
     env: scrubbedEnv(),
     encoding: 'utf8',
@@ -84,6 +84,15 @@ function writeSessionDir(tmpRoot, sessionId, sessionYaml) {
     fs.writeFileSync(path.join(dir, 'session.yaml'), sessionYaml);
   }
   return dir;
+}
+
+function validSessionYaml(sessionId) {
+  return `${JSON.stringify({
+    session_id: sessionId,
+    deep_evolve_version: '3.4.3',
+    status: 'active',
+    created_at: '2026-05-12T00:00:00Z',
+  }, null, 2)}\n`;
 }
 
 function writeJournal(sessionDir, events) {
@@ -141,7 +150,7 @@ describe('session-helper resolve_current — dangling state error paths (M5.5 #5
   it('E: valid session resolves → exit 0 + stdout = "<sid>\\t<root>"', () => {
     const sid = 's-happy-001';
     writeCurrent(tmpRoot, sid);
-    const sessionDir = writeSessionDir(tmpRoot, sid, 'status: active\n');
+    const sessionDir = writeSessionDir(tmpRoot, sid, validSessionYaml(sid));
     const r = runHelper(tmpRoot, 'resolve_current');
     assert.equal(r.status, 0, `expected exit 0, got ${r.status} (stderr=${r.stderr})`);
     const [out_sid, out_root] = r.stdout.trim().split('\t');
@@ -162,7 +171,7 @@ describe('session-helper detect_orphan_experiment — journal-state recovery (M5
     tmpRoot = makeTmpRoot();
     sid = 's-journal-001';
     writeCurrent(tmpRoot, sid);
-    sessionDir = writeSessionDir(tmpRoot, sid, 'status: active\n');
+    sessionDir = writeSessionDir(tmpRoot, sid, validSessionYaml(sid));
   });
   afterEach(() => { fs.rmSync(tmpRoot, { recursive: true, force: true }); });
 

@@ -1,0 +1,27 @@
+{
+  "host": "codex",
+  "version": "0.144.1",
+  "capture_source": "actual_exact_pinned_host",
+  "model_source": "deterministic_loopback_protocol_v1",
+  "bootstrap_commit": "cf92872e3914af7819444ee44e4f8d3c2c5bb3fa",
+  "run_id": "29627400026",
+  "job_id": "windows-codex-host-smoke",
+  "run_attempt": 1,
+  "same_head_rerun": false,
+  "driver_sha256": "8dd32254ed7e4a6db47a185da30b6de954544b175f771f15dac8e9d7f41cc221",
+  "raw_stream_sha256": "e49b9bbfa1fffd25b4226981b67474188083d01cc32c0d3c284b575196cb9fde",
+  "raw_stderr_sha256": "9f9e1790bf36f4defacee79c635f1982fdaf30550b9b352c62f404b23b14b359",
+  "normalization_map": {
+    "project_root": "{{PROJECT_ROOT}}",
+    "session_root": "{{SESSION_ROOT}}",
+    "codex_thread_id": "{{CODEX_THREAD_ID}}"
+  },
+  "accepted_pointers": [
+    "/tool_name",
+    "/tool_input/command"
+  ],
+  "attempt_count": 1,
+  "denial_count": 1,
+  "successful_mutation_count": 0,
+  "vendor_cloud_entitlement_proven": false
+}

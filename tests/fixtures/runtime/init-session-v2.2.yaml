@@ -1,0 +1,32 @@
+session_id: "01G00000000000000000000000"
+deep_evolve_version: "2.2.2"
+status: initializing
+created_at: "2024-08-01T00:00:00Z"
+goal: "레거시 세션 개선"
+parent_session: null
+program:
+  version: 1
+  history:
+    - version: 1
+      experiments: "0-"
+      keep_rate: null
+      reason: "initial"
+outer_loop:
+  generation: 0
+  interval: 20
+  inner_count: 0
+  auto_trigger: true
+  q_history: []
+evaluation_epoch:
+  current: 1
+  history:
+    - epoch: 1
+      prepare_version: 1
+      generations: []
+      best_Q: null
+lineage:
+  current_branch: "deep-evolve/legacy"
+  forked_from: null
+  previous_branches: []
+metric: { name: "score", direction: maximize, baseline: 1.0, current: 1.0, best: 1.0 }
+eval_mode: cli

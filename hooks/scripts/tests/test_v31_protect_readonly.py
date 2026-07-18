@@ -15,7 +15,15 @@ def _active_session(tmp_path):
     (project / ".deep-evolve" / "current.json").write_text(
         json.dumps({"session_id": "s"}), encoding="utf-8"
     )
-    (session_root / "session.yaml").write_text("status: active\n", encoding="utf-8")
+    (session_root / "session.yaml").write_text(
+        json.dumps({
+            "session_id": "s",
+            "deep_evolve_version": "3.4.3",
+            "status": "active",
+            "created_at": "2026-07-10T00:00:00Z",
+        }) + "\n",
+        encoding="utf-8",
+    )
     (session_root / "prepare.py").write_text("SECRET = 1\n", encoding="utf-8")
     (session_root / "prepare-protocol.md").write_text("SECRET\n", encoding="utf-8")
     (session_root / "worktrees" / "seed_1" / "program.md").write_text(
@@ -47,7 +55,8 @@ def test_seal_prepare_blocks_bash_cat_of_prepare(tmp_path):
         {"DEEP_EVOLVE_SEAL_PREPARE": "1"},
     )
     assert r.returncode == 2
-    assert "seal_prepare_read" in r.stdout
+    assert r.stdout == ""
+    assert "seal_prepare_read" in r.stderr
 
 
 def test_seal_prepare_blocks_bash_dd_read_of_prepare(tmp_path):
@@ -59,7 +68,8 @@ def test_seal_prepare_blocks_bash_dd_read_of_prepare(tmp_path):
         {"DEEP_EVOLVE_SEAL_PREPARE": "1"},
     )
     assert r.returncode == 2
-    assert "seal_prepare_read" in r.stdout
+    assert r.stdout == ""
+    assert "seal_prepare_read" in r.stderr
 
 
 def test_seal_prepare_blocks_python_open_read_of_prepare(tmp_path):
@@ -74,7 +84,8 @@ def test_seal_prepare_blocks_python_open_read_of_prepare(tmp_path):
         {"DEEP_EVOLVE_SEAL_PREPARE": "1"},
     )
     assert r.returncode == 2
-    assert "seal_prepare_read" in r.stdout
+    assert r.stdout == ""
+    assert "legacy_prepare_regeneration_required" in r.stderr
 
 
 def test_active_session_blocks_write_to_seed_program_md(tmp_path):
@@ -82,7 +93,8 @@ def test_active_session_blocks_write_to_seed_program_md(tmp_path):
     seed_program = session_root / "worktrees" / "seed_1" / "program.md"
     r = _run_guard(project, {"file_path": str(seed_program)}, "Write")
     assert r.returncode == 2
-    assert "program.md" in r.stdout or "평가 harness" in r.stdout
+    assert r.stdout == ""
+    assert "active sessions protect" in r.stderr
 
 
 def test_active_session_blocks_bash_truncate_of_seed_program_md(tmp_path):
@@ -90,7 +102,8 @@ def test_active_session_blocks_bash_truncate_of_seed_program_md(tmp_path):
     seed_program = session_root / "worktrees" / "seed_1" / "program.md"
     r = _run_guard(project, {"command": f"truncate -s 0 {seed_program}"}, "Bash")
     assert r.returncode == 2
-    assert "program.md" in r.stdout or "평가 harness" in r.stdout
+    assert r.stdout == ""
+    assert "active sessions protect" in r.stderr
 
 
 def test_active_session_blocks_bash_python_write_to_seed_program_md(tmp_path):
@@ -105,10 +118,11 @@ def test_active_session_blocks_bash_python_write_to_seed_program_md(tmp_path):
         "Bash",
     )
     assert r.returncode == 2
-    assert "program.md" in r.stdout or "평가 harness" in r.stdout
+    assert r.stdout == ""
+    assert "active sessions protect" in r.stderr
 
 
-def test_seal_prepare_allows_executing_prepare_py(tmp_path):
+def test_seal_prepare_blocks_executing_legacy_prepare_py(tmp_path):
     project, session_root = _active_session(tmp_path)
     r = _run_guard(
         project,
@@ -116,4 +130,6 @@ def test_seal_prepare_allows_executing_prepare_py(tmp_path):
         "Bash",
         {"DEEP_EVOLVE_SEAL_PREPARE": "1"},
     )
-    assert r.returncode == 0
+    assert r.returncode == 2
+    assert r.stdout == ""
+    assert "legacy_prepare_regeneration_required" in r.stderr

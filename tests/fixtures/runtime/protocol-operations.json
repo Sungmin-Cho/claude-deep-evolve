@@ -1,0 +1,1347 @@
+{
+  "schema_version": "1.0",
+  "operations": [
+    {
+      "operation": "session.resolve-current",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/init.md",
+      "trigger": "entry routing resolves the current session",
+      "input_fields": [],
+      "output_fields": [
+        "session_id",
+        "session_root"
+      ],
+      "legacy_source_function": "session-helper:resolve_current"
+    },
+    {
+      "operation": "session.read",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/resume.md",
+      "trigger": "resume loads canonical session state",
+      "input_fields": [
+        "session_id"
+      ],
+      "output_fields": [
+        "session",
+        "session_sha256"
+      ],
+      "legacy_source_function": "session-store:readSession"
+    },
+    {
+      "operation": "session.list",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/history.md",
+      "trigger": "history and session-route selection list sessions",
+      "input_fields": [
+        "status"
+      ],
+      "output_fields": [
+        "sessions"
+      ],
+      "legacy_source_function": "session-helper:list_sessions"
+    },
+    {
+      "operation": "session.start",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/init.md",
+      "trigger": "a consented new session is scaffolded",
+      "input_fields": [
+        "goal",
+        "parent_session_id",
+        "initial_state"
+      ],
+      "output_fields": [
+        "session_id",
+        "session_root",
+        "session",
+        "session_sha256",
+        "initialization_id",
+        "replayed"
+      ],
+      "legacy_source_function": "session-helper:start_new_session"
+    },
+    {
+      "operation": "session.mark-status",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/completion.md",
+      "trigger": "completion or abort changes lifecycle status",
+      "input_fields": [
+        "session_id",
+        "status"
+      ],
+      "output_fields": [
+        "session_id",
+        "status"
+      ],
+      "legacy_source_function": "session-helper:mark_session_status"
+    },
+    {
+      "operation": "session.migrate-legacy",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/resume.md",
+      "trigger": "operator consents to legacy layout migration",
+      "input_fields": [],
+      "output_fields": [
+        "session_id",
+        "session_root",
+        "status"
+      ],
+      "legacy_source_function": "session-helper:migrate_legacy"
+    },
+    {
+      "operation": "session.check-alignment",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/resume.md",
+      "trigger": "resume validates branch and session alignment",
+      "input_fields": [
+        "session_id"
+      ],
+      "output_fields": [
+        "aligned",
+        "expected",
+        "actual"
+      ],
+      "legacy_source_function": "session-helper:check_branch_alignment"
+    },
+    {
+      "operation": "session.detect-orphan",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/resume.md",
+      "trigger": "resume checks for an unevaluated committed experiment",
+      "input_fields": [
+        "session_id"
+      ],
+      "output_fields": [
+        "commit",
+        "experiment_id"
+      ],
+      "legacy_source_function": "session-helper:detect_orphan_experiment"
+    },
+    {
+      "operation": "session.append-local-archive",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/completion.md",
+      "trigger": "completion records a local archive entry",
+      "input_fields": [
+        "session_id"
+      ],
+      "output_fields": [
+        "archive_path",
+        "entry"
+      ],
+      "legacy_source_function": "session-helper:append_meta_archive_local"
+    },
+    {
+      "operation": "session.render-inherited-context",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/init.md",
+      "trigger": "a child session renders inherited context",
+      "input_fields": [
+        "parent_session_id"
+      ],
+      "output_fields": [
+        "markdown",
+        "parent_receipt_schema_version"
+      ],
+      "legacy_source_function": "session-helper:render_inherited_context"
+    },
+    {
+      "operation": "session.lineage-tree",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/history.md",
+      "trigger": "history renders session lineage",
+      "input_fields": [],
+      "output_fields": [
+        "lines"
+      ],
+      "legacy_source_function": "session-helper:lineage_tree"
+    },
+    {
+      "operation": "session.patch",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/inner-loop.md",
+      "trigger": "an accepted experiment updates an allowlisted session field",
+      "input_fields": [
+        "session_id",
+        "operation_id",
+        "expected_session_sha256",
+        "expected_journal_sha256",
+        "path",
+        "value"
+      ],
+      "output_fields": [
+        "session",
+        "session_sha256",
+        "replayed",
+        "journal_sha256"
+      ],
+      "legacy_source_function": "protocol atomic session field update"
+    },
+    {
+      "operation": "session.record-baseline",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/init.md",
+      "trigger": "init activates the canonical baseline under session and journal CAS",
+      "input_fields": [
+        "session_id",
+        "operation_id",
+        "expected_session_sha256",
+        "expected_journal_sha256",
+        "raw_score",
+        "normalized_score",
+        "harness_identity"
+      ],
+      "output_fields": [
+        "session",
+        "session_sha256",
+        "replayed",
+        "journal_sha256"
+      ],
+      "legacy_source_function": "session-transitions:applyBaseline"
+    },
+    {
+      "operation": "session.finish-experiment",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/inner-loop.md",
+      "trigger": "a seed commits one authenticated terminal experiment transition",
+      "input_fields": [
+        "session_id",
+        "operation_id",
+        "expected_session_sha256",
+        "expected_journal_sha256",
+        "expected_forum_sha256",
+        "expected_results_sha256",
+        "seed_id",
+        "experiment"
+      ],
+      "output_fields": [
+        "experiment_id",
+        "status",
+        "session",
+        "session_sha256",
+        "forum_sha256",
+        "results_sha256",
+        "replayed",
+        "journal_sha256"
+      ],
+      "legacy_source_function": "session-transitions:applyExperiment"
+    },
+    {
+      "operation": "session.record-evaluator-expansion",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/outer-loop.md",
+      "trigger": "Tier-3 evaluator expansion publishes one authenticated epoch transition",
+      "input_fields": [
+        "session_id",
+        "operation_id",
+        "expected_session_sha256",
+        "expected_journal_sha256",
+        "harness_identity",
+        "reason",
+        "trigger_generation"
+      ],
+      "output_fields": [
+        "session",
+        "session_sha256",
+        "prepare_version",
+        "replayed",
+        "journal_sha256"
+      ],
+      "legacy_source_function": "session-transitions:applyEvaluatorExpansion"
+    },
+    {
+      "operation": "session.complete",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/completion.md",
+      "trigger": "the completion transaction seals the final session result",
+      "input_fields": [
+        "session_id",
+        "operation_id",
+        "expected_session_sha256",
+        "expected_journal_sha256",
+        "outcome",
+        "final_branch",
+        "final_commit",
+        "report",
+        "receipt",
+        "synthesis",
+        "final_strategy"
+      ],
+      "output_fields": [
+        "session_id",
+        "status",
+        "outcome",
+        "session",
+        "session_sha256",
+        "replayed",
+        "journal_sha256"
+      ],
+      "legacy_source_function": "completion protocol final transaction"
+    },
+    {
+      "operation": "virtual.init",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/init.md",
+      "trigger": "virtual-parallel state is initialized (below-v3.5 compatibility only; v3.5 rejects)",
+      "input_fields": [
+        "session_id",
+        "analysis",
+        "n_chosen",
+        "total_budget"
+      ],
+      "output_fields": [
+        "session"
+      ],
+      "legacy_source_function": "session-helper:init_virtual_parallel_block"
+    },
+    {
+      "operation": "virtual.append-seed",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/init.md",
+      "trigger": "v3.5 init or growth appends one absent seed under session and journal CAS",
+      "input_fields": [
+        "session_id",
+        "operation_id",
+        "expected_session_sha256",
+        "expected_journal_sha256",
+        "seed_id",
+        "worktree_path",
+        "branch",
+        "beta",
+        "creation_kind"
+      ],
+      "output_fields": [
+        "seed",
+        "active_seed_count",
+        "budget_unallocated",
+        "session_sha256",
+        "replayed",
+        "journal_sha256"
+      ],
+      "legacy_source_function": "session-helper:append_seed_to_session_yaml"
+    },
+    {
+      "operation": "virtual.rebuild-seeds",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/resume.md",
+      "trigger": "v3.5 resume rebuilds the projection under session, journal, and results CAS",
+      "input_fields": [
+        "session_id",
+        "operation_id",
+        "expected_session_sha256",
+        "expected_journal_sha256",
+        "expected_results_sha256"
+      ],
+      "output_fields": [
+        "session",
+        "session_sha256",
+        "projection_sha256",
+        "changed",
+        "replayed"
+      ],
+      "legacy_source_function": "session-helper:rebuild_seeds_from_journal"
+    },
+    {
+      "operation": "virtual.set-field",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "coordinator updates an allowlisted virtual-parallel field (below-v3.5 compatibility only; v3.5 rejects)",
+      "input_fields": [
+        "session_id",
+        "key",
+        "value"
+      ],
+      "output_fields": [
+        "session"
+      ],
+      "legacy_source_function": "session-helper:set_virtual_parallel_field"
+    },
+    {
+      "operation": "metrics.entropy",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/outer-loop.md",
+      "trigger": "outer-loop records an entropy snapshot",
+      "input_fields": [
+        "events",
+        "window_size"
+      ],
+      "output_fields": [
+        "entropy_bits",
+        "active_categories",
+        "sample_size",
+        "reason"
+      ],
+      "legacy_source_function": "entropy-weight:compute"
+    },
+    {
+      "operation": "metrics.migrate-v2-weights",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/resume.md",
+      "trigger": "resume upgrades legacy strategy weights",
+      "input_fields": [
+        "weights"
+      ],
+      "output_fields": [
+        "weights",
+        "pre_normalize_sum"
+      ],
+      "legacy_source_function": "entropy-weight:migrate_v2_weights"
+    },
+    {
+      "operation": "metrics.count-flagged",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/inner-loop.md",
+      "trigger": "inner-loop counts flags since the last harness expansion",
+      "input_fields": [
+        "events"
+      ],
+      "output_fields": [
+        "count",
+        "last_reset_idx"
+      ],
+      "legacy_source_function": "session-helper:count_flagged_since_last_expansion"
+    },
+    {
+      "operation": "metrics.retry-budget",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/inner-loop.md",
+      "trigger": "inner-loop calculates remaining retry budget",
+      "input_fields": [
+        "events",
+        "cap"
+      ],
+      "output_fields": [
+        "used",
+        "remaining",
+        "cap"
+      ],
+      "legacy_source_function": "session-helper:retry_budget_remaining"
+    },
+    {
+      "operation": "metrics.init-budget-split",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/init.md",
+      "trigger": "initial virtual budget is divided among seeds",
+      "input_fields": [
+        "total",
+        "n"
+      ],
+      "output_fields": [
+        "allocations"
+      ],
+      "legacy_source_function": "session-helper:compute_init_budget_split"
+    },
+    {
+      "operation": "metrics.grow-allocation",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "scheduler grows the pool and allocates budget",
+      "input_fields": [
+        "pool",
+        "n_current"
+      ],
+      "output_fields": [
+        "allocation"
+      ],
+      "legacy_source_function": "session-helper:compute_grow_allocation"
+    },
+    {
+      "operation": "coord.append-journal",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/inner-loop.md",
+      "trigger": "a seed or coordinator records a typed state event",
+      "input_fields": [
+        "session_id",
+        "event",
+        "seed_id"
+      ],
+      "output_fields": [
+        "event",
+        "ts",
+        "session_id",
+        "seed_id"
+      ],
+      "legacy_source_function": "session-helper:append_journal_event"
+    },
+    {
+      "operation": "coord.append-forum",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/inner-loop.md",
+      "trigger": "a seed publishes a seed-tagged forum event",
+      "input_fields": [
+        "session_id",
+        "event",
+        "seed_id"
+      ],
+      "output_fields": [
+        "event",
+        "ts",
+        "session_id",
+        "seed_id"
+      ],
+      "legacy_source_function": "session-helper:append_forum_event"
+    },
+    {
+      "operation": "coord.tail-forum",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "coordinator and seeds read new forum events",
+      "input_fields": [
+        "session_id",
+        "limit"
+      ],
+      "output_fields": [
+        "records"
+      ],
+      "legacy_source_function": "session-helper:tail_forum"
+    },
+    {
+      "operation": "coord.quarantine-malformed",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/runtime-contract.md",
+      "trigger": "maintainer-only recovery after malformed coordination data blocks mutation",
+      "input_fields": [
+        "session_id",
+        "file",
+        "malformed"
+      ],
+      "output_fields": [
+        "ok",
+        "rc",
+        "audit_identity",
+        "source_relative_path",
+        "source_preimage_sha256",
+        "staged_artifact_path",
+        "staged_artifact_sha256",
+        "staged_artifact_identity",
+        "malformed_lines",
+        "recovered",
+        "installed"
+      ],
+      "legacy_source_function": "journal-store:quarantineMalformed"
+    },
+    {
+      "operation": "coord.queue-user-kill",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "an explicit user kill request is queued",
+      "input_fields": [
+        "session_id",
+        "seed_id"
+      ],
+      "output_fields": [
+        "entry_id",
+        "seed_id",
+        "requested_at",
+        "acknowledged_at",
+        "choice_id",
+        "kill_entry_id"
+      ],
+      "legacy_source_function": "kill-request-writer:queue_user_kill"
+    },
+    {
+      "operation": "coord.queue-kill",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "scheduler proposes a typed seed kill",
+      "input_fields": [
+        "session_id",
+        "seed_id",
+        "condition",
+        "final_q",
+        "experiments_used"
+      ],
+      "output_fields": [
+        "entry_id",
+        "seed_id",
+        "condition",
+        "final_q",
+        "experiments_used",
+        "queued_at"
+      ],
+      "legacy_source_function": "session-helper:append_kill_queue_entry"
+    },
+    {
+      "operation": "coord.list-user-kill-requests",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "coordinator lists all strict pending and acknowledged user kill requests",
+      "input_fields": [
+        "session_id"
+      ],
+      "output_fields": [
+        "pending",
+        "acknowledged",
+        "authority_digests"
+      ],
+      "legacy_source_function": "deep-evolve-runtime:operationListUserKillRequests"
+    },
+    {
+      "operation": "coord.ack-user-kill-request",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "coordinator applies one stable interaction choice to one pending kill request",
+      "input_fields": [
+        "session_id",
+        "operation_id",
+        "request_id",
+        "choice_id",
+        "expected_session_sha256",
+        "expected_journal_sha256",
+        "expected_forum_sha256",
+        "expected_kill_queue_sha256",
+        "expected_kill_requests_sha256"
+      ],
+      "output_fields": [
+        "request_id",
+        "seed_id",
+        "choice_id",
+        "kill_entry_id",
+        "applied",
+        "queued",
+        "replayed",
+        "journal_sha256"
+      ],
+      "legacy_source_function": "deep-evolve-runtime:operationAckUserKillRequest"
+    },
+    {
+      "operation": "coord.drain-kill-queue",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "coordinator applies confirmed kill entries exactly once",
+      "input_fields": [
+        "session_id",
+        "operation_id",
+        "expected_session_sha256",
+        "expected_journal_sha256",
+        "expected_kill_queue_sha256",
+        "expected_kill_requests_sha256"
+      ],
+      "output_fields": [
+        "applied",
+        "remaining",
+        "applied_seed_ids",
+        "replayed",
+        "journal_sha256"
+      ],
+      "legacy_source_function": "session-helper:drain_kill_queue"
+    },
+    {
+      "operation": "coord.begin-seed-block",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "coordinator authenticates and records one seed block schedule",
+      "input_fields": [
+        "session_id",
+        "operation_id",
+        "decision_id",
+        "seed_id",
+        "block_size",
+        "pre_dispatch_head",
+        "expected_epoch",
+        "budget_preimage",
+        "expected_session_sha256",
+        "expected_journal_sha256"
+      ],
+      "output_fields": [
+        "block_id",
+        "seed_id",
+        "epoch",
+        "pre_dispatch_head",
+        "block_size",
+        "budget_preimage",
+        "session_sha256",
+        "replayed",
+        "journal_sha256"
+      ],
+      "legacy_source_function": "coordinator-store:beginSeedBlock"
+    },
+    {
+      "operation": "coord.finish-seed-block",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "coordinator authenticates one terminal block summary and materializes its projection",
+      "input_fields": [
+        "session_id",
+        "operation_id",
+        "block_id",
+        "seed_id",
+        "status",
+        "returned_head",
+        "summary",
+        "expected_session_sha256",
+        "expected_journal_sha256",
+        "expected_forum_sha256",
+        "expected_kill_queue_sha256",
+        "expected_kill_requests_sha256"
+      ],
+      "output_fields": [
+        "block_id",
+        "seed_id",
+        "status",
+        "returned_head",
+        "final_q",
+        "components",
+        "experiment_ids",
+        "commits",
+        "forum_entry_ids",
+        "borrows_given",
+        "borrows_received",
+        "killed_seed_ids",
+        "session_sha256",
+        "forum_sha256",
+        "kill_queue_sha256",
+        "kill_requests_sha256",
+        "replayed",
+        "journal_sha256"
+      ],
+      "legacy_source_function": "coordinator-store:deriveFinishEvidence"
+    },
+    {
+      "operation": "coord.advance-epoch",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "coordinator advances one authenticated evaluation epoch boundary",
+      "input_fields": [
+        "session_id",
+        "operation_id",
+        "expected_epoch",
+        "completed_block_ids",
+        "reason",
+        "expected_session_sha256",
+        "expected_journal_sha256",
+        "expected_results_sha256"
+      ],
+      "output_fields": [
+        "route",
+        "from_epoch",
+        "to_epoch",
+        "generation",
+        "Q",
+        "components",
+        "session_sha256",
+        "replayed",
+        "journal_sha256"
+      ],
+      "legacy_source_function": "coordinator-store:applyEpochBoundary"
+    },
+    {
+      "operation": "scheduler.signals",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "each scheduler turn derives current signals",
+      "input_fields": [
+        "session_id"
+      ],
+      "output_fields": [
+        "seeds",
+        "session_Q_trend",
+        "entropy_current",
+        "flagged_rate",
+        "forum_activity",
+        "budget_unallocated",
+        "n_current",
+        "active_seed_count",
+        "schedulable_seed_ids",
+        "zero_active"
+      ],
+      "legacy_source_function": "scheduler-signals:computeSignals"
+    },
+    {
+      "operation": "scheduler.decide",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "signals are converted to the next deterministic action",
+      "input_fields": [
+        "decision",
+        "signals"
+      ],
+      "output_fields": [
+        "accepted",
+        "decision",
+        "chosen_seed_id",
+        "block_size",
+        "original_block_size",
+        "clamped",
+        "reasoning",
+        "signals_used",
+        "kill_target",
+        "new_seed_id",
+        "new_seed_allocation",
+        "new_seed_direction",
+        "journal_events_to_append",
+        "fairness_violation",
+        "starved_seed_ids",
+        "kill_deferred"
+      ],
+      "legacy_source_function": "scheduler-decide:decide"
+    },
+    {
+      "operation": "scheduler.kill-conditions",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "coordinator evaluates seed kill conditions",
+      "input_fields": [
+        "seed",
+        "session",
+        "ai_judgments",
+        "user_kill_request"
+      ],
+      "output_fields": [
+        "seed_id",
+        "killable",
+        "conditions_met",
+        "details"
+      ],
+      "legacy_source_function": "kill-conditions:evaluate"
+    },
+    {
+      "operation": "scheduler.borrow-preflight",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/inner-loop.md",
+      "trigger": "a seed validates a proposed cross-seed borrow",
+      "input_fields": [
+        "self_seed_id",
+        "self_experiments_used",
+        "candidates",
+        "journal",
+        "forum"
+      ],
+      "output_fields": [
+        "eligible",
+        "skipped",
+        "p3_gate_open",
+        "self_seed_id"
+      ],
+      "legacy_source_function": "borrow-preflight:validate"
+    },
+    {
+      "operation": "scheduler.borrow-abandoned",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "scheduler identifies abandoned borrow chains",
+      "input_fields": [
+        "events",
+        "current_block_id",
+        "staleness_blocks"
+      ],
+      "output_fields": [
+        "abandoned_events"
+      ],
+      "legacy_source_function": "borrow-abandoned-scan:scan"
+    },
+    {
+      "operation": "scheduler.classify-convergence",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/outer-loop.md",
+      "trigger": "outer-loop classifies convergence evidence",
+      "input_fields": [
+        "keeps",
+        "similarities",
+        "inspired_by_map",
+        "cross_seed_borrow_events",
+        "threshold",
+        "p3_floor",
+        "epoch"
+      ],
+      "output_fields": [
+        "convergence_events"
+      ],
+      "legacy_source_function": "convergence-detect:classify"
+    },
+    {
+      "operation": "coord.build-seed-prompt",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "coordinator builds a literal-context seed dispatch prompt",
+      "input_fields": [
+        "session_id",
+        "seed_id",
+        "block_id",
+        "decision_id",
+        "n_block"
+      ],
+      "output_fields": [
+        "schema_version",
+        "policy_ref",
+        "project_root",
+        "session_id",
+        "session_root",
+        "seed_id",
+        "worktree_path",
+        "branch",
+        "block",
+        "first_actions",
+        "runtime_operations",
+        "final_response_schema"
+      ],
+      "legacy_source_function": "seed-prompt:build"
+    },
+    {
+      "operation": "coord.write-seed-program",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/coordinator.md",
+      "trigger": "coordinator atomically writes the assigned seed program",
+      "input_fields": [
+        "session_id",
+        "seed_id",
+        "beta"
+      ],
+      "output_fields": [
+        "output_path",
+        "bytes",
+        "beta_applied"
+      ],
+      "legacy_source_function": "seed-program:write"
+    },
+    {
+      "operation": "coord.status",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/history.md",
+      "trigger": "status command renders read-only coordination state",
+      "input_fields": [
+        "session_id"
+      ],
+      "output_fields": [
+        "dashboard"
+      ],
+      "legacy_source_function": "status-dashboard:render"
+    },
+    {
+      "operation": "worktree.create-seed",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/init.md",
+      "trigger": "init creates one isolated seed worktree",
+      "input_fields": [
+        "session_id",
+        "seed_id",
+        "base_commit"
+      ],
+      "output_fields": [
+        "seed_id",
+        "worktree_path",
+        "branch",
+        "head"
+      ],
+      "legacy_source_function": "session-helper:create_seed_worktree"
+    },
+    {
+      "operation": "worktree.validate-seed",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/resume.md",
+      "trigger": "resume and post-block validation authenticate a seed worktree",
+      "input_fields": [
+        "session_id",
+        "seed_id",
+        "pre_dispatch_head"
+      ],
+      "output_fields": [
+        "clean",
+        "branch",
+        "head",
+        "worktree_path"
+      ],
+      "legacy_source_function": "session-helper:validate_seed_worktree"
+    },
+    {
+      "operation": "worktree.remove-seed",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/archive.md",
+      "trigger": "approved seed cleanup removes only the owned worktree",
+      "input_fields": [
+        "session_id",
+        "seed_id"
+      ],
+      "output_fields": [
+        "removed",
+        "pruned",
+        "worktree_path"
+      ],
+      "legacy_source_function": "session-helper:remove_seed_worktree"
+    },
+    {
+      "operation": "worktree.create-synthesis",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/synthesis.md",
+      "trigger": "synthesis creates its isolated integration worktree",
+      "input_fields": [
+        "session_id",
+        "baseline_commit"
+      ],
+      "output_fields": [
+        "worktree_path",
+        "branch",
+        "baseline_commit"
+      ],
+      "legacy_source_function": "session-helper:create_synthesis_worktree"
+    },
+    {
+      "operation": "worktree.cleanup-failed-synthesis",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/synthesis.md",
+      "trigger": "failed synthesis preserves a recovery bundle before cleanup",
+      "input_fields": [
+        "session_id"
+      ],
+      "output_fields": [
+        "cleaned",
+        "noop",
+        "orphan",
+        "resumed",
+        "failed_branch",
+        "recovery_path"
+      ],
+      "legacy_source_function": "session-helper:cleanup_failed_synthesis_worktree"
+    },
+    {
+      "operation": "archive.backtrack",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/archive.md",
+      "trigger": "operator backtracks to an archived code candidate",
+      "input_fields": [
+        "session_id",
+        "candidates",
+        "strategy",
+        "fork_number",
+        "reason",
+        "program_context"
+      ],
+      "output_fields": [
+        "selected",
+        "branch",
+        "previous_branch",
+        "commit",
+        "metadata_path"
+      ],
+      "legacy_source_function": "archive protocol:code backtrack"
+    },
+    {
+      "operation": "archive.save-strategy",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/archive.md",
+      "trigger": "outer-loop saves a strategy snapshot",
+      "input_fields": [
+        "session_id",
+        "generation",
+        "metrics"
+      ],
+      "output_fields": [
+        "generation",
+        "archive_path"
+      ],
+      "legacy_source_function": "archive protocol:strategy save"
+    },
+    {
+      "operation": "archive.restore-strategy",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/archive.md",
+      "trigger": "operator restores an archived strategy snapshot",
+      "input_fields": [
+        "session_id",
+        "generation"
+      ],
+      "output_fields": [
+        "generation",
+        "restored"
+      ],
+      "legacy_source_function": "archive protocol:strategy restore"
+    },
+    {
+      "operation": "archive.fork-strategy",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/archive.md",
+      "trigger": "operator forks a new session from archived strategy",
+      "input_fields": [
+        "session_id",
+        "generations"
+      ],
+      "output_fields": [
+        "selected",
+        "restored",
+        "children_count"
+      ],
+      "legacy_source_function": "archive protocol:strategy fork"
+    },
+    {
+      "operation": "synthesis.process-beta",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/init.md",
+      "trigger": "init validates and diversifies seed directions",
+      "input_fields": [
+        "mode",
+        "n",
+        "project_analysis",
+        "existing_seeds",
+        "input"
+      ],
+      "output_fields": [
+        "skipped",
+        "reason",
+        "directions",
+        "direction",
+        "retries_used",
+        "max_similarity_observed",
+        "warning_emitted",
+        "warning_context"
+      ],
+      "legacy_source_function": "beta-process:process"
+    },
+    {
+      "operation": "synthesis.select-baseline",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/synthesis.md",
+      "trigger": "synthesis chooses the deterministic baseline candidate",
+      "input_fields": [
+        "seeds"
+      ],
+      "output_fields": [
+        "chosen_seed_id",
+        "tier",
+        "ties_broken_on",
+        "candidates_count",
+        "baseline_selection_reasoning"
+      ],
+      "legacy_source_function": "baseline-select:select"
+    },
+    {
+      "operation": "synthesis.forum-summary",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/synthesis.md",
+      "trigger": "epoch boundary or synthesis summarizes forum evidence",
+      "input_fields": [
+        "session_id",
+        "generation"
+      ],
+      "output_fields": [
+        "output_path",
+        "markdown"
+      ],
+      "legacy_source_function": "forum-summary:generate"
+    },
+    {
+      "operation": "synthesis.cross-seed-audit",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/synthesis.md",
+      "trigger": "synthesis audits cross-seed provenance and contamination",
+      "input_fields": [
+        "session_id"
+      ],
+      "output_fields": [
+        "output_path",
+        "markdown"
+      ],
+      "legacy_source_function": "cross-seed-audit:run"
+    },
+    {
+      "operation": "synthesis.write-fallback-note",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/synthesis.md",
+      "trigger": "no safe merge path records a deterministic fallback note",
+      "input_fields": [
+        "session_id",
+        "baseline_reasoning",
+        "synthesis_q",
+        "baseline_q",
+        "user_choice"
+      ],
+      "output_fields": [
+        "output_path",
+        "markdown"
+      ],
+      "legacy_source_function": "fallback-note:write"
+    },
+    {
+      "operation": "synthesis.collect",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/synthesis.md",
+      "trigger": "synthesis collects authenticated seed results",
+      "input_fields": [
+        "seed_reports",
+        "baseline_selection",
+        "cross_seed_audit"
+      ],
+      "output_fields": [
+        "seed_reports",
+        "baseline_selection",
+        "cross_seed_audit"
+      ],
+      "legacy_source_function": "synthesis-collect:collect"
+    },
+    {
+      "operation": "synthesis.finalize",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/synthesis.md",
+      "trigger": "a consented synthesis outcome is finalized",
+      "input_fields": [
+        "n",
+        "baseline_q",
+        "synthesis_q",
+        "regression_tolerance",
+        "user_choice"
+      ],
+      "output_fields": [
+        "outcome",
+        "fallback_triggered",
+        "classification",
+        "choice_id"
+      ],
+      "legacy_source_function": "synthesis-finalize:finalize"
+    },
+    {
+      "operation": "transfer.lookup",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/transfer.md",
+      "trigger": "init searches the shared meta archive for applicable knowledge",
+      "input_fields": [
+        "selected_id"
+      ],
+      "output_fields": [
+        "entries",
+        "source_id",
+        "source_schema_version",
+        "n_prior",
+        "weights",
+        "virtual_parallel",
+        "program_versions",
+        "warnings"
+      ],
+      "legacy_source_function": "meta-archive:lookup"
+    },
+    {
+      "operation": "transfer.record",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/transfer.md",
+      "trigger": "completion records reusable project learnings",
+      "input_fields": [
+        "entry",
+        "source_id",
+        "this_session_success"
+      ],
+      "output_fields": [
+        "pending",
+        "records",
+        "recorded_id",
+        "source_updated"
+      ],
+      "legacy_source_function": "meta-archive:record"
+    },
+    {
+      "operation": "transfer.prune",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/transfer.md",
+      "trigger": "confirmed maintenance prunes superseded archive entries",
+      "input_fields": [
+        "selected_ids"
+      ],
+      "output_fields": [
+        "candidates",
+        "pruned",
+        "total"
+      ],
+      "legacy_source_function": "meta-archive:prune"
+    },
+    {
+      "operation": "transfer.export-feedback",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/transfer.md",
+      "trigger": "completion exports consented cross-plugin feedback through immutable publication identity",
+      "input_fields": [
+        "payload",
+        "source_artifacts",
+        "session_id",
+        "publication_id",
+        "expected_session_sha256"
+      ],
+      "output_fields": [
+        "envelope",
+        "artifact_path",
+        "artifact_sha256",
+        "publication_id",
+        "replayed"
+      ],
+      "legacy_source_function": "feedback-export:emit"
+    },
+    {
+      "operation": "artifact.wrap-receipt",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/completion.md",
+      "trigger": "completion wraps the evolve receipt in the suite envelope through immutable publication identity",
+      "input_fields": [
+        "payload",
+        "parent_run_id",
+        "session_id",
+        "source_artifacts",
+        "source_recurring_findings",
+        "publication_id",
+        "expected_session_sha256",
+        "legacy_artifact_sha256"
+      ],
+      "output_fields": [
+        "envelope",
+        "artifact_path",
+        "artifact_sha256",
+        "publication_id",
+        "replayed"
+      ],
+      "legacy_source_function": "wrap-evolve-envelope:wrap"
+    },
+    {
+      "operation": "artifact.wrap-insights",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/taxonomy.md",
+      "trigger": "classified insights are wrapped for suite consumers through immutable publication identity",
+      "input_fields": [
+        "payload",
+        "session_id",
+        "source_artifacts",
+        "publication_id",
+        "expected_session_sha256",
+        "legacy_artifact_sha256"
+      ],
+      "output_fields": [
+        "envelope",
+        "artifact_path",
+        "artifact_sha256",
+        "publication_id",
+        "replayed"
+      ],
+      "legacy_source_function": "wrap-evolve-envelope:wrapInsights"
+    },
+    {
+      "operation": "artifact.emit-compaction",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/completion.md",
+      "trigger": "loop epoch completion emits compaction state through immutable publication identity",
+      "input_fields": [
+        "payload",
+        "parent_run_id",
+        "session_id",
+        "source_artifacts",
+        "publication_id",
+        "expected_session_sha256"
+      ],
+      "output_fields": [
+        "envelope",
+        "artifact_path",
+        "artifact_sha256",
+        "publication_id",
+        "replayed"
+      ],
+      "legacy_source_function": "emit-compaction-state:emit"
+    },
+    {
+      "operation": "artifact.emit-handoff",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/completion.md",
+      "trigger": "completion emits an optional reverse handoff through immutable publication identity",
+      "input_fields": [
+        "payload",
+        "parent_run_id",
+        "session_id",
+        "source_artifacts",
+        "publication_id",
+        "expected_session_sha256"
+      ],
+      "output_fields": [
+        "envelope",
+        "artifact_path",
+        "artifact_sha256",
+        "publication_id",
+        "replayed"
+      ],
+      "legacy_source_function": "emit-handoff:emit"
+    },
+    {
+      "operation": "harness.generate",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/init.md",
+      "trigger": "init creates the fixed Node evaluation harness",
+      "input_fields": [
+        "session_id",
+        "spec"
+      ],
+      "output_fields": [
+        "kind",
+        "harness_path",
+        "config_path"
+      ],
+      "legacy_source_function": "init harness template generation"
+    },
+    {
+      "operation": "harness.migrate-legacy",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/resume.md",
+      "trigger": "resume recognizes and safely migrates an old CLI harness",
+      "input_fields": [
+        "session_id"
+      ],
+      "output_fields": [
+        "migrated",
+        "kind",
+        "engine_sha256",
+        "harness_path",
+        "config_path"
+      ],
+      "legacy_source_function": "harness-runtime:migrateLegacyHarness"
+    },
+    {
+      "operation": "harness.run",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/inner-loop.md",
+      "trigger": "inner-loop evaluates baseline or experiment through Node",
+      "input_fields": [
+        "session_id",
+        "options"
+      ],
+      "output_fields": [
+        "exit_code",
+        "signal",
+        "stdout",
+        "stderr",
+        "timed_out",
+        "error_code"
+      ],
+      "legacy_source_function": "evaluation harness invocation"
+    },
+    {
+      "operation": "harness.write-baseline",
+      "owning_protocol": "skills/deep-evolve-workflow/protocols/init.md",
+      "trigger": "init stores the validated baseline score",
+      "input_fields": [
+        "session_id",
+        "raw_score"
+      ],
+      "output_fields": [
+        "baseline_score",
+        "config_path"
+      ],
+      "legacy_source_function": "init baseline writeback"
+    }
+  ]
+}

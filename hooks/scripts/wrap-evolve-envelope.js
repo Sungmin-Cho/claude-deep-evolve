@@ -224,6 +224,109 @@ function parseSourceArtifactSpec(spec) {
   return { path: spec };
 }
 
+function regularSourceArtifact(filePath) {
+  if (!fs.existsSync(filePath)) return false;
+  const stat = fs.lstatSync(filePath);
+  if (stat.isSymbolicLink()) {
+    const error = new Error(`source artifact must not be a symlink: ${filePath}`);
+    error.code = 'source_artifact_symlink';
+    error.rc = 2;
+    throw error;
+  }
+  if (!stat.isFile()) {
+    const error = new Error(`source artifact must be a regular file: ${filePath}`);
+    error.code = 'source_artifact_invalid';
+    error.rc = 2;
+    throw error;
+  }
+  return true;
+}
+
+function normalizeSourceArtifacts(sourceArtifacts) {
+  if (!Array.isArray(sourceArtifacts)) {
+    const error = new Error('sourceArtifacts must be an array');
+    error.code = 'invalid_source_artifacts';
+    error.rc = 2;
+    throw error;
+  }
+  return sourceArtifacts.map((source, index) => {
+    const keys = source && typeof source === 'object' && !Array.isArray(source)
+      ? Object.keys(source) : [];
+    const hasRunId = keys.includes('run_id');
+    if (!source || typeof source !== 'object' || Array.isArray(source)
+        || Object.getPrototypeOf(source) !== Object.prototype
+        || !keys.includes('path')
+        || keys.some((key) => !['path', 'run_id'].includes(key))
+        || typeof source.path !== 'string' || source.path.length === 0
+        || (hasRunId && (typeof source.run_id !== 'string' || !env.ULID_RE.test(source.run_id)))) {
+      const error = new Error(
+        `sourceArtifacts[${index}] must contain only path and optional valid run_id`,
+      );
+      error.code = 'invalid_source_artifact';
+      error.rc = 2;
+      throw error;
+    }
+    return { path: source.path, ...(hasRunId ? { run_id: source.run_id } : {}) };
+  });
+}
+
+/**
+ * Library entry used by the Task 5 dispatcher. It deliberately performs the
+ * same identity harvesting as the CLI without starting the wrapper process.
+ */
+function wrapEvolveArtifact({
+  artifactKind,
+  payload,
+  parentRunId,
+  sessionId,
+  sourceArtifacts = [],
+  sourceRecurringFindings,
+  envelopeOptions = {},
+  sourceArtifactsAuthenticated = false,
+} = {}) {
+  const allowed = new Set(['evolve-receipt', 'evolve-insights']);
+  if (!allowed.has(artifactKind)) {
+    const error = new Error(`artifactKind must be one of ${[...allowed].join(', ')}`);
+    error.code = 'invalid_artifact_kind';
+    error.rc = 2;
+    throw error;
+  }
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+    const error = new Error('payload must be a non-null, non-array object');
+    error.code = 'invalid_artifact_payload';
+    error.rc = 2;
+    throw error;
+  }
+  const sources = [];
+  let parent = parentRunId;
+  if (sourceRecurringFindings) {
+    const absolute = path.resolve(sourceRecurringFindings);
+    regularSourceArtifact(absolute);
+    const runId = tryReadEnvelopeRunId(absolute, {
+      producer: 'deep-review', artifactKind: 'recurring-findings',
+    });
+    sources.push({ path: sourceRecurringFindings, ...(runId ? { run_id: runId } : {}) });
+    if (artifactKind === 'evolve-receipt' && !parent && runId) parent = runId;
+  }
+  for (const source of normalizeSourceArtifacts(sourceArtifacts)) {
+    let runId = typeof source.run_id === 'string' ? source.run_id : null;
+    if (!sourceArtifactsAuthenticated) {
+      const absolute = path.resolve(source.path);
+      const exists = regularSourceArtifact(absolute);
+      if (!runId && exists) runId = tryReadEnvelopeRunId(absolute, { selfConsistent: true });
+    }
+    sources.push({ path: source.path, ...(runId ? { run_id: runId } : {}) });
+  }
+  return env.wrapEnvelope({
+    ...envelopeOptions,
+    artifactKind,
+    payload,
+    parentRunId: parent,
+    sessionId,
+    sourceArtifacts: sources,
+  });
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const required = ['artifact-kind', 'payload-file', 'output'];
@@ -367,4 +470,8 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { parseSourceArtifactSpec, tryReadEnvelopeRunId };
+module.exports = {
+  parseSourceArtifactSpec,
+  tryReadEnvelopeRunId,
+  wrapEvolveArtifact,
+};
