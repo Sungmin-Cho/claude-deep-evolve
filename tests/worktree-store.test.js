@@ -309,6 +309,29 @@ test('seed remove is idempotent and prunes a manually deleted worktree registrat
   assert.equal(git(repo.projectRoot, ['rev-parse', created.branch]).trim(), repo.baseline);
 });
 
+test('seed remove recognizes a missing worktree registration reported through a filesystem alias', () => {
+  const repo = repository();
+  const created = createSeedWorktree(seedOptions(repo, 12));
+  const aliasRoot = path.join(repo.parent, 'project alias');
+  fs.symlinkSync(repo.projectRoot, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir');
+  const aliasWorktree = path.join(aliasRoot, '.deep-evolve', repo.sessionId, 'worktrees', 'seed_12');
+  fs.rmSync(created.worktree_path, { recursive: true, force: true });
+  const spawn = (command, args, options) => {
+    if (args.includes('worktree') && args.includes('list') && args.includes('--porcelain')) {
+      return {
+        status: 0,
+        stdout: `worktree ${aliasWorktree}\nHEAD ${repo.baseline}\nbranch refs/heads/${created.branch}\nprunable missing target\n\n`,
+        stderr: '',
+      };
+    }
+    return spawnSync(command, args, options);
+  };
+  const result = removeSeedWorktree(seedOptions(repo, 12, { spawnSync: spawn }));
+  assert.equal(result.removed, false);
+  assert.equal(result.pruned, true);
+  assert.equal(git(repo.projectRoot, ['rev-parse', created.branch]).trim(), repo.baseline);
+});
+
 test('seed validation accepts descendants and rejects rewritten off-branch history', () => {
   const repo = repository();
   const created = createSeedWorktree(seedOptions(repo, 3));

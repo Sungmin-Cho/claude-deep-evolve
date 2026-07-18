@@ -441,7 +441,7 @@ test('a parent swap after temp flush cannot redirect install or delete foreign c
         if (phase !== 'after-artifact-temp-flush' || swapped) return;
         swapped = true;
         fs.renameSync(targetParent, displacedParent);
-        fs.symlinkSync(outside, targetParent);
+        fs.symlinkSync(outside, targetParent, process.platform === 'win32' ? 'junction' : 'dir');
       },
     },
   });

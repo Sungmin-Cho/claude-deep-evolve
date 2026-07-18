@@ -178,8 +178,24 @@ function validateSeedWorktree(options) {
 function registeredWorktree(projectRoot, worktreePath, options = {}) {
   const output = String(gitOk(projectRoot, ['worktree', 'list', '--porcelain'], options).stdout);
   const canonical = (value) => {
-    const resolved = path.resolve(value).replace(/\\/g, '/');
-    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    let resolved = path.resolve(value);
+    const missing = [];
+    let current = resolved;
+    for (;;) {
+      try {
+        const physical = fs.realpathSync.native(current);
+        resolved = path.join(physical, ...missing);
+        break;
+      } catch (error) {
+        if (!error || !['ENOENT', 'ENOTDIR'].includes(error.code)) break;
+        const parent = path.dirname(current);
+        if (parent === current) break;
+        missing.unshift(path.basename(current));
+        current = parent;
+      }
+    }
+    const normalized = resolved.replace(/\\/g, '/');
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
   };
   const expected = canonical(worktreePath);
   return output.split(/\r?\n/).some((line) => line.startsWith('worktree ')

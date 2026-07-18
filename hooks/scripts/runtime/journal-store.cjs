@@ -358,7 +358,9 @@ function recoverMarker(stateRoot, marker, markerName, options, projectHandle) {
   verifyEvidence(marker, paths, io);
   const source = resolveRelativeJsonl(stateRoot, marker.source_relative_path, REPAIR_FILES).target;
   const stage = path.resolve(paths.transactions, marker.staged_artifact_path);
-  if (!isPathInside(paths.transactions, stage, platform)) fail('quarantine_stage_escape', 'staged artifact escaped transaction recovery root');
+  // These paths were constructed with the native path API. options.platform
+  // only simulates durability behavior in tests and must not reinterpret them.
+  if (!isPathInside(paths.transactions, stage, process.platform)) fail('quarantine_stage_escape', 'staged artifact escaped transaction recovery root');
   const expectedStagedIdentity = sha256(Buffer.from(canonicalJson({
     path: marker.staged_artifact_path,
     sha256: marker.staged_artifact_sha256,
