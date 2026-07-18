@@ -22,11 +22,13 @@ test('Codex uses one default-discovered Node guard and no plugin-level hook supp
   assert.deepEqual(registration.hooks[0], {
     type: 'command',
     command: 'node "${PLUGIN_ROOT}/hooks/scripts/protect-readonly.cjs"',
-    commandWindows: 'node "${PLUGIN_ROOT}\\hooks\\scripts\\protect-readonly.cjs"',
+    commandWindows: 'node "${PLUGIN_ROOT}\\hooks\\scripts\\protect-readonly.cjs" ; exit $LASTEXITCODE',
     timeout: 5,
   });
   assert.doesNotMatch(registration.hooks[0].commandWindows, /%PLUGIN_ROOT%/,
     'Codex runs Windows hooks through PowerShell, so cmd.exe-only expansion would fail open');
+  assert.match(registration.hooks[0].commandWindows, /" ; exit \$LASTEXITCODE$/,
+    'PowerShell must propagate the native Node guard exit code to Codex');
   assert.equal(Object.hasOwn(registration.hooks[0], 'args'), false);
   assert.doesNotMatch(registration.matcher, /Read|Write|Edit|MultiEdit/);
 });
