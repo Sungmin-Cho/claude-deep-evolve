@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { TextDecoder } = require('node:util');
 
 const LOOPBACK_MODEL = 'deep-evolve-loopback-contract-v1';
 const PUBLIC_CLAUDE_HEADER = 'deep-evolve-loopback-public-v1';
@@ -45,6 +46,11 @@ const CODEX_ITEM_ID = 'ctc_loopback_1';
 const CLAUDE_TOOL_ID = 'toolu_loopback_1';
 const CAPTURE_SOURCE = 'actual_exact_pinned_host';
 const MODEL_SOURCE = 'deterministic_loopback_protocol_v1';
+const PINNED_CODEX_GUARD_DENIAL = 'Deep Evolve Guard: active sessions protect prepare.cjs, '
+  + 'prepare.config.json, legacy prepare.py, prepare-protocol.md, program.md, and strategy.yaml. '
+  + 'Use the matching meta mode for an authorized policy update.';
+const PINNED_CODEX_HOOK_TRUST_WARNING = '`--dangerously-bypass-hook-trust` is enabled. '
+  + 'Enabled hooks may run without review for this invocation.';
 
 const ACCEPTED_POINTERS = Object.freeze({
   codex: Object.freeze(['/tool_name', '/tool_input/command']),
@@ -52,8 +58,7 @@ const ACCEPTED_POINTERS = Object.freeze({
     '/hook_event_name',
     '/tool_name',
     '/tool_input/file_path',
-    '/tool_input/old_string',
-    '/tool_input/new_string',
+    '/tool_input/content',
   ]),
 });
 
@@ -151,7 +156,14 @@ function buildCodexConfig({ origin, modelCatalogPath }) {
     `model = "${LOOPBACK_MODEL}"`,
     'model_provider = "deep_evolve_loopback"',
     `model_catalog_json = ${JSON.stringify(exactCatalogPath)}`,
+    'chatgpt_base_url = "http://127.0.0.1:9"',
     'check_for_update_on_startup = false',
+    '',
+    '[analytics]',
+    'enabled = false',
+    '',
+    '[windows]',
+    'sandbox = "unelevated"',
     '',
     '[model_providers.deep_evolve_loopback]',
     'name = "Deep Evolve loopback contract"',
@@ -197,6 +209,8 @@ function buildIsolatedHostEnv({ host, home, codexHome, claudeConfigDir, origin, 
     env.CLAUDE_CONFIG_DIR = requireAbsolutePath(claudeConfigDir, 'claudeConfigDir');
     env.ANTHROPIC_BASE_URL = exactOrigin;
     env.ANTHROPIC_API_KEY = PUBLIC_CLAUDE_HEADER;
+    env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1';
+    env.CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL = '1';
   }
   return env;
 }
@@ -315,9 +329,9 @@ function claudeDeniedResult(body, targetPath) {
   if (results.length !== 1 || candidates.length !== 1 || candidates[0].is_error !== true) return null;
   const toolUses = objects.filter((value) => value.type === 'tool_use');
   const calls = toolUses.filter((value) => value.type === 'tool_use'
-    && value.id === CLAUDE_TOOL_ID && value.name === 'Edit'
+    && value.id === CLAUDE_TOOL_ID && value.name === 'Write'
     && plainObject(value.input) && value.input.file_path === targetPath
-    && value.input.old_string === 'before' && value.input.new_string === 'after');
+    && value.input.content === 'after');
   if (toolUses.length !== 1 || calls.length !== 1) return null;
   const text = typeof candidates[0].content === 'string'
     ? candidates[0].content
@@ -420,8 +434,7 @@ function terminalCodexEvents() {
 function firstClaudeEvents(targetPath) {
   const input = JSON.stringify({
     file_path: targetPath,
-    old_string: 'before',
-    new_string: 'after',
+    content: 'after',
   });
   return [
     { event: 'message_start', data: {
@@ -434,7 +447,7 @@ function firstClaudeEvents(targetPath) {
     } },
     { event: 'content_block_start', data: {
       type: 'content_block_start', index: 0,
-      content_block: { type: 'tool_use', name: 'Edit', id: CLAUDE_TOOL_ID, input: {} },
+      content_block: { type: 'tool_use', name: 'Write', id: CLAUDE_TOOL_ID, input: {} },
     } },
     { event: 'content_block_delta', data: {
       type: 'content_block_delta', index: 0,
@@ -502,8 +515,16 @@ async function createLoopbackDriver({ host, targetPath, receiptPath }) {
   if (!['codex', 'claude'].includes(host)) throw fail('host must be codex or claude');
   const exactTarget = requireAbsolutePath(targetPath, 'targetPath');
   const exactReceipt = requireAbsolutePath(receiptPath, 'receiptPath');
-  if (!fs.existsSync(exactTarget) || !fs.statSync(exactTarget).isFile()) {
-    throw fail('targetPath must identify the prepared protected file');
+  if (host === 'codex') {
+    if (!fs.existsSync(exactTarget) || !fs.statSync(exactTarget).isFile()) {
+      throw fail('Codex targetPath must identify the prepared protected file');
+    }
+  } else {
+    const parent = path.dirname(exactTarget);
+    if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()
+      || (fs.existsSync(exactTarget) && !fs.statSync(exactTarget).isFile())) {
+      throw fail('Claude targetPath must be an absent or existing file in a prepared directory');
+    }
   }
 
   const receipt = {
@@ -548,7 +569,7 @@ async function createLoopbackDriver({ host, targetPath, receiptPath }) {
     }
     try {
       if (request.method !== 'POST') throw fail('provider requires POST', 'invalid_method');
-      const expectedPath = host === 'codex' ? '/v1/responses' : '/v1/messages';
+      const expectedPath = host === 'codex' ? '/v1/responses' : '/v1/messages?beta=true';
       if (request.url !== expectedPath) throw fail('unexpected provider route', 'invalid_route');
       const body = await readJsonBody(request);
       requestRecord.body_sha256 = sha256(JSON.stringify(body));
@@ -597,15 +618,13 @@ async function createLoopbackDriver({ host, targetPath, receiptPath }) {
       }
       if (requestCount === 1) {
         const tools = Array.isArray(body.tools) ? body.tools : [];
-        const editTools = tools.filter((tool) => plainObject(tool) && tool.name === 'Edit');
-        const unexpected = tools.filter((tool) => !plainObject(tool)
-          || !['Edit', 'Write', 'MultiEdit'].includes(tool.name));
-        if (editTools.length !== 1 || unexpected.length > 0
+        const writeTools = tools.filter((tool) => plainObject(tool) && tool.name === 'Write');
+        if (tools.length !== 1 || writeTools.length !== 1
           || !bodyContainsExactPath(body.messages, exactTarget)) {
-          throw fail('first Claude request must advertise Edit and the fixed target',
+          throw fail('first Claude request must advertise only Write and the fixed target',
             'unsupported_pinned_claude_provider_contract');
         }
-        requestRecord.result = 'one_edit_emitted';
+        requestRecord.result = 'one_write_emitted';
         sendSse(response, firstClaudeEvents(exactTarget));
         return;
       }
@@ -672,17 +691,252 @@ async function createLoopbackDriver({ host, targetPath, receiptPath }) {
   return { origin, proxyOrigin, close, completedReceipt };
 }
 
+function normalizeTransportNewlines(source, label) {
+  const normalized = source.replace(/\r\n/g, '\n');
+  if (normalized.includes('\r')) {
+    throw fail(`${label} contains a non-CRLF carriage return`, 'invalid_host_stream');
+  }
+  return normalized;
+}
+
+function decodeUtf8(buffer, label) {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+  } catch {
+    throw fail(`${label} must be valid UTF-8`, 'invalid_host_stream');
+  }
+}
+
 function parseJsonl(rawJsonl) {
-  if (typeof rawJsonl !== 'string' || !rawJsonl.trim()) {
+  if (typeof rawJsonl !== 'string' || !rawJsonl.endsWith('\n')) {
     throw fail('rawJsonl must contain the complete actual-host stream', 'invalid_host_stream');
   }
-  return rawJsonl.trim().split(/\r?\n/).map((line, index) => {
+  const lines = rawJsonl.slice(0, -1).split('\n');
+  if (lines.length === 0 || lines.some((line) => line.length === 0)) {
+    throw fail('rawJsonl must contain only complete nonempty JSON lines', 'invalid_host_stream');
+  }
+  return lines.map((line, index) => {
     try {
       return JSON.parse(line);
     } catch {
       throw fail(`rawJsonl line ${index + 1} is not JSON`, 'invalid_host_stream');
     }
   });
+}
+
+function exactCodexWarning(record, id) {
+  return JSON.stringify(record) === JSON.stringify({
+    type: 'item.completed',
+    item: { id, type: 'error', message: PINNED_CODEX_HOOK_TRUST_WARNING },
+  });
+}
+
+function validateCodexStdout(records) {
+  const threadId = records[0]?.thread_id;
+  if (typeof threadId !== 'string' || !threadId) {
+    throw fail('Codex stdout is missing its typed thread ID', 'invalid_host_stream');
+  }
+  const expected = [
+    { type: 'thread.started', thread_id: threadId },
+    { type: 'item.completed', item: { id: 'item_0', type: 'error',
+      message: PINNED_CODEX_HOOK_TRUST_WARNING } },
+    { type: 'item.completed', item: { id: 'item_1', type: 'error',
+      message: PINNED_CODEX_HOOK_TRUST_WARNING } },
+    { type: 'turn.started' },
+    { type: 'item.completed', item: { id: 'item_2', type: 'agent_message',
+      text: 'The protected edit was denied.' } },
+    { type: 'turn.completed', usage: { input_tokens: 2, cached_input_tokens: 0,
+      output_tokens: 2, reasoning_output_tokens: 0 } },
+  ];
+  if (JSON.stringify(records) !== JSON.stringify(expected)) {
+    throw fail('Codex stdout differs from the exact pinned stream grammar',
+      'invalid_host_stream');
+  }
+  return threadId;
+}
+
+function validIsoTimestamp(timestamp) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/
+    .exec(timestamp);
+  if (!match) return false;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  if (month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) {
+    return false;
+  }
+  return day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function parseCodexRouter(rawStderr, targetPath, threadId, rawStderrSha256) {
+  let stream = normalizeTransportNewlines(rawStderr, 'Codex stderr');
+  const readingPrefix = 'Reading additional input from stdin...\n';
+  if (stream.startsWith(readingPrefix)) stream = stream.slice(readingPrefix.length);
+  const firstNewline = stream.indexOf('\n');
+  if (firstNewline === -1) {
+    throw fail('Codex stderr is missing the complete router record', 'invalid_host_stream');
+  }
+  const header = stream.slice(0, firstNewline);
+  const timestampEnd = header.indexOf(' ');
+  const timestamp = timestampEnd === -1 ? '' : header.slice(0, timestampEnd);
+  if (!validIsoTimestamp(timestamp)) {
+    throw fail('Codex router timestamp is not an exact valid ISO UTC timestamp',
+      'invalid_host_stream');
+  }
+  const marker = ' ERROR codex_core::tools::router: error=Command blocked by PreToolUse hook: '
+    + `${PINNED_CODEX_GUARD_DENIAL}. Command: *** Begin Patch`;
+  if (header !== `${timestamp}${marker}`) {
+    throw fail('Codex stderr differs from the exact pinned router denial',
+      'invalid_host_stream');
+  }
+  const command = [
+    '*** Begin Patch',
+    `*** Update File: ${targetPath}`,
+    '@@',
+    '-before',
+    '+after',
+    '*** End Patch',
+  ].join('\n');
+  const expectedTail = `${command.split('\n').slice(1).join('\n')}\n`;
+  if (stream.slice(firstNewline + 1) !== expectedTail) {
+    throw fail('Codex stderr patch body differs from the exact calculated target',
+      'invalid_host_stream');
+  }
+  const provenance = {
+    source: 'actual_exact_pinned_host_stderr',
+    raw_stderr_sha256: rawStderrSha256,
+  };
+  return {
+    attempt: {
+      thread_id: threadId,
+      tool_name: 'apply_patch',
+      tool_input: { command },
+      provenance: { ...provenance },
+    },
+    denial: {
+      thread_id: threadId,
+      type: 'hook_denial',
+      message: PINNED_CODEX_GUARD_DENIAL,
+      provenance: { ...provenance },
+    },
+  };
+}
+
+function exactClaudeWriteInput(value, targetPath) {
+  return plainObject(value)
+    && Object.keys(value).length === 2
+    && value.file_path === targetPath
+    && value.content === 'after';
+}
+
+function parseClaudeLifecycle(records, targetPath, rawStreamSha256) {
+  const invalid = () => {
+    throw fail('actual host stream differs from the exact pinned Claude lifecycle',
+      'invalid_host_stream');
+  };
+  if (!Array.isArray(records) || records.length !== 7) invalid();
+  const [init, firstAssistant, hookStarted, hookResponse, userResult,
+    terminalAssistant, result] = records;
+  const sessionId = init && init.session_id;
+  const projectRoot = path.dirname(path.dirname(path.dirname(targetPath)));
+  if (typeof sessionId !== 'string' || !sessionId
+    || records.some((record) => !plainObject(record) || record.session_id !== sessionId)
+    || init.type !== 'system' || init.subtype !== 'init' || init.cwd !== projectRoot
+    || !Array.isArray(init.tools) || init.tools.length !== 1 || init.tools[0] !== 'Write'
+    || init.model !== LOOPBACK_MODEL || init.permissionMode !== 'bypassPermissions'
+    || init.claude_code_version !== '2.1.207'
+    || !Array.isArray(init.plugins) || init.plugins.length !== 1
+    || !plainObject(init.plugins[0]) || init.plugins[0].name !== 'deep-evolve'
+    || init.plugins[0].source !== 'deep-evolve@deep-evolve-loopback') invalid();
+
+  const firstMessage = firstAssistant.message;
+  const firstContent = plainObject(firstMessage) && Array.isArray(firstMessage.content)
+    ? firstMessage.content : [];
+  const toolUse = firstContent[0];
+  if (firstAssistant.type !== 'assistant' || !plainObject(firstMessage)
+    || firstMessage.id !== 'msg_loopback_1' || firstMessage.type !== 'message'
+    || firstMessage.role !== 'assistant' || firstMessage.model !== LOOPBACK_MODEL
+    || firstMessage.stop_reason !== null || firstContent.length !== 1
+    || !plainObject(toolUse) || toolUse.type !== 'tool_use' || toolUse.name !== 'Write'
+    || toolUse.id !== CLAUDE_TOOL_ID || !exactClaudeWriteInput(toolUse.input, targetPath)) invalid();
+
+  const hookId = hookStarted.hook_id;
+  if (hookStarted.type !== 'system' || hookStarted.subtype !== 'hook_started'
+    || typeof hookId !== 'string' || !hookId
+    || hookStarted.hook_name !== 'PreToolUse:Write'
+    || hookStarted.hook_event !== 'PreToolUse') invalid();
+  const hookOutput = `${PINNED_CODEX_GUARD_DENIAL}\n`;
+  if (hookResponse.type !== 'system' || hookResponse.subtype !== 'hook_response'
+    || hookResponse.hook_id !== hookId || hookResponse.hook_name !== 'PreToolUse:Write'
+    || hookResponse.hook_event !== 'PreToolUse' || hookResponse.output !== hookOutput
+    || hookResponse.stdout !== '' || hookResponse.stderr !== hookOutput
+    || hookResponse.exit_code !== 2 || hookResponse.outcome !== 'error') invalid();
+
+  const toolResultText = `PreToolUse:Write hook error: [node \${CLAUDE_PLUGIN_ROOT}`
+    + `/hooks/scripts/protect-readonly.cjs]: ${hookOutput}`;
+  const userMessage = userResult.message;
+  const userContent = plainObject(userMessage) && Array.isArray(userMessage.content)
+    ? userMessage.content : [];
+  const deniedResult = userContent[0];
+  if (userResult.type !== 'user' || !plainObject(userMessage) || userMessage.role !== 'user'
+    || userContent.length !== 1 || !plainObject(deniedResult)
+    || deniedResult.type !== 'tool_result' || deniedResult.tool_use_id !== CLAUDE_TOOL_ID
+    || deniedResult.is_error !== true || deniedResult.content !== toolResultText
+    || userResult.tool_use_result !== `Error: ${toolResultText}`) invalid();
+
+  const terminalMessage = terminalAssistant.message;
+  const terminalContent = plainObject(terminalMessage) && Array.isArray(terminalMessage.content)
+    ? terminalMessage.content : [];
+  if (terminalAssistant.type !== 'assistant' || !plainObject(terminalMessage)
+    || terminalMessage.id !== 'msg_loopback_2' || terminalMessage.type !== 'message'
+    || terminalMessage.role !== 'assistant' || terminalMessage.model !== LOOPBACK_MODEL
+    || terminalMessage.stop_reason !== null || terminalContent.length !== 1
+    || !plainObject(terminalContent[0]) || terminalContent[0].type !== 'text'
+    || terminalContent[0].text !== 'The protected edit was denied.') invalid();
+
+  const permissionDenials = Array.isArray(result.permission_denials)
+    ? result.permission_denials : [];
+  const terminalDenial = permissionDenials[0];
+  if (result.type !== 'result' || result.subtype !== 'success' || result.is_error !== false
+    || result.result !== 'The protected edit was denied.' || result.stop_reason !== 'end_turn'
+    || result.terminal_reason !== 'completed' || permissionDenials.length !== 1
+    || !plainObject(terminalDenial) || terminalDenial.tool_name !== 'Write'
+    || terminalDenial.tool_use_id !== CLAUDE_TOOL_ID
+    || !exactClaudeWriteInput(terminalDenial.tool_input, targetPath)) invalid();
+
+  const objects = allObjects(records);
+  if (objects.filter((value) => value.type === 'tool_use').length !== 1
+    || objects.filter((value) => value.type === 'tool_result').length !== 1
+    || objects.filter((value) => value.subtype === 'hook_started').length !== 1
+    || objects.filter((value) => value.subtype === 'hook_response').length !== 1
+    || objects.filter((value) => Object.hasOwn(value, 'tool_name')
+      && Object.hasOwn(value, 'tool_use_id') && Object.hasOwn(value, 'tool_input')).length !== 1) {
+    invalid();
+  }
+
+  const provenance = {
+    source: 'actual_exact_pinned_host_stdout',
+    raw_stream_sha256: rawStreamSha256,
+  };
+  return {
+    attempt: {
+      session_id: sessionId,
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Write',
+      tool_input: { file_path: targetPath, content: 'after' },
+      provenance: { ...provenance },
+    },
+    denial: {
+      session_id: sessionId,
+      type: 'hook_denial',
+      message: PINNED_CODEX_GUARD_DENIAL,
+      provenance: { ...provenance },
+    },
+  };
 }
 
 function replaceLiteral(source, from, to) {
@@ -723,9 +977,9 @@ function recordHasTool(record, host, targetPath) {
           '*** End Patch',
         ].join('\n');
     }
-    return value.hook_event_name === 'PreToolUse' && toolName === 'Edit' && plainObject(input)
+    return value.hook_event_name === 'PreToolUse' && toolName === 'Write' && plainObject(input)
       && input.file_path === targetPath
-      && input.old_string === 'before' && input.new_string === 'after';
+      && input.content === 'after';
   });
 }
 
@@ -788,8 +1042,10 @@ function assertProtectedNormalization(host, attempt, denial) {
   const denialText = JSON.stringify(denial);
   const protectedAttempt = host === 'codex'
     ? /apply_patch/.test(attemptText)
-    : /PreToolUse/.test(attemptText) && /Edit/.test(attemptText);
-  if (!protectedAttempt || !/prepare\.cjs/.test(attemptText)
+    : /PreToolUse/.test(attemptText) && /Write/.test(attemptText);
+  const protectedTarget = host === 'codex' ? /prepare\.cjs/.test(attemptText)
+    : /program\.md/.test(attemptText);
+  if (!protectedAttempt || !protectedTarget
     || !/Deep Evolve Guard/.test(denialText)
     || !/(?:denied|block|protect)/i.test(denialText)) {
     throw fail('normalization changed a protected host contract discriminator',
@@ -799,6 +1055,13 @@ function assertProtectedNormalization(host, attempt, denial) {
 
 function validateEvidence(host, evidence) {
   if (!plainObject(evidence)) throw fail('evidence must be an object', 'invalid_provenance');
+  for (const key of ['session_ids', 'provenance', 'replacement', 'replacements',
+    'attempt', 'denial']) {
+    if (Object.hasOwn(evidence, key)) {
+      const label = key === 'session_ids' ? 'session ID normalization' : key;
+      throw fail(`caller-supplied ${label} is forbidden`, 'invalid_provenance');
+    }
+  }
   const version = host === 'codex' ? '0.144.1' : '2.1.207';
   const exact = {
     host,
@@ -816,6 +1079,7 @@ function validateEvidence(host, evidence) {
     ['bootstrap_commit', /^[0-9a-f]{40}$/],
     ['driver_sha256', /^[0-9a-f]{64}$/],
     ['raw_stream_sha256', /^[0-9a-f]{64}$/],
+    ['raw_stderr_sha256', /^[0-9a-f]{64}$/],
   ]) {
     if (!pattern.test(String(evidence[key] || ''))) {
       throw fail(`invalid provenance field: ${key}`, 'invalid_provenance');
@@ -824,8 +1088,13 @@ function validateEvidence(host, evidence) {
   if (!String(evidence.run_id || '') || !String(evidence.job_id || '')) {
     throw fail('run_id and job_id are required', 'invalid_provenance');
   }
-  if (evidence.raw_stream_sha256 !== sha256(evidence.raw_stream_bytes || '')) {
-    throw fail('raw stream hash is not authenticated', 'invalid_provenance');
+  if (!Buffer.isBuffer(evidence.raw_stream_bytes)
+    || !Buffer.isBuffer(evidence.raw_stderr_bytes)) {
+    throw fail('raw stdout and stderr evidence must be Buffers', 'invalid_provenance');
+  }
+  if (evidence.raw_stream_sha256 !== sha256(evidence.raw_stream_bytes)
+    || evidence.raw_stderr_sha256 !== sha256(evidence.raw_stderr_bytes)) {
+    throw fail('raw stdout or stderr hash is not authenticated', 'invalid_provenance');
   }
   if (evidence.attempt_count !== 1 || evidence.denial_count !== 1
     || evidence.successful_mutation_count !== 0) {
@@ -833,28 +1102,54 @@ function validateEvidence(host, evidence) {
   }
 }
 
-function normalizeActualHostRecords({ host, rawJsonl, isolatedRoot, evidence }) {
+function normalizeActualHostRecords({ host, rawStdout, rawStderr, isolatedRoot, evidence }) {
   if (!['codex', 'claude'].includes(host)) throw fail('host must be codex or claude');
   const exactRoot = requireAbsolutePath(isolatedRoot, 'isolatedRoot');
   validateEvidence(host, evidence);
-  if (Object.hasOwn(evidence, 'session_ids')) {
-    throw fail('caller-supplied session ID normalization is forbidden', 'invalid_provenance');
+  if (!Buffer.isBuffer(rawStdout) || !Buffer.isBuffer(rawStderr)) {
+    throw fail('raw stdout and stderr inputs must be Buffers', 'invalid_provenance');
   }
-  if (evidence.raw_stream_bytes !== rawJsonl) {
-    throw fail('raw stream bytes differ from authenticated evidence', 'invalid_provenance');
+  if (!evidence.raw_stream_bytes.equals(rawStdout)
+    || !evidence.raw_stderr_bytes.equals(rawStderr)) {
+    throw fail('raw stdout or stderr bytes differ from authenticated evidence',
+      'invalid_provenance');
   }
-  const records = parseJsonl(rawJsonl);
+  const decodedStdout = normalizeTransportNewlines(decodeUtf8(rawStdout, 'raw stdout'),
+    'raw stdout');
+  const decodedStderr = normalizeTransportNewlines(decodeUtf8(rawStderr, 'raw stderr'),
+    'raw stderr');
+  let records = parseJsonl(decodedStdout);
   const sessionRoot = requireAbsolutePath(evidence.session_root, 'evidence.session_root');
   const sessionRelative = path.relative(exactRoot, sessionRoot);
   if (!sessionRelative || sessionRelative === '..' || sessionRelative.startsWith(`..${path.sep}`)
     || path.isAbsolute(sessionRelative)) {
     throw fail('evidence.session_root must be a child of isolatedRoot', 'invalid_provenance');
   }
-  const targetPath = path.join(sessionRoot, 'prepare.cjs');
-  const attempts = records.filter((record) => recordHasTool(record, host, targetPath));
-  const denials = records.filter(recordHasDenial);
-  const hostToolEnvelopes = records.filter(recordHasHostToolEnvelope);
-  const unexplainedErrors = records.filter(recordIsUnexplainedError);
+  const targetPath = path.join(sessionRoot, host === 'codex' ? 'prepare.cjs' : 'program.md');
+  if (host === 'claude' && rawStderr.length !== 0) {
+    throw fail('Claude stderr must be empty for the exact pinned host stream',
+      'invalid_host_stream');
+  }
+  if (host === 'codex') {
+    const threadId = validateCodexStdout(records);
+    const derived = parseCodexRouter(decodedStderr, targetPath, threadId,
+      evidence.raw_stderr_sha256);
+    records = [...records, derived.attempt, derived.denial];
+  }
+  const claudeDerived = host === 'claude'
+    ? parseClaudeLifecycle(records, targetPath, evidence.raw_stream_sha256) : null;
+  const attempts = claudeDerived ? [claudeDerived.attempt]
+    : records.filter((record) => recordHasTool(record, host, targetPath));
+  const denials = claudeDerived ? [claudeDerived.denial] : records.filter(recordHasDenial);
+  const hostToolEnvelopes = claudeDerived ? [claudeDerived.attempt]
+    : records.filter(recordHasHostToolEnvelope);
+  const unexplainedErrors = records.filter((record) => {
+    if (host === 'codex'
+      && (exactCodexWarning(record, 'item_0') || exactCodexWarning(record, 'item_1'))) {
+      return false;
+    }
+    return recordIsUnexplainedError(record);
+  });
   const successfulMutation = records.some((record) => allObjects(record)
     .some((value) => value.mutation_succeeded === true));
   if (attempts.length !== 1 || denials.length !== 1 || hostToolEnvelopes.length !== 1
@@ -889,6 +1184,7 @@ function normalizeActualHostRecords({ host, rawJsonl, isolatedRoot, evidence }) 
     same_head_rerun: false,
     driver_sha256: evidence.driver_sha256,
     raw_stream_sha256: evidence.raw_stream_sha256,
+    raw_stderr_sha256: evidence.raw_stderr_sha256,
     normalization_map: normalizationMap,
     accepted_pointers: [...ACCEPTED_POINTERS[host]],
     attempt_count: 1,

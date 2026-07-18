@@ -330,12 +330,145 @@ const EXACT_ACCEPTED_POINTERS = {
     '/hook_event_name',
     '/tool_name',
     '/tool_input/file_path',
-    '/tool_input/old_string',
-    '/tool_input/new_string',
+    '/tool_input/content',
   ],
 };
 
+const PINNED_CODEX_GUARD_DENIAL = 'Deep Evolve Guard: active sessions protect prepare.cjs, '
+  + 'prepare.config.json, legacy prepare.py, prepare-protocol.md, program.md, and strategy.yaml. '
+  + 'Use the matching meta mode for an authorized policy update.';
+const PINNED_CODEX_HOOK_TRUST_WARNING = '`--dangerously-bypass-hook-trust` is enabled. '
+  + 'Enabled hooks may run without review for this invocation.';
+
 const sha256 = (source) => crypto.createHash('sha256').update(source).digest('hex');
+
+function pinnedCodexSplitStreams({ isolatedRoot, lineEnding = '\n', denial,
+  targetPath: targetOverride, stderrPrefix = '', stderrSuffix = '', stdoutExtra = [],
+  hookTrustWarning = PINNED_CODEX_HOOK_TRUST_WARNING,
+  timestamp = '2026-07-17T23:04:12.184707Z', includeReadingLine = true,
+  patchNewLine = '+after' } = {}) {
+  const sessionRoot = path.join(isolatedRoot, '.deep-evolve', 'session-current');
+  const targetPath = targetOverride || path.join(sessionRoot, 'prepare.cjs');
+  const threadId = '019f7252-ba40-72d3-be1c-4b2e5fe10cdf';
+  const stdoutRecords = [
+    { type: 'thread.started', thread_id: threadId },
+    { type: 'item.completed', item: { id: 'item_0', type: 'error',
+      message: hookTrustWarning } },
+    { type: 'item.completed', item: { id: 'item_1', type: 'error',
+      message: PINNED_CODEX_HOOK_TRUST_WARNING } },
+    { type: 'turn.started' },
+    { type: 'item.completed', item: { id: 'item_2', type: 'agent_message',
+      text: 'The protected edit was denied.' } },
+    { type: 'turn.completed', usage: { input_tokens: 2, cached_input_tokens: 0,
+      output_tokens: 2, reasoning_output_tokens: 0 } },
+    ...stdoutExtra,
+  ];
+  const command = [
+    '*** Begin Patch',
+    `*** Update File: ${targetPath}`,
+    '@@',
+    '-before',
+    patchNewLine,
+    '*** End Patch',
+  ].join('\n');
+  const stdoutText = `${stdoutRecords.map((record) => JSON.stringify(record)).join('\n')}\n`;
+  const stderrText = `${stderrPrefix}${includeReadingLine ? 'Reading additional input from stdin...\n' : ''}`
+    + `${timestamp} ERROR codex_core::tools::router: error=Command blocked by PreToolUse hook: ${denial || PINNED_CODEX_GUARD_DENIAL}. Command: ${command}\n`
+    + stderrSuffix;
+  return {
+    sessionRoot,
+    targetPath,
+    threadId,
+    rawStdout: Buffer.from(stdoutText.replace(/\n/g, lineEnding)),
+    rawStderr: Buffer.from(stderrText.replace(/\n/g, lineEnding)),
+  };
+}
+
+function actualHostEvidence({ host, sessionRoot, rawStdout, rawStderr }) {
+  return {
+    host,
+    version: host === 'codex' ? '0.144.1' : '2.1.207',
+    capture_source: 'actual_exact_pinned_host',
+    model_source: 'deterministic_loopback_protocol_v1',
+    vendor_cloud_entitlement_proven: false,
+    bootstrap_commit: 'a'.repeat(40),
+    driver_sha256: 'b'.repeat(64),
+    raw_stream_sha256: sha256(rawStdout),
+    raw_stream_bytes: Buffer.from(rawStdout),
+    raw_stderr_sha256: sha256(rawStderr),
+    raw_stderr_bytes: Buffer.from(rawStderr),
+    run_id: 'run',
+    job_id: 'job',
+    run_attempt: 1,
+    same_head_rerun: false,
+    session_root: sessionRoot,
+    attempt_count: 1,
+    denial_count: 1,
+    successful_mutation_count: 0,
+  };
+}
+
+function pinnedClaudeLifecycle({ isolatedRoot }) {
+  const sessionRoot = path.join(isolatedRoot, '.deep-evolve', 'session-current');
+  const targetPath = path.join(sessionRoot, 'program.md');
+  const sessionId = '4dcb224a-2456-4c44-aea5-5c9144bf9143';
+  const hookId = '15bf42d2-af9f-40e8-b09c-80411cf25943';
+  const toolId = 'toolu_loopback_1';
+  const toolInput = { file_path: targetPath, content: 'after' };
+  const hookOutput = `${PINNED_CODEX_GUARD_DENIAL}\n`;
+  const toolResult = `PreToolUse:Write hook error: [node \${CLAUDE_PLUGIN_ROOT}`
+    + `/hooks/scripts/protect-readonly.cjs]: ${hookOutput}`;
+  const records = [
+    {
+      type: 'system', subtype: 'init', cwd: isolatedRoot, session_id: sessionId,
+      tools: ['Write'], model: LOOPBACK_MODEL, permissionMode: 'bypassPermissions',
+      claude_code_version: '2.1.207',
+      plugins: [{ name: 'deep-evolve', source: 'deep-evolve@deep-evolve-loopback' }],
+    },
+    {
+      type: 'assistant', session_id: sessionId,
+      message: {
+        id: 'msg_loopback_1', type: 'message', role: 'assistant', model: LOOPBACK_MODEL,
+        content: [{ type: 'tool_use', name: 'Write', id: toolId, input: { ...toolInput } }],
+        stop_reason: null,
+      },
+    },
+    {
+      type: 'system', subtype: 'hook_started', hook_id: hookId,
+      hook_name: 'PreToolUse:Write', hook_event: 'PreToolUse', session_id: sessionId,
+    },
+    {
+      type: 'system', subtype: 'hook_response', hook_id: hookId,
+      hook_name: 'PreToolUse:Write', hook_event: 'PreToolUse', output: hookOutput,
+      stdout: '', stderr: hookOutput, exit_code: 2, outcome: 'error', session_id: sessionId,
+    },
+    {
+      type: 'user', session_id: sessionId,
+      message: { role: 'user', content: [{
+        type: 'tool_result', content: toolResult, is_error: true, tool_use_id: toolId,
+      }] },
+      tool_use_result: `Error: ${toolResult}`,
+    },
+    {
+      type: 'assistant', session_id: sessionId,
+      message: {
+        id: 'msg_loopback_2', type: 'message', role: 'assistant', model: LOOPBACK_MODEL,
+        content: [{ type: 'text', text: 'The protected edit was denied.' }],
+        stop_reason: null,
+      },
+    },
+    {
+      type: 'result', subtype: 'success', is_error: false, result: 'The protected edit was denied.',
+      stop_reason: 'end_turn', session_id: sessionId,
+      permission_denials: [{
+        tool_name: 'Write', tool_use_id: toolId, tool_input: { ...toolInput },
+      }],
+      terminal_reason: 'completed',
+    },
+  ];
+  const encode = (value) => Buffer.from(`${value.map((record) => JSON.stringify(record)).join('\n')}\n`);
+  return { sessionRoot, targetPath, sessionId, hookId, toolId, records, encode };
+}
 
 function executablePowerShell(source) {
   const normalizedSource = source
@@ -920,16 +1053,43 @@ function writeFakeHost({ directory, host, tracePath, mutation = 'clean' }) {
     "  if (mutation === 'missing-file') fs.rmSync(path.join(cacheRoot, 'package.json'));",
     "  if (mutation === 'changed-file') fs.appendFileSync(path.join(cacheRoot, 'package.json'), ' ');",
     "  if (mutation === 'credential') fs.writeFileSync(path.join(configRoot, 'auth.json'), '{}\\n');",
+    "  if (host === 'codex') {",
+    "    const configPath = path.join(configRoot, 'config.toml');",
+    "    fs.appendFileSync(configPath, `\\n[marketplaces.deep-evolve-loopback]\\nsource_type = \\\"local\\\"\\nsource = ${JSON.stringify(marketplaceRoot)}\\n\\n[plugins.\\\"deep-evolve@deep-evolve-loopback\\\"]\\nenabled = true\\n`);",
+    "    if (mutation === 'codex-preexisting-project-trust') fs.appendFileSync(configPath, `\\n[projects.${JSON.stringify(process.cwd())}]\\ntrust_level = \\\"trusted\\\"\\n`);",
+    '  }',
     "  process.stdout.write('{}\\n');",
     '  process.exit(0);',
     '}',
     "if (host === 'claude' && argv[0] === 'plugin' && argv[1] === 'enable') {",
+    "  if (mutation === 'clean') {",
+    "    process.stderr.write('Plugin is already enabled at user scope\\n');",
+    '    process.exit(1);',
+    '  }',
     "  process.stdout.write('{}\\n');",
     '  process.exit(0);',
     '}',
     "if (argv[0] === 'plugin' && argv[1] === 'list') {",
     "  process.stdout.write(`${JSON.stringify({ plugins: [{ name: 'deep-evolve', marketplace: 'deep-evolve-loopback', enabled: true }] })}\\n`);",
     '  process.exit(0);',
+    '}',
+    "if (host === 'codex' && argv.includes('--ask-for-approval')",
+    "  && ['clean', 'codex-missing-analytics', 'codex-disabled-windows-sandbox', 'codex-missing-offline-chatgpt-base', 'codex-external-chatgpt-base', 'codex-preexisting-project-trust', 'codex-host-config-drift'].includes(mutation)) {",
+    "  const configPath = path.join(process.env.CODEX_HOME, 'config.toml');",
+    "  let config = fs.readFileSync(configPath, 'utf8');",
+    "  if (mutation === 'codex-missing-analytics') config = config.replace('[analytics]\\nenabled = false\\n\\n', '');",
+    "  if (mutation === 'codex-disabled-windows-sandbox') config = config.replace('sandbox = \\\"unelevated\\\"', 'sandbox = \\\"disabled\\\"');",
+    "  if (mutation === 'codex-missing-offline-chatgpt-base') config = config.replace('chatgpt_base_url = \\\"http://127.0.0.1:9\\\"\\n', '');",
+    "  if (mutation === 'codex-external-chatgpt-base') config = config.replace('chatgpt_base_url = \\\"http://127.0.0.1:9\\\"', 'chatgpt_base_url = \\\"https://chatgpt.com/backend-api/\\\"');",
+    "  const projectRoot = argv[argv.indexOf('-C') + 1];",
+    "  const required = 'chatgpt_base_url = \\\"http://127.0.0.1:9\\\"\\ncheck_for_update_on_startup = false\\n\\n[analytics]\\nenabled = false\\n\\n[windows]\\nsandbox = \\\"unelevated\\\"\\n\\n[model_providers.deep_evolve_loopback]';",
+    "  const trust = `[projects.${JSON.stringify(projectRoot)}]\\ntrust_level = \\\"trusted\\\"\\n`;",
+    "  if (!config.includes(required) || !config.includes(trust)) {",
+    "    process.stderr.write('missing exact offline Windows Codex config\\n');",
+    '    process.exit(3);',
+    '  }',
+    "  fs.writeFileSync(`${tracePath}.config-before-host`, config);",
+    "  if (mutation === 'codex-host-config-drift') fs.appendFileSync(configPath, '\\n[mutant]\\nhost_drift = true\\n');",
     '}',
     "if (mutation === 'proxy-attempt') {",
     "  const proxy = new URL(process.env.HTTP_PROXY);",
@@ -1024,6 +1184,33 @@ async function postJson(origin, pathname, body, headers = {}) {
   return { status: response.status, text: await response.text() };
 }
 
+function postRawJson(origin, requestTarget, body, headers = {}) {
+  const endpoint = new URL(origin);
+  const payload = Buffer.from(JSON.stringify(body));
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: endpoint.hostname,
+      port: endpoint.port,
+      method: 'POST',
+      path: requestTarget,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': payload.length,
+        ...headers,
+      },
+    }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.once('end', () => resolve({
+        status: response.statusCode,
+        text: Buffer.concat(chunks).toString('utf8'),
+      }));
+    });
+    request.once('error', reject);
+    request.end(payload);
+  });
+}
+
 function proxyRequest(proxyOrigin) {
   const proxy = new URL(proxyOrigin);
   return new Promise((resolve, reject) => {
@@ -1068,6 +1255,7 @@ function assertFixtureBundle({ host, version, attemptSource, denialSource, prove
   assert.match(provenance.bootstrap_commit, /^[0-9a-f]{40}$/);
   assert.match(provenance.driver_sha256, /^[0-9a-f]{64}$/);
   assert.match(provenance.raw_stream_sha256, /^[0-9a-f]{64}$/);
+  assert.match(provenance.raw_stderr_sha256, /^[0-9a-f]{64}$/);
   assert.ok(String(provenance.run_id).length > 0);
   assert.ok(String(provenance.job_id).length > 0);
   assert.equal(provenance.run_attempt, 1);
@@ -1340,11 +1528,12 @@ test('maintainer host smokes use exact argv arrays, installed caches, and the sh
   assert.match(claude, /2\.1\.207/);
   assert.match(claude, /host-loopback-model\.cjs/);
   assert.match(claude,
-    /\[\s*['"]-p['"]\s*,\s*['"]--output-format['"]\s*,\s*['"]stream-json['"]\s*,\s*['"]--include-hook-events['"]\s*,\s*['"]--no-session-persistence['"]\s*,\s*['"]--no-chrome['"]\s*,\s*['"]--disable-slash-commands['"]\s*,\s*['"]--permission-mode['"]\s*,\s*['"]bypassPermissions['"]\s*,\s*['"]--tools['"]\s*,\s*['"]Edit,Write,MultiEdit['"]\s*,\s*['"]--model['"]\s*,\s*LOOPBACK_MODEL\s*,\s*['"]--setting-sources['"]\s*,\s*['"]user['"]\s*,/);
+    /\[\s*['"]-p['"]\s*,\s*['"]--output-format['"]\s*,\s*['"]stream-json['"]\s*,\s*['"]--verbose['"]\s*,\s*['"]--include-hook-events['"]\s*,\s*['"]--no-session-persistence['"]\s*,\s*['"]--no-chrome['"]\s*,\s*['"]--disable-slash-commands['"]\s*,\s*['"]--permission-mode['"]\s*,\s*['"]bypassPermissions['"]\s*,\s*['"]--tools['"]\s*,\s*['"]Write['"]\s*,\s*['"]--model['"]\s*,\s*LOOPBACK_MODEL\s*,\s*['"]--setting-sources['"]\s*,\s*['"]user['"]\s*,/);
   for (const fragment of [
     '-p',
     '--output-format',
     'stream-json',
+    '--verbose',
     '--include-hook-events',
     '--no-session-persistence',
     '--no-chrome',
@@ -1352,13 +1541,36 @@ test('maintainer host smokes use exact argv arrays, installed caches, and the sh
     '--permission-mode',
     'bypassPermissions',
     '--tools',
-    'Edit,Write,MultiEdit',
+    'Write',
     '--model',
     '--setting-sources',
     'user',
   ]) assert.match(claude, new RegExp(fragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.match(claude, /['"]--model['"]\s*,\s*LOOPBACK_MODEL/);
+  assert.match(claude, /Use Write exactly once\./);
+  const claudeLifecycle = [
+    ['calculated protected Write target',
+      /protectedWritePath\s*=\s*path\.join\(project\.sessionRoot,\s*['"]program\.md['"]\)/],
+    ['pre-host target absence gate',
+      /if\s*\(fs\.existsSync\(protectedWritePath\)\)\s*\{[\s\S]{0,300}program\.md must be absent before host invocation/i],
+    ['driver bound to protected Write target', /targetPath:\s*protectedWritePath/],
+    ['actual host invocation',
+      /const host\s*=\s*await requireSuccess\(hostContext,\s*hostArgs,\s*['"]claude-host-stream['"]/],
+    ['byte-identical prepare seal',
+      /const after\s*=\s*fs\.readFileSync\(project\.targetPath\)[\s\S]{0,400}!before\.equals\(after\)[\s\S]{0,400}beforeSha256\s*!==\s*afterSha256[\s\S]{0,400}protected prepare\.cjs bytes changed/],
+    ['post-host target absence gate',
+      /if\s*\(fs\.existsSync\(protectedWritePath\)\)\s*\{[\s\S]{0,300}protected program\.md was created despite hook denial/i],
+  ];
+  let previousLifecycleIndex = -1;
+  for (const [label, pattern] of claudeLifecycle) {
+    const match = pattern.exec(claude);
+    assert.ok(match, label);
+    assert.ok(match.index > previousLifecycleIndex, `${label} must retain lifecycle order`);
+    previousLifecycleIndex = match.index;
+  }
   assert.doesNotMatch(claude, /--safe-mode|--bare|--plugin-dir/);
+  assert.doesNotMatch(claude,
+    /\[\s*['"]plugin['"]\s*,\s*['"]enable['"]\s*,\s*`deep-evolve@\$\{MARKETPLACE_NAME\}`/);
   assert.match(claude, /shell:\s*false/);
 
   for (const source of [codex, claude]) {
@@ -1369,6 +1581,12 @@ test('maintainer host smokes use exact argv arrays, installed caches, and the sh
     assert.match(source, /installed.*cache|cache.*installed/is);
     assert.match(source, /external_network_attempt|deny.?proxy/i);
     assert.match(source, /credential-scan-pre-invocation\.json/);
+    assert.match(source, /acceptedEventPaths\.raw_stream_sha256/);
+    assert.match(source, /acceptedEventPaths\.raw_stderr_sha256/);
+    assert.match(source,
+      /raw_stdout_sha256:\s*normalized\.acceptedEventPaths\.raw_stream_sha256/);
+    assert.match(source,
+      /raw_stderr_sha256:\s*normalized\.acceptedEventPaths\.raw_stderr_sha256/);
     assert.doesNotMatch(source, /AUTHENTICATED_PREFIXES/);
   }
 });
@@ -1399,9 +1617,13 @@ for (const host of ['codex', 'claude']) {
         .map((line) => JSON.parse(line));
       const expectedCommands = host === 'codex'
         ? ['--version', 'marketplace', 'add', 'list', '--ask-for-approval']
-        : ['--version', 'marketplace', 'install', 'enable', 'list', '-p'];
+        : ['--version', 'marketplace', 'install', 'list', '-p'];
       for (const fragment of expectedCommands) {
         assert.equal(trace.some((argv) => argv.includes(fragment)), true, fragment);
+      }
+      if (host === 'claude') {
+        assert.equal(trace.some((argv) => argv[0] === 'plugin' && argv[1] === 'enable'), false,
+          'Claude 2.1.207 install already enables the plugin');
       }
       assert.equal(fs.existsSync(`${run.tracePath}.host-invoked`), true);
       const hostArgv = JSON.parse(fs.readFileSync(`${run.tracePath}.host-invoked`, 'utf8').trim());
@@ -1412,8 +1634,8 @@ for (const host of ['codex', 'claude']) {
           '--skip-git-repo-check', '-C',
         ]);
       } else {
-        assert.deepEqual(hostArgv.slice(0, 4), ['-p', '--output-format', 'stream-json',
-          '--include-hook-events']);
+        assert.deepEqual(hostArgv.slice(0, 5), ['-p', '--output-format', 'stream-json',
+          '--verbose', '--include-hook-events']);
       }
       assert.equal(receipt.command_receipts.at(-1).exit_code, 0);
       if (host === 'codex') {
@@ -1433,6 +1655,18 @@ for (const host of ['codex', 'claude']) {
         assert.equal(proxy.schema_version, 1);
         assert.equal(proxy.external_network_attempt_count, 0);
         assert.deepEqual(proxy.external_network_attempts, []);
+        const hostConfig = fs.readFileSync(`${run.tracePath}.config-before-host`);
+        assert.equal(receipt.host_config_sha256, sha256(hostConfig));
+        const providerBase = hostConfig.toString('utf8')
+          .match(/^base_url = "(http:\/\/127\.0\.0\.1:\d+)\/v1"$/m);
+        assert.ok(providerBase, 'sealed host config must retain the exact loopback provider base');
+        const bootstrapConfig = loadLoopbackHelper().buildCodexConfig({
+          origin: providerBase[1],
+          modelCatalogPath: bootstrap.catalog_path,
+        });
+        assert.equal(receipt.codex_config_sha256, sha256(bootstrapConfig));
+        assert.notEqual(receipt.host_config_sha256, receipt.codex_config_sha256,
+          'host config seal must include installed plugin and project trust state');
       }
     } finally {
       fs.rmSync(run.directory, { recursive: true, force: true });
@@ -1440,6 +1674,58 @@ for (const host of ['codex', 'claude']) {
   });
 
   if (host === 'codex') {
+    test('codex fake host rejects offline and Windows sandbox config drift', () => {
+      for (const mutation of [
+        'codex-missing-analytics',
+        'codex-disabled-windows-sandbox',
+        'codex-missing-offline-chatgpt-base',
+        'codex-external-chatgpt-base',
+      ]) {
+        const run = runFakeHostSmoke({ host, mutation });
+        try {
+          assert.equal(run.result.status, 2, run.result.stdout);
+          assert.match(run.result.stderr,
+            /missing exact offline Windows Codex config|project trust.*already exists/i);
+          assert.equal(fs.existsSync(`${run.tracePath}.host-invoked`), false, mutation);
+        } finally {
+          fs.rmSync(run.directory, { recursive: true, force: true });
+        }
+      }
+
+      const preexisting = runFakeHostSmoke({
+        host,
+        mutation: 'codex-preexisting-project-trust',
+      });
+      try {
+        assert.equal(preexisting.result.status, 2, preexisting.result.stdout);
+        assert.match(preexisting.result.stderr, /project trust.*already exists/i);
+        const trace = fs.readFileSync(preexisting.tracePath, 'utf8').trim().split(/\r?\n/)
+          .map((line) => JSON.parse(line));
+        assert.equal(trace.some((argv) => argv.includes('--ask-for-approval')), false,
+          'pre-existing project trust must fail before invoking the host');
+        assert.equal(fs.existsSync(`${preexisting.tracePath}.host-invoked`), false);
+      } finally {
+        fs.rmSync(preexisting.directory, { recursive: true, force: true });
+      }
+    });
+
+    test('codex host-time config drift fails against the sealed host baseline', () => {
+      const run = runFakeHostSmoke({ host, mutation: 'codex-host-config-drift' });
+      try {
+        assert.equal(run.result.status, 2, run.result.stdout);
+        assert.match(run.result.stderr, /isolated top-level Codex config changed/i);
+        const hostConfig = fs.readFileSync(`${run.tracePath}.config-before-host`);
+        const failure = JSON.parse(fs.readFileSync(path.join(run.artifactDir,
+          'codex-smoke-failure.json'), 'utf8'));
+        assert.equal(failure.error.code, 'isolated_config_changed');
+        assert.equal(failure.host_config_sha256, sha256(hostConfig));
+        assert.match(failure.codex_config_sha256, /^[0-9a-f]{64}$/);
+        assert.notEqual(failure.host_config_sha256, failure.codex_config_sha256);
+      } finally {
+        fs.rmSync(run.directory, { recursive: true, force: true });
+      }
+    });
+
     test('codex local curated bootstrap rejects manifest and rewrite mutations offline', () => {
       for (const bootstrapMutation of [
         'missing-curated-marketplace',
@@ -1647,7 +1933,14 @@ test('shared loopback helper exports the exact interface and complete Codex prov
     `model = "${LOOPBACK_MODEL}"`,
     'model_provider = "deep_evolve_loopback"',
     'model_catalog_json = "C:\\\\Users\\\\runner admin\\\\codex home\\\\loopback-model-catalog.json"',
+    'chatgpt_base_url = "http://127.0.0.1:9"',
     'check_for_update_on_startup = false',
+    '',
+    '[analytics]',
+    'enabled = false',
+    '',
+    '[windows]',
+    'sandbox = "unelevated"',
     '',
     '[model_providers.deep_evolve_loopback]',
     'name = "Deep Evolve loopback contract"',
@@ -1678,7 +1971,12 @@ test('isolated host env is allowlisted and scopes the sole public sentinel to Cl
   const origin = 'http://127.0.0.1:43124';
   const proxyOrigin = 'http://127.0.0.1:43125';
   const gitConfigGlobal = path.join(isolatedRoot, 'git rewrite config');
-  const inherited = [...FORBIDDEN_ENVIRONMENT_KEYS, 'ANTHROPIC_API_KEY'];
+  const inherited = [
+    ...FORBIDDEN_ENVIRONMENT_KEYS,
+    'ANTHROPIC_API_KEY',
+    'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
+    'CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL',
+  ];
   const previous = new Map(inherited.map((key) => [key, process.env[key]]));
 
   try {
@@ -1709,12 +2007,16 @@ test('isolated host env is allowlisted and scopes the sole public sentinel to Cl
     assert.equal(codex.GIT_TERMINAL_PROMPT, '0');
     assert.equal(Object.hasOwn(codex, 'ANTHROPIC_API_KEY'), false);
     assert.equal(Object.hasOwn(codex, 'ANTHROPIC_BASE_URL'), false);
+    assert.equal(Object.hasOwn(codex, 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'), false);
+    assert.equal(Object.hasOwn(codex, 'CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL'), false);
     assert.equal(claude.CLAUDE_CONFIG_DIR, claudeConfigDir);
     for (const key of [
       'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_ALLOW_PROTOCOL', 'GIT_TERMINAL_PROMPT',
     ]) assert.equal(Object.hasOwn(claude, key), false, key);
     assert.equal(claude.ANTHROPIC_BASE_URL, origin);
     assert.equal(claude.ANTHROPIC_API_KEY, PUBLIC_CLAUDE_HEADER);
+    assert.equal(claude.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
+    assert.equal(claude.CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL, '1');
     assert.deepEqual(Object.entries(claude)
       .filter(([, value]) => value === PUBLIC_CLAUDE_HEADER)
       .map(([key]) => key), ['ANTHROPIC_API_KEY']);
@@ -1808,22 +2110,24 @@ test('Codex fake Responses protocol emits one apply_patch and rejects a third re
   }
 });
 
-test('Claude fake Messages protocol requires the public header and emits one Edit', async () => {
+test('Claude fake Messages protocol requires the public header and emits one Write', async () => {
   const { createLoopbackDriver } = loadLoopbackHelper();
   const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-evolve claude '));
-  const targetPath = path.join(isolatedRoot, 'prepare.cjs');
+  const targetPath = path.join(isolatedRoot, 'program.md');
   const receiptPath = path.join(isolatedRoot, 'driver-receipt.json');
-  fs.writeFileSync(targetPath, 'before\n');
-  const driver = await createLoopbackDriver({ host: 'claude', targetPath, receiptPath });
   const headers = { 'x-api-key': PUBLIC_CLAUDE_HEADER };
+  let driver;
 
   try {
+    assert.equal(fs.existsSync(targetPath), false,
+      'the protected Claude Write target must be absent before the protocol starts');
+    driver = await createLoopbackDriver({ host: 'claude', targetPath, receiptPath });
     assert.equal(new URL(driver.origin).hostname, '127.0.0.1');
-    const first = await postJson(driver.origin, '/v1/messages', {
+    const first = await postJson(driver.origin, '/v1/messages?beta=true', {
       model: LOOPBACK_MODEL,
       stream: true,
-      tools: [{ name: 'Edit', input_schema: { type: 'object' } }],
-      messages: [{ role: 'user', content: `Edit only ${targetPath}` }],
+      tools: [{ name: 'Write', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: `Write only ${targetPath}` }],
     }, headers);
     assert.equal(first.status, 200, first.text);
     const events = parseSse(first.text);
@@ -1838,30 +2142,29 @@ test('Claude fake Messages protocol requires the public header and emits one Edi
     const start = events.find(({ type }) => type === 'content_block_start');
     assert.deepEqual(start.content_block, {
       type: 'tool_use',
-      name: 'Edit',
+      name: 'Write',
       id: 'toolu_loopback_1',
       input: {},
     });
     const delta = events.find(({ type }) => type === 'content_block_delta');
     assert.deepEqual(JSON.parse(delta.delta.partial_json), {
       file_path: targetPath,
-      old_string: 'before',
-      new_string: 'after',
+      content: 'after',
     });
 
-    const second = await postJson(driver.origin, '/v1/messages', {
+    const second = await postJson(driver.origin, '/v1/messages?beta=true', {
       model: LOOPBACK_MODEL,
       stream: true,
-      tools: [{ name: 'Edit', input_schema: { type: 'object' } }],
+      tools: [{ name: 'Write', input_schema: { type: 'object' } }],
       messages: [
         { role: 'assistant', content: [{
-          type: 'tool_use', id: 'toolu_loopback_1', name: 'Edit', input: {
-            file_path: targetPath, old_string: 'before', new_string: 'after',
+          type: 'tool_use', id: 'toolu_loopback_1', name: 'Write', input: {
+            file_path: targetPath, content: 'after',
           },
         }] },
         { role: 'user', content: [{
           type: 'tool_result', tool_use_id: 'toolu_loopback_1', is_error: true,
-          content: 'Deep Evolve Guard denied prepare.cjs',
+          content: 'Deep Evolve Guard denied program.md',
         }] },
       ],
     }, headers);
@@ -1871,16 +2174,102 @@ test('Claude fake Messages protocol requires the public header and emits one Edi
     assert.equal(terminal.find(({ type }) => type === 'message_delta').delta.stop_reason,
       'end_turn');
 
-    const third = await postJson(driver.origin, '/v1/messages', {
+    const third = await postJson(driver.origin, '/v1/messages?beta=true', {
       model: LOOPBACK_MODEL,
       stream: true,
-      tools: [{ name: 'Edit', input_schema: { type: 'object' } }],
+      tools: [{ name: 'Write', input_schema: { type: 'object' } }],
       messages: [],
     }, headers);
     assert.ok(third.status >= 400, third.text);
+    assert.equal(fs.existsSync(targetPath), false,
+      'the loopback protocol must not create the protected Claude Write target');
   } finally {
-    await driver.close();
+    if (driver) await driver.close();
     fs.rmSync(isolatedRoot, { recursive: true, force: true });
+  }
+});
+
+for (const [label, candidate] of [
+  ['Bash-only tools',
+    { tools: [{ name: 'Bash', input_schema: { type: 'object' } }], target: 'exact' }],
+  ['Write plus Edit tools',
+    { tools: [{ name: 'Write', input_schema: { type: 'object' } },
+      { name: 'Edit', input_schema: { type: 'object' } }], target: 'exact' },
+  ],
+  ['Write plus an unexpected tool',
+    { tools: [{ name: 'Write', input_schema: { type: 'object' } },
+      { name: 'Unexpected', input_schema: { type: 'object' } }], target: 'exact' },
+  ],
+  ['Write aimed at another target',
+    { tools: [{ name: 'Write', input_schema: { type: 'object' } }], target: 'other' }],
+  ['Edit-only tools',
+    { tools: [{ name: 'Edit', input_schema: { type: 'object' } }], target: 'exact' }],
+]) {
+  test(`Claude Write driver rejects ${label}`, async () => {
+    const { createLoopbackDriver } = loadLoopbackHelper();
+    const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-evolve write contract '));
+    const targetPath = path.join(isolatedRoot, 'program.md');
+    const receiptPath = path.join(isolatedRoot, 'driver-receipt.json');
+    // Keep these protocol mutants independent from the separate absent-target boundary RED.
+    fs.writeFileSync(targetPath, 'before\n');
+    let driver;
+    let driverClosed = false;
+    try {
+      driver = await createLoopbackDriver({ host: 'claude', targetPath, receiptPath });
+      const requestedPath = candidate.target === 'exact'
+        ? targetPath : path.join(isolatedRoot, 'other.md');
+      const response = await postJson(driver.origin, '/v1/messages?beta=true', {
+        model: LOOPBACK_MODEL,
+        stream: true,
+        tools: candidate.tools,
+        messages: [{ role: 'user', content: `Write only ${requestedPath}` }],
+      }, { 'x-api-key': PUBLIC_CLAUDE_HEADER });
+      assert.ok(response.status >= 400, response.text);
+      await driver.close();
+      driverClosed = true;
+      const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+      assert.equal(receipt.provider_requests[0].error,
+        'unsupported_pinned_claude_provider_contract');
+    } finally {
+      if (driver && !driverClosed) await driver.close();
+      fs.rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test('Claude driver accepts only the exact pinned beta route', async () => {
+  const { createLoopbackDriver } = loadLoopbackHelper();
+  for (const route of [
+    '/v1/messages?beta=false',
+    '/v1/messages?beta=true&extra=1',
+    '/v1/messages?beta=true&beta=true',
+    '/v1/messages?extra=1&beta=true',
+    '/v1/other?beta=true',
+    '/v1/messages?beta=true#fragment',
+    '/v1/messages',
+  ]) {
+    const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-evolve route '));
+    const targetPath = path.join(isolatedRoot, 'prepare.cjs');
+    const receiptPath = path.join(isolatedRoot, 'driver-receipt.json');
+    fs.writeFileSync(targetPath, 'before\n');
+    const driver = await createLoopbackDriver({ host: 'claude', targetPath, receiptPath });
+    try {
+      const response = await postRawJson(driver.origin, route, {
+        model: LOOPBACK_MODEL,
+        stream: true,
+        tools: [{ name: 'Edit', input_schema: { type: 'object' } }],
+        messages: [{ role: 'user', content: `Edit only ${targetPath}` }],
+      }, { 'x-api-key': 'deep-evolve-loopback-public-v1' });
+      assert.ok(response.status >= 400, `${route}: ${response.text}`);
+      await driver.close();
+      const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+      assert.equal(receipt.provider_requests.length, 1);
+      assert.equal(receipt.provider_requests[0].path, route);
+      assert.equal(receipt.provider_requests[0].error, 'invalid_route');
+    } finally {
+      await driver.close();
+      fs.rmSync(isolatedRoot, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1893,7 +2282,7 @@ test('Claude driver rejects a non-public header and deny proxy records external 
   const driver = await createLoopbackDriver({ host: 'claude', targetPath, receiptPath });
 
   try {
-    const rejected = await postJson(driver.origin, '/v1/messages', {
+    const rejected = await postJson(driver.origin, '/v1/messages?beta=true', {
       model: LOOPBACK_MODEL,
       stream: true,
       tools: [{ name: 'Edit', input_schema: { type: 'object' } }],
@@ -1910,6 +2299,9 @@ test('Claude driver rejects a non-public header and deny proxy records external 
     assert.equal(fs.existsSync(receiptPath), true, 'deny proxy must write a receipt');
     const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
     assert.match(JSON.stringify(receipt), /external_network_attempt/);
+    assert.equal(receipt.provider_requests.length, 1);
+    assert.equal(receipt.provider_requests[0].path, '/v1/messages?beta=true');
+    assert.equal(receipt.provider_requests[0].error, 'invalid_public_loopback_header');
   } finally {
     fs.rmSync(isolatedRoot, { recursive: true, force: true });
   }
@@ -1917,82 +2309,335 @@ test('Claude driver rejects a non-public header and deny proxy records external 
 
 test('normalizer refuses fake-host authority before it can produce retained fixtures', () => {
   const { normalizeActualHostRecords } = loadLoopbackHelper();
+  const rawStdout = Buffer.from(`${JSON.stringify({
+    tool_name: 'apply_patch',
+    tool_input: { command: 'synthetic direct-handler transcript' },
+  })}\n`);
+  const rawStderr = Buffer.alloc(0);
   const fakeEvidence = {
     capture_source: 'fake_host',
     model_source: 'deterministic_loopback_protocol_v1',
     driver_sha256: 'd'.repeat(64),
-    raw_stream_sha256: 'e'.repeat(64),
+    raw_stream_sha256: sha256(rawStdout),
+    raw_stream_bytes: Buffer.from(rawStdout),
+    raw_stderr_sha256: sha256(rawStderr),
+    raw_stderr_bytes: Buffer.from(rawStderr),
   };
   assert.throws(() => normalizeActualHostRecords({
     host: 'codex',
-    rawJsonl: `${JSON.stringify({
-      tool_name: 'apply_patch',
-      tool_input: { command: 'synthetic direct-handler transcript' },
-    })}\n`,
+    rawStdout,
+    rawStderr,
     isolatedRoot: '/synthetic-root',
     evidence: fakeEvidence,
   }), /actual_exact_pinned_host|fake.?host|provenance/i);
 });
 
-test('normalizer rejects caller replacements and scopes mechanical IDs to typed fields', () => {
+test('Codex split-stream normalizer authenticates exact pinned stdout and stderr bytes', () => {
   const { normalizeActualHostRecords } = loadLoopbackHelper();
-  const isolatedRoot = path.join(os.tmpdir(), 'deep-evolve-normalizer-contract');
-  const sessionRoot = path.join(isolatedRoot, '.deep-evolve', 'session-current');
-  const targetPath = path.join(sessionRoot, 'prepare.cjs');
-  const rawJsonl = [
-    {
-      thread_id: 'Deep Evolve Guard',
-      tool_name: 'apply_patch',
-      tool_input: {
-        command: [
-          '*** Begin Patch',
-          `*** Update File: ${targetPath}`,
-          '@@',
-          '-before',
-          '+after',
-          '*** End Patch',
-        ].join('\n'),
-      },
-    },
-    { type: 'hook_denial', message: 'Deep Evolve Guard denied prepare.cjs' },
-  ].map((record) => JSON.stringify(record)).join('\n') + '\n';
-  const evidence = {
-    host: 'codex',
-    version: '0.144.1',
-    capture_source: 'actual_exact_pinned_host',
-    model_source: 'deterministic_loopback_protocol_v1',
-    vendor_cloud_entitlement_proven: false,
-    bootstrap_commit: 'a'.repeat(40),
-    driver_sha256: 'b'.repeat(64),
-    raw_stream_sha256: crypto.createHash('sha256').update(rawJsonl).digest('hex'),
-    raw_stream_bytes: rawJsonl,
-    run_id: 'run',
-    job_id: 'job',
-    run_attempt: 1,
-    same_head_rerun: false,
-    session_root: sessionRoot,
-    attempt_count: 1,
-    denial_count: 1,
-    successful_mutation_count: 0,
-  };
+  const isolatedRoot = path.join(os.tmpdir(), 'deep-evolve normalizer contract');
+  const streams = pinnedCodexSplitStreams({ isolatedRoot });
+  const evidence = actualHostEvidence({ host: 'codex', sessionRoot: streams.sessionRoot,
+    rawStdout: streams.rawStdout, rawStderr: streams.rawStderr });
 
   const normalized = normalizeActualHostRecords({
-    host: 'codex', rawJsonl, isolatedRoot, evidence,
+    host: 'codex', rawStdout: streams.rawStdout, rawStderr: streams.rawStderr,
+    isolatedRoot, evidence,
   });
   assert.equal(normalized.attempt.thread_id, '{{CODEX_THREAD_ID}}');
   assert.equal(normalized.attempt.tool_name, 'apply_patch');
   assert.match(normalized.attempt.tool_input.command, /prepare\.cjs/);
-  assert.match(normalized.denial.message, /Deep Evolve Guard denied prepare\.cjs/);
+  assert.equal(normalized.denial.message, PINNED_CODEX_GUARD_DENIAL);
+  for (const record of [normalized.attempt, normalized.denial]) {
+    assert.deepEqual(record.provenance, {
+      source: 'actual_exact_pinned_host_stderr',
+      raw_stderr_sha256: sha256(streams.rawStderr),
+    });
+  }
+  assert.equal(normalized.acceptedEventPaths.raw_stream_sha256, sha256(streams.rawStdout));
+  assert.equal(normalized.acceptedEventPaths.raw_stderr_sha256, sha256(streams.rawStderr));
   assert.deepEqual(normalized.acceptedEventPaths.accepted_pointers,
     EXACT_ACCEPTED_POINTERS.Codex);
 
   assert.throws(() => normalizeActualHostRecords({
-    host: 'codex', rawJsonl, isolatedRoot,
+    host: 'codex', rawStdout: streams.rawStdout, rawStderr: streams.rawStderr, isolatedRoot,
     evidence: {
       ...evidence,
-      session_ids: { 'Deep Evolve Guard': '{{CALLER_REWRITE}}' },
+      session_ids: { [streams.threadId]: '{{CALLER_REWRITE}}' },
     },
   }), /caller-supplied session ID normalization is forbidden|invalid_provenance/i);
+  assert.throws(() => normalizeActualHostRecords({
+    host: 'codex', rawStdout: streams.rawStdout, rawStderr: streams.rawStderr, isolatedRoot,
+    evidence: { ...evidence, provenance: { source: 'caller' } },
+  }), /caller-supplied.*provenance|invalid_provenance/i);
+  for (const forbidden of [
+    { replacements: [[isolatedRoot, '{{CALLER_PROJECT_ROOT}}']] },
+    { replacement: { [isolatedRoot]: '{{CALLER_PROJECT_ROOT}}' } },
+    { attempt: { tool_name: 'apply_patch' } },
+    { denial: { message: PINNED_CODEX_GUARD_DENIAL } },
+  ]) {
+    assert.throws(() => normalizeActualHostRecords({
+      host: 'codex', rawStdout: streams.rawStdout, rawStderr: streams.rawStderr, isolatedRoot,
+      evidence: { ...evidence, ...forbidden },
+    }), /caller-supplied|invalid_provenance/i);
+  }
+});
+
+test('Codex split-stream normalizer accepts CRLF with spaces and rejects every authority mutant', () => {
+  const { normalizeActualHostRecords } = loadLoopbackHelper();
+  const isolatedRoot = path.join(os.tmpdir(), 'deep-evolve CRLF root with spaces');
+  const clean = pinnedCodexSplitStreams({ isolatedRoot, lineEnding: '\r\n' });
+  const cleanEvidence = actualHostEvidence({ host: 'codex', sessionRoot: clean.sessionRoot,
+    rawStdout: clean.rawStdout, rawStderr: clean.rawStderr });
+  const call = ({ streams = clean, evidence = cleanEvidence } = {}) => normalizeActualHostRecords({
+    host: 'codex', rawStdout: streams.rawStdout, rawStderr: streams.rawStderr,
+    isolatedRoot, evidence,
+  });
+  const normalized = call();
+  assert.match(clean.rawStderr.toString('utf8'), /root with spaces/);
+  assert.match(normalized.attempt.tool_input.command, /\{\{SESSION_ROOT\}\}\/prepare\.cjs/);
+  assert.equal(normalized.denial.message, PINNED_CODEX_GUARD_DENIAL);
+
+  for (const streams of [
+    pinnedCodexSplitStreams({ isolatedRoot, includeReadingLine: false,
+      timestamp: '2031-01-02T03:04:05Z' }),
+    pinnedCodexSplitStreams({ isolatedRoot,
+      timestamp: '1999-12-31T23:59:59.123456789Z' }),
+  ]) {
+    const accepted = call({ streams, evidence: actualHostEvidence({ host: 'codex',
+      sessionRoot: streams.sessionRoot, rawStdout: streams.rawStdout,
+      rawStderr: streams.rawStderr }) });
+    assert.equal(accepted.denial.message, PINNED_CODEX_GUARD_DENIAL);
+  }
+
+  const mutatedDenial = pinnedCodexSplitStreams({ isolatedRoot, lineEnding: '\r\n',
+    denial: `${PINNED_CODEX_GUARD_DENIAL} changed` });
+  const mutatedWarning = pinnedCodexSplitStreams({ isolatedRoot, lineEnding: '\r\n',
+    hookTrustWarning: `${PINNED_CODEX_HOOK_TRUST_WARNING} changed` });
+  const wrongPatchBody = pinnedCodexSplitStreams({ isolatedRoot, lineEnding: '\r\n',
+    patchNewLine: '+tampered' });
+  const invalidTimestamp = pinnedCodexSplitStreams({ isolatedRoot, lineEnding: '\r\n',
+    timestamp: '2026-13-40T25:61:61Z' });
+  const routerOnly = pinnedCodexSplitStreams({ isolatedRoot, lineEnding: '\r\n',
+    includeReadingLine: false });
+  const secondRouter = { ...clean,
+    rawStderr: Buffer.concat([clean.rawStderr, routerOnly.rawStderr]) };
+  const unexpectedPrefix = pinnedCodexSplitStreams({ isolatedRoot, lineEnding: '\r\n',
+    stderrPrefix: 'unexpected\n' });
+  const unexpectedSuffix = pinnedCodexSplitStreams({ isolatedRoot, lineEnding: '\r\n',
+    stderrSuffix: 'unexpected\n' });
+  const wrongTarget = pinnedCodexSplitStreams({ isolatedRoot, lineEnding: '\r\n',
+    targetPath: path.join(isolatedRoot, 'different', 'prepare.cjs') });
+  const unexpectedStdout = pinnedCodexSplitStreams({ isolatedRoot, lineEnding: '\r\n',
+    stdoutExtra: [{ type: 'item.completed', item: { type: 'error', message: 'unexpected' } }] });
+  const unexpectedNonErrorStdout = pinnedCodexSplitStreams({ isolatedRoot,
+    lineEnding: '\r\n', stdoutExtra: [{ type: 'item.completed', item: {
+      id: 'item_extra', type: 'agent_message', text: 'unexpected extra message',
+    } }] });
+  const syntheticStdout = pinnedCodexSplitStreams({ isolatedRoot, lineEnding: '\r\n',
+    stdoutExtra: [{
+      type: 'caller_synthesized',
+      thread_id: clean.threadId,
+      tool_name: 'apply_patch',
+      tool_input: { command: 'caller synthesized' },
+    }] });
+  const invalidStderrUtf8 = { ...clean, rawStderr: Buffer.from(clean.rawStderr) };
+  const stderrInvalidIndex = invalidStderrUtf8.rawStderr.indexOf(Buffer.from('Guard'));
+  assert.notEqual(stderrInvalidIndex, -1);
+  invalidStderrUtf8.rawStderr[stderrInvalidIndex] = 0xff;
+  const invalidStdoutUtf8 = { ...clean, rawStdout: Buffer.from(clean.rawStdout) };
+  const stdoutInvalidIndex = invalidStdoutUtf8.rawStdout.indexOf(Buffer.from('enabled'));
+  assert.notEqual(stdoutInvalidIndex, -1);
+  invalidStdoutUtf8.rawStdout[stdoutInvalidIndex] = 0xff;
+
+  for (const [streams, unauthenticatedField] of [
+    [invalidStdoutUtf8, 'raw_stream_sha256'],
+    [invalidStdoutUtf8, 'raw_stderr_sha256'],
+    [invalidStderrUtf8, 'raw_stream_sha256'],
+    [invalidStderrUtf8, 'raw_stderr_sha256'],
+  ]) {
+    const evidence = actualHostEvidence({ host: 'codex', sessionRoot: streams.sessionRoot,
+      rawStdout: streams.rawStdout, rawStderr: streams.rawStderr });
+    evidence[unauthenticatedField] = '0'.repeat(64);
+    let authenticationError;
+    try {
+      call({ streams, evidence });
+    } catch (error) {
+      authenticationError = error;
+    }
+    assert.ok(authenticationError, 'malformed unauthenticated bytes must fail');
+    assert.equal(authenticationError.code, 'invalid_provenance',
+      `${unauthenticatedField} authentication must precede decoding either stream`);
+  }
+
+  for (const streams of [invalidStdoutUtf8, invalidStderrUtf8]) {
+    let decodingError;
+    try {
+      call({ streams, evidence: actualHostEvidence({ host: 'codex',
+        sessionRoot: streams.sessionRoot, rawStdout: streams.rawStdout,
+        rawStderr: streams.rawStderr }) });
+    } catch (error) {
+      decodingError = error;
+    }
+    assert.ok(decodingError, 'authenticated malformed UTF-8 must fail');
+    assert.equal(decodingError.code, 'invalid_host_stream');
+    assert.match(decodingError.message, /UTF-8/i,
+      'authenticated malformed bytes must fail specifically at fatal UTF-8 decoding');
+  }
+
+  const differentStdoutBytes = Buffer.concat([clean.rawStdout, Buffer.from('x')]);
+  const differentStderrBytes = Buffer.concat([clean.rawStderr, Buffer.from('x')]);
+
+  const cases = [
+    { streams: clean, evidence: { ...cleanEvidence, raw_stream_sha256: '0'.repeat(64) } },
+    { streams: clean, evidence: { ...cleanEvidence,
+      raw_stream_sha256: sha256(differentStdoutBytes),
+      raw_stream_bytes: differentStdoutBytes } },
+    { streams: clean, evidence: { ...cleanEvidence, raw_stderr_sha256: '0'.repeat(64) } },
+    { streams: clean, evidence: { ...cleanEvidence,
+      raw_stderr_sha256: sha256(differentStderrBytes),
+      raw_stderr_bytes: differentStderrBytes } },
+    ...[mutatedDenial, mutatedWarning, wrongPatchBody, invalidTimestamp, secondRouter,
+      unexpectedPrefix, unexpectedSuffix, wrongTarget, unexpectedStdout,
+      unexpectedNonErrorStdout, syntheticStdout].map((streams) => ({
+      streams,
+      evidence: actualHostEvidence({ host: 'codex', sessionRoot: clean.sessionRoot,
+        rawStdout: streams.rawStdout, rawStderr: streams.rawStderr }),
+    })),
+  ];
+  for (const candidate of cases) {
+    assert.throws(() => call(candidate), /invalid_(?:host_stream|provenance)|authenticated|exact|UTF-8/i);
+  }
+});
+
+test('Claude normalizer authenticates the exact pinned seven-record Write lifecycle', () => {
+  const { normalizeActualHostRecords } = loadLoopbackHelper();
+  const isolatedRoot = path.join(os.tmpdir(), 'deep-evolve claude stderr contract');
+  const lifecycle = pinnedClaudeLifecycle({ isolatedRoot });
+  const rawStdout = lifecycle.encode(lifecycle.records);
+  const emptyStderr = Buffer.alloc(0);
+  const cleanEvidence = actualHostEvidence({ host: 'claude', sessionRoot: lifecycle.sessionRoot,
+    rawStdout,
+    rawStderr: emptyStderr });
+  const clean = normalizeActualHostRecords({
+    host: 'claude', rawStdout, rawStderr: emptyStderr, isolatedRoot, evidence: cleanEvidence,
+  });
+  assert.deepEqual(clean.attempt, {
+    session_id: '{{CLAUDE_SESSION_ID}}',
+    hook_event_name: 'PreToolUse',
+    tool_name: 'Write',
+    tool_input: {
+      file_path: path.join('{{SESSION_ROOT}}', 'program.md'),
+      content: 'after',
+    },
+    provenance: {
+      source: 'actual_exact_pinned_host_stdout',
+      raw_stream_sha256: sha256(rawStdout),
+    },
+  });
+  assert.deepEqual(clean.denial, {
+    session_id: '{{CLAUDE_SESSION_ID}}',
+    type: 'hook_denial',
+    message: PINNED_CODEX_GUARD_DENIAL,
+    provenance: {
+      source: 'actual_exact_pinned_host_stdout',
+      raw_stream_sha256: sha256(rawStdout),
+    },
+  });
+  assert.deepEqual(clean.acceptedEventPaths.accepted_pointers, EXACT_ACCEPTED_POINTERS.Claude);
+  assert.equal(clean.acceptedEventPaths.attempt_count, 1);
+  assert.equal(clean.acceptedEventPaths.denial_count, 1);
+  assert.equal(clean.acceptedEventPaths.successful_mutation_count, 0);
+  assert.equal(clean.acceptedEventPaths.raw_stream_sha256, sha256(rawStdout));
+  assert.equal(clean.acceptedEventPaths.raw_stderr_sha256, sha256(emptyStderr));
+});
+
+test('Claude normalizer rejects every inconsistent pinned lifecycle mutation', () => {
+  const { normalizeActualHostRecords } = loadLoopbackHelper();
+  const isolatedRoot = path.join(os.tmpdir(), 'deep-evolve claude lifecycle mutants');
+  const lifecycle = pinnedClaudeLifecycle({ isolatedRoot });
+  const emptyStderr = Buffer.alloc(0);
+  const cases = [
+    ['extra record', (records) => records.push({ type: 'system', subtype: 'extra' })],
+    ['missing hook start', (records) => records.splice(2, 1)],
+    ['duplicate tool call', (records) => records[1].message.content.push({
+      type: 'tool_use', name: 'Write', id: 'toolu_extra', input: records[1].message.content[0].input,
+    })],
+    ['mismatched session id', (records) => { records[3].session_id = 'another-session'; }],
+    ['mismatched hook id', (records) => { records[3].hook_id = 'another-hook'; }],
+    ['mismatched tool id', (records) => {
+      records[4].message.content[0].tool_use_id = 'another-tool';
+    }],
+    ['altered Write target', (records) => {
+      records[1].message.content[0].input.file_path = path.join(isolatedRoot, 'other.md');
+    }],
+    ['altered Write call content', (records) => {
+      records[1].message.content[0].input.content = 'different';
+    }],
+    ['altered terminal tool name', (records) => {
+      records[6].permission_denials[0].tool_name = 'Edit';
+    }],
+    ['altered terminal target', (records) => {
+      records[6].permission_denials[0].tool_input.file_path = path.join(isolatedRoot, 'other.md');
+    }],
+    ['altered terminal content', (records) => {
+      records[6].permission_denials[0].tool_input.content = 'different';
+    }],
+    ['duplicate terminal permission denial', (records) => {
+      records[6].permission_denials.push(structuredClone(records[6].permission_denials[0]));
+    }],
+    ['altered hook outcome', (records) => { records[3].outcome = 'success'; }],
+    ['altered hook exit', (records) => { records[3].exit_code = 0; }],
+    ['altered hook output', (records) => { records[3].output = 'different\n'; }],
+    ['altered hook stderr', (records) => { records[3].stderr = 'different\n'; }],
+    ['nonempty hook stdout', (records) => { records[3].stdout = 'unexpected\n'; }],
+    ['coherently altered Guard text', (records) => {
+      const alteredDenial = PINNED_CODEX_GUARD_DENIAL.replace(
+        'active sessions protect', 'active sessions changed');
+      const alteredOutput = `${alteredDenial}\n`;
+      records[3].output = alteredOutput;
+      records[3].stderr = alteredOutput;
+      const alteredToolResult = records[4].message.content[0].content.replace(
+        PINNED_CODEX_GUARD_DENIAL, alteredDenial);
+      records[4].message.content[0].content = alteredToolResult;
+      records[4].tool_use_result = `Error: ${alteredToolResult}`;
+    }],
+    ['non-error user result', (records) => {
+      records[4].message.content[0].is_error = false;
+    }],
+    ['altered user result', (records) => {
+      records[4].message.content[0].content = 'different';
+    }],
+    ['altered terminal text', (records) => {
+      records[5].message.content[0].text = 'different';
+    }],
+    ['altered terminal tool id', (records) => {
+      records[6].permission_denials[0].tool_use_id = 'another-tool';
+    }],
+    ['missing permission denial', (records) => { records[6].permission_denials = []; }],
+  ];
+  for (const [label, mutate] of cases) {
+    const records = structuredClone(lifecycle.records);
+    mutate(records);
+    const rawStdout = lifecycle.encode(records);
+    const evidence = actualHostEvidence({ host: 'claude', sessionRoot: lifecycle.sessionRoot,
+      rawStdout, rawStderr: emptyStderr });
+    assert.throws(() => normalizeActualHostRecords({
+      host: 'claude', rawStdout, rawStderr: emptyStderr, isolatedRoot, evidence,
+    }), /invalid_host_stream|exact pinned Claude lifecycle/i, label);
+  }
+});
+
+test('Claude Write normalizer rejects authenticated nonempty stderr', () => {
+  const { normalizeActualHostRecords } = loadLoopbackHelper();
+  const isolatedRoot = path.join(os.tmpdir(), 'deep-evolve claude nonempty stderr');
+  const lifecycle = pinnedClaudeLifecycle({ isolatedRoot });
+  const rawStdout = lifecycle.encode(lifecycle.records);
+  const rawStderr = Buffer.from('unexpected authenticated stderr\n');
+  const evidence = actualHostEvidence({ host: 'claude', sessionRoot: lifecycle.sessionRoot,
+    rawStdout, rawStderr });
+  assert.throws(() => normalizeActualHostRecords({
+    host: 'claude', rawStdout, rawStderr, isolatedRoot, evidence,
+  }), /Claude stderr|invalid_host_stream|unexpected/i);
 });
 
 for (const [host, version, files] of [
@@ -2040,6 +2685,7 @@ test('fixture provenance oracle fails closed for every forbidden mutation', () =
     same_head_rerun: false,
     driver_sha256: 'b'.repeat(64),
     raw_stream_sha256: 'c'.repeat(64),
+    raw_stderr_sha256: 'd'.repeat(64),
     normalization_map: { project_root: '{{PROJECT_ROOT}}' },
     accepted_pointers: [...EXACT_ACCEPTED_POINTERS.Codex],
     attempt_count: 1,
@@ -2059,6 +2705,7 @@ test('fixture provenance oracle fails closed for every forbidden mutation', () =
   const cases = [
     mutated((candidate) => { candidate.provenance.capture_source = 'fake_host'; }),
     mutated((candidate) => { delete candidate.provenance.driver_sha256; }),
+    mutated((candidate) => { delete candidate.provenance.raw_stderr_sha256; }),
     mutated((candidate) => { candidate.provenance.accepted_pointers.push('/extra'); }),
     mutated((candidate) => { candidate.provenance.version = '0.144.2'; }),
     mutated((candidate) => { candidate.attemptSource += candidate.attemptSource; }),

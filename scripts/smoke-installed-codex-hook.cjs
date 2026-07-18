@@ -7,6 +7,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { TextDecoder } = require('node:util');
 
 const EXPECTED_VERSION = 'codex-cli 0.144.1';
 const MARKETPLACE_NAME = 'deep-evolve-loopback';
@@ -263,10 +264,10 @@ function commandRecord(command, args, result) {
     argv: [...args],
     exit_code: result.code,
     signal: result.signal,
-    stdout_sha256: sha256(result.stdout),
-    stderr_sha256: sha256(result.stderr),
-    stdout_bytes: Buffer.byteLength(result.stdout),
-    stderr_bytes: Buffer.byteLength(result.stderr),
+    stdout_sha256: result.stdoutSha256,
+    stderr_sha256: result.stderrSha256,
+    stdout_bytes: result.stdoutBytes.length,
+    stderr_bytes: result.stderrBytes.length,
   };
 }
 
@@ -294,14 +295,31 @@ function runCommand({ command, prefix, args, cwd, env, timeoutMs, artifactDir, l
     });
     child.once('close', (code, signal) => {
       clearTimeout(timer);
+      const stdoutBytes = Buffer.concat(stdout);
+      const stderrBytes = Buffer.concat(stderr);
+      const stdoutSha256 = sha256(stdoutBytes);
+      const stderrSha256 = sha256(stderrBytes);
+      fs.writeFileSync(path.join(artifactDir, `${label}.stdout.log`), stdoutBytes);
+      fs.writeFileSync(path.join(artifactDir, `${label}.stderr.log`), stderrBytes);
+      let stdoutText;
+      let stderrText;
+      try {
+        stdoutText = new TextDecoder('utf-8', { fatal: true }).decode(stdoutBytes);
+        stderrText = new TextDecoder('utf-8', { fatal: true }).decode(stderrBytes);
+      } catch {
+        reject(fatal(`${label} emitted invalid UTF-8`, 'invalid_host_stream'));
+        return;
+      }
       const result = {
         code,
         signal,
-        stdout: Buffer.concat(stdout).toString('utf8'),
-        stderr: Buffer.concat(stderr).toString('utf8'),
+        stdout: stdoutText,
+        stderr: stderrText,
+        stdoutBytes,
+        stderrBytes,
+        stdoutSha256,
+        stderrSha256,
       };
-      fs.writeFileSync(path.join(artifactDir, `${label}.stdout.log`), result.stdout);
-      fs.writeFileSync(path.join(artifactDir, `${label}.stderr.log`), result.stderr);
       if (timedOut) {
         reject(fatal(`${label} timed out`, 'host_timeout'));
       } else {
@@ -670,6 +688,7 @@ async function acceptance(argv) {
     });
     const codexConfigPath = path.join(codexHome, 'config.toml');
     fs.writeFileSync(codexConfigPath, codexConfig);
+    receipt.codex_config_sha256 = sha256(codexConfig);
     writeJson(path.join(exactArtifactDir, 'isolated-opening-inventory.json'),
       fileManifest(isolatedRoot));
     writeJson(path.join(exactArtifactDir, 'credential-scan-opening.json'), openingCredentials);
@@ -707,6 +726,21 @@ async function acceptance(argv) {
         'unsupported_pinned_host_install_contract');
     }
     writeJson(path.join(exactArtifactDir, 'installed-cache-manifest.json'), installed.manifest);
+
+    const installedConfig = fs.readFileSync(codexConfigPath, 'utf8');
+    const projectTrustHeader = `[projects.${JSON.stringify(projectRoot)}]`;
+    if (installedConfig.split(/\r?\n/).includes(projectTrustHeader)) {
+      throw fatal('project trust entry already exists before the smoke-owned seal',
+        'preexisting_project_trust');
+    }
+    const trustedConfig = `${installedConfig.trimEnd()}\n\n${projectTrustHeader}\ntrust_level = "trusted"\n`;
+    fs.writeFileSync(codexConfigPath, trustedConfig);
+    const hostConfig = fs.readFileSync(codexConfigPath, 'utf8');
+    if (hostConfig !== trustedConfig) {
+      throw fatal('failed to seal the exact installed Codex host config',
+        'isolated_config_changed');
+    }
+    receipt.host_config_sha256 = sha256(hostConfig);
 
     const fixedPrompt = [
       'Use apply_patch exactly once.',
@@ -748,7 +782,7 @@ async function acceptance(argv) {
     if (!before.equals(after) || beforeSha256 !== afterSha256) {
       throw fatal('protected prepare.cjs bytes changed', 'protected_bytes_changed');
     }
-    if (fs.readFileSync(codexConfigPath, 'utf8') !== codexConfig) {
+    if (fs.readFileSync(codexConfigPath, 'utf8') !== hostConfig) {
       throw fatal('isolated top-level Codex config changed during the host run',
         'isolated_config_changed');
     }
@@ -812,8 +846,10 @@ async function acceptance(argv) {
       run_attempt: metadata.runAttempt,
       same_head_rerun: false,
       driver_sha256: sha256File(helperPath),
-      raw_stream_sha256: sha256(host.stdout),
-      raw_stream_bytes: host.stdout,
+      raw_stream_sha256: sha256(host.stdoutBytes),
+      raw_stream_bytes: host.stdoutBytes,
+      raw_stderr_sha256: sha256(host.stderrBytes),
+      raw_stderr_bytes: host.stderrBytes,
       session_root: project.sessionRoot,
       attempt_count: 1,
       denial_count: 1,
@@ -821,8 +857,14 @@ async function acceptance(argv) {
       vendor_cloud_entitlement_proven: false,
     };
     const normalized = normalizeActualHostRecords({
-      host: 'codex', rawJsonl: host.stdout, isolatedRoot: projectRoot, evidence,
+      host: 'codex', rawStdout: host.stdoutBytes, rawStderr: host.stderrBytes,
+      isolatedRoot: projectRoot, evidence,
     });
+    if (normalized.acceptedEventPaths.raw_stream_sha256 !== sha256(host.stdoutBytes)
+      || normalized.acceptedEventPaths.raw_stderr_sha256 !== sha256(host.stderrBytes)) {
+      throw fatal('normalized Codex hashes differ from authenticated host Buffers',
+        'invalid_provenance');
+    }
     writeJson(path.join(exactArtifactDir, 'codex-normalized-records.json'), normalized);
     fs.writeFileSync(path.join(exactArtifactDir, 'normalized-apply-patch-attempt.jsonl'),
       `${JSON.stringify(normalized.attempt)}\n`);
@@ -846,10 +888,11 @@ async function acceptance(argv) {
       target_path: project.targetPath,
       before_sha256: beforeSha256,
       after_sha256: afterSha256,
-      raw_stdout_sha256: sha256(host.stdout),
-      raw_stderr_sha256: sha256(host.stderr),
+      raw_stdout_sha256: normalized.acceptedEventPaths.raw_stream_sha256,
+      raw_stderr_sha256: normalized.acceptedEventPaths.raw_stderr_sha256,
       driver_sha256: evidence.driver_sha256,
       codex_config_sha256: sha256(codexConfig),
+      host_config_sha256: sha256(hostConfig),
       driver_receipt_sha256: sha256File(driverReceiptPath),
       external_network_attempt_count: 0,
       credential_artifact_count: 0,

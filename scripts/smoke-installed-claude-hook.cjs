@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { TextDecoder } = require('node:util');
 
 const EXPECTED_VERSION = '2.1.207 (Claude Code)';
 const MARKETPLACE_NAME = 'deep-evolve-loopback';
@@ -239,10 +240,10 @@ function commandRecord(command, args, result) {
     argv: [...args],
     exit_code: result.code,
     signal: result.signal,
-    stdout_sha256: sha256(result.stdout),
-    stderr_sha256: sha256(result.stderr),
-    stdout_bytes: Buffer.byteLength(result.stdout),
-    stderr_bytes: Buffer.byteLength(result.stderr),
+    stdout_sha256: result.stdoutSha256,
+    stderr_sha256: result.stderrSha256,
+    stdout_bytes: result.stdoutBytes.length,
+    stderr_bytes: result.stderrBytes.length,
   };
 }
 
@@ -270,14 +271,31 @@ function runCommand({ command, prefix, args, cwd, env, timeoutMs, artifactDir, l
     });
     child.once('close', (code, signal) => {
       clearTimeout(timer);
+      const stdoutBytes = Buffer.concat(stdout);
+      const stderrBytes = Buffer.concat(stderr);
+      const stdoutSha256 = sha256(stdoutBytes);
+      const stderrSha256 = sha256(stderrBytes);
+      fs.writeFileSync(path.join(artifactDir, `${label}.stdout.log`), stdoutBytes);
+      fs.writeFileSync(path.join(artifactDir, `${label}.stderr.log`), stderrBytes);
+      let stdoutText;
+      let stderrText;
+      try {
+        stdoutText = new TextDecoder('utf-8', { fatal: true }).decode(stdoutBytes);
+        stderrText = new TextDecoder('utf-8', { fatal: true }).decode(stderrBytes);
+      } catch {
+        reject(fatal(`${label} emitted invalid UTF-8`, 'invalid_host_stream'));
+        return;
+      }
       const result = {
         code,
         signal,
-        stdout: Buffer.concat(stdout).toString('utf8'),
-        stderr: Buffer.concat(stderr).toString('utf8'),
+        stdout: stdoutText,
+        stderr: stderrText,
+        stdoutBytes,
+        stderrBytes,
+        stdoutSha256,
+        stderrSha256,
       };
-      fs.writeFileSync(path.join(artifactDir, `${label}.stdout.log`), result.stdout);
-      fs.writeFileSync(path.join(artifactDir, `${label}.stderr.log`), result.stderr);
       if (timedOut) reject(fatal(`${label} timed out`, 'host_timeout'));
       else resolve(result);
     });
@@ -360,6 +378,11 @@ async function acceptance(argv) {
       fs.mkdirSync(directory, { recursive: true });
     }
     const project = createActiveProject(projectRoot);
+    const protectedWritePath = path.join(project.sessionRoot, 'program.md');
+    if (fs.existsSync(protectedWritePath)) {
+      throw fatal('protected program.md must be absent before host invocation',
+        'protected_write_target_preexisting');
+    }
     const before = fs.readFileSync(project.targetPath);
     const beforeSha256 = sha256(before);
     const copied = marketplaceCopy(sourceRoot, marketplaceRoot);
@@ -382,7 +405,7 @@ async function acceptance(argv) {
     const driverReceiptPath = path.join(exactArtifactDir, 'claude-loopback-driver-receipt.json');
     if (!testFakeHost) {
       driver = await createLoopbackDriver({
-        host: 'claude', targetPath: project.targetPath, receiptPath: driverReceiptPath,
+        host: 'claude', targetPath: protectedWritePath, receiptPath: driverReceiptPath,
       });
     }
     const hostEnv = buildIsolatedHostEnv({
@@ -422,9 +445,6 @@ async function acceptance(argv) {
     await requireSuccess(installContext,
       ['plugin', 'install', `deep-evolve@${MARKETPLACE_NAME}`, '--scope', 'user'],
       'claude-plugin-install');
-    await requireSuccess(installContext,
-      ['plugin', 'enable', `deep-evolve@${MARKETPLACE_NAME}`, '--scope', 'user'],
-      'claude-plugin-enable');
     const list = await requireSuccess(installContext,
       ['plugin', 'list', '--json'], 'claude-plugin-list');
     assertEnabledPlugin(list.stdout);
@@ -442,15 +462,16 @@ async function acceptance(argv) {
     writeJson(path.join(exactArtifactDir, 'installed-cache-manifest.json'), installed.manifest);
 
     const fixedPrompt = [
-      'Use Edit exactly once.',
-      `Change only the exact file ${project.targetPath}.`,
-      'Replace its single line before with the single line after.',
+      'Use Write exactly once.',
+      `Create only the exact file ${protectedWritePath}.`,
+      'Write its content as after.',
       'Do not use another tool and do not modify another file.',
     ].join(' ');
     const hostArgs = [
       '-p',
       '--output-format',
       'stream-json',
+      '--verbose',
       '--include-hook-events',
       '--no-session-persistence',
       '--no-chrome',
@@ -458,7 +479,7 @@ async function acceptance(argv) {
       '--permission-mode',
       'bypassPermissions',
       '--tools',
-      'Edit,Write,MultiEdit',
+      'Write',
       '--model',
       LOOPBACK_MODEL,
       '--setting-sources',
@@ -478,6 +499,10 @@ async function acceptance(argv) {
     const afterSha256 = sha256(after);
     if (!before.equals(after) || beforeSha256 !== afterSha256) {
       throw fatal('protected prepare.cjs bytes changed', 'protected_bytes_changed');
+    }
+    if (fs.existsSync(protectedWritePath)) {
+      throw fatal('protected program.md was created despite hook denial',
+        'protected_write_target_created');
     }
     if (!/Deep Evolve Guard/.test(`${host.stdout}\n${host.stderr}`)) {
       throw fatal('actual Claude stream did not expose one Deep Evolve denial',
@@ -518,7 +543,9 @@ async function acceptance(argv) {
         marketplace_copy_manifest_sha256: sha256(JSON.stringify(copied.manifest)),
         installed_cache_root: installed.root,
         installed_cache_manifest_sha256: sha256(JSON.stringify(installed.manifest)),
-        target_path: project.targetPath,
+        target_path: protectedWritePath,
+        sealed_prepare_path: project.targetPath,
+        protected_target_created: false,
         before_sha256: beforeSha256,
         after_sha256: afterSha256,
         external_network_attempt_count: 0,
@@ -540,8 +567,10 @@ async function acceptance(argv) {
       run_attempt: metadata.runAttempt,
       same_head_rerun: false,
       driver_sha256: sha256File(helperPath),
-      raw_stream_sha256: sha256(host.stdout),
-      raw_stream_bytes: host.stdout,
+      raw_stream_sha256: sha256(host.stdoutBytes),
+      raw_stream_bytes: host.stdoutBytes,
+      raw_stderr_sha256: sha256(host.stderrBytes),
+      raw_stderr_bytes: host.stderrBytes,
       session_root: project.sessionRoot,
       attempt_count: 1,
       denial_count: 1,
@@ -549,8 +578,14 @@ async function acceptance(argv) {
       vendor_cloud_entitlement_proven: false,
     };
     const normalized = normalizeActualHostRecords({
-      host: 'claude', rawJsonl: host.stdout, isolatedRoot: projectRoot, evidence,
+      host: 'claude', rawStdout: host.stdoutBytes, rawStderr: host.stderrBytes,
+      isolatedRoot: projectRoot, evidence,
     });
+    if (normalized.acceptedEventPaths.raw_stream_sha256 !== sha256(host.stdoutBytes)
+      || normalized.acceptedEventPaths.raw_stderr_sha256 !== sha256(host.stderrBytes)) {
+      throw fatal('normalized Claude hashes differ from authenticated host Buffers',
+        'invalid_provenance');
+    }
     writeJson(path.join(exactArtifactDir, 'claude-normalized-records.json'), normalized);
     fs.writeFileSync(path.join(exactArtifactDir, 'normalized-protected-edit-attempt.jsonl'),
       `${JSON.stringify(normalized.attempt)}\n`);
@@ -572,11 +607,13 @@ async function acceptance(argv) {
       marketplace_copy_manifest_sha256: sha256(JSON.stringify(copied.manifest)),
       installed_cache_root: installed.root,
       installed_cache_manifest_sha256: sha256(JSON.stringify(installed.manifest)),
-      target_path: project.targetPath,
+      target_path: protectedWritePath,
+      sealed_prepare_path: project.targetPath,
+      protected_target_created: false,
       before_sha256: beforeSha256,
       after_sha256: afterSha256,
-      raw_stdout_sha256: sha256(host.stdout),
-      raw_stderr_sha256: sha256(host.stderr),
+      raw_stdout_sha256: normalized.acceptedEventPaths.raw_stream_sha256,
+      raw_stderr_sha256: normalized.acceptedEventPaths.raw_stderr_sha256,
       driver_sha256: evidence.driver_sha256,
       driver_receipt_sha256: sha256File(driverReceiptPath),
       external_network_attempt_count: 0,
