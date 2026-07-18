@@ -46,6 +46,25 @@ const HOST_JOBS = [
 
 const exactStep = (...lines) => lines.join('\n');
 
+const EXACT_CODEX_WINDOWS_SETUP_BLOCK = exactStep(
+  "    if (process.platform === 'win32' || testFakeHost) {",
+  '      const setupUser = os.userInfo().username;',
+  "      if (typeof setupUser !== 'string' || !setupUser) {",
+  "        throw fatal('Windows sandbox setup requires a non-empty OS user identity',",
+  "          'unsupported_pinned_host_install_contract');",
+  '      }',
+  '      await requireSuccess(context, [',
+  "        'sandbox',",
+  "        'setup',",
+  "        '--elevated',",
+  "        '--user',",
+  '        setupUser,',
+  "        '--codex-home',",
+  '        codexHome,',
+  "      ], 'codex-windows-sandbox-setup', 120_000);",
+  '    }',
+);
+
 const CODEX_RELEASE_STEP_NAMES = [
   'Checkout exact event head',
   'Authenticate exact PR/main provenance',
@@ -94,10 +113,16 @@ const EXACT_CODEX_RESOLVE_STEP = exactStep(
   '          if ($native.Count -ne 1) {',
   '            throw "expected one exact Codex native child binary, found $($native.Count)"',
   '          }',
+  "          $setupHelpers = @(Get-ChildItem -LiteralPath $packageRoot -Recurse -File -Filter 'codex-windows-sandbox-setup.exe')",
+  '          if ($setupHelpers.Count -ne 1) {',
+  '            throw "expected one exact Codex Windows sandbox setup helper, found $($setupHelpers.Count)"',
+  '          }',
+  '          $setupHelper = $setupHelpers[0].FullName',
+  '          $setupHelperSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $setupHelper).Hash.ToLowerInvariant()',
   '          $node = (Get-Command node.exe -ErrorAction Stop).Source',
   '          $git = (Get-Command git.exe -ErrorAction Stop).Source',
   '          $gitSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $git).Hash.ToLowerInvariant()',
-  '          $programs = @($native[0].FullName, $node, $git) | Sort-Object -Unique',
+  '          $programs = @($native[0].FullName, $setupHelper, $node, $git) | Sort-Object -Unique',
   '          $record = [ordered]@{',
   '            package_root = $packageRoot',
   '            package_version = $packageJson.version',
@@ -109,6 +134,8 @@ const EXACT_CODEX_RESOLVE_STEP = exactStep(
   '            git_executable = $git',
   '            git_executable_sha256 = $gitSha256',
   '            native_child_binary = $native[0].FullName',
+  '            sandbox_setup_helper = $setupHelper',
+  '            sandbox_setup_helper_sha256 = $setupHelperSha256',
   '            program_paths = $programs',
   '          }',
   "          $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $artifact 'host-paths.json')",
@@ -245,8 +272,8 @@ function exactFirewallStep(host) {
     '            $rules += $name',
     '            $index += 1',
     '          }',
-    '          if ($rules.Count -lt 2) {',
-    `            throw '${host === 'codex' ? 'host and Node' : 'host, Node, and native child'} firewall programs were not sealed'`,
+    `          if ($rules.Count -lt ${host === 'codex' ? 4 : 2}) {`,
+    `            throw '${host === 'codex' ? 'host, sandbox setup helper, Node, and Git' : 'host, Node, and native child'} firewall programs were not sealed'`,
     '          }',
     "          $rules | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $env:DEEP_EVOLVE_ARTIFACT_DIR 'firewall-rule-names.json')",
     '          [ordered]@{',
@@ -1038,6 +1065,10 @@ function writeFakeHost({ directory, host, tracePath, mutation = 'clean' }) {
     "  process.stdout.write(host === 'codex' ? 'codex-cli 0.144.1\\n' : '2.1.207 (Claude Code)\\n');",
     '  process.exit(0);',
     '}',
+    "if (host === 'codex' && argv[0] === 'sandbox' && argv[1] === 'setup') {",
+    "  process.stdout.write('Windows elevated sandbox setup completed.\\n');",
+    '  process.exit(0);',
+    '}',
     "if (argv[0] === 'plugin' && argv[1] === 'marketplace' && argv[2] === 'add') {",
     "  fs.writeFileSync(statePath, `${argv[3]}\\n`);",
     "  process.stdout.write('{}\\n');",
@@ -1074,15 +1105,17 @@ function writeFakeHost({ directory, host, tracePath, mutation = 'clean' }) {
     '  process.exit(0);',
     '}',
     "if (host === 'codex' && argv.includes('--ask-for-approval')",
-    "  && ['clean', 'codex-missing-analytics', 'codex-disabled-windows-sandbox', 'codex-missing-offline-chatgpt-base', 'codex-external-chatgpt-base', 'codex-preexisting-project-trust', 'codex-host-config-drift'].includes(mutation)) {",
+    "  && ['clean', 'codex-missing-analytics', 'codex-missing-windows-sandbox', 'codex-unelevated-windows-sandbox', 'codex-disabled-windows-sandbox', 'codex-missing-offline-chatgpt-base', 'codex-external-chatgpt-base', 'codex-preexisting-project-trust', 'codex-host-config-drift'].includes(mutation)) {",
     "  const configPath = path.join(process.env.CODEX_HOME, 'config.toml');",
     "  let config = fs.readFileSync(configPath, 'utf8');",
     "  if (mutation === 'codex-missing-analytics') config = config.replace('[analytics]\\nenabled = false\\n\\n', '');",
-    "  if (mutation === 'codex-disabled-windows-sandbox') config = config.replace('sandbox = \\\"unelevated\\\"', 'sandbox = \\\"disabled\\\"');",
+    "  if (mutation === 'codex-missing-windows-sandbox') config = config.replace('[windows]\\nsandbox = \\\"elevated\\\"\\n\\n', '');",
+    "  if (mutation === 'codex-unelevated-windows-sandbox') config = config.replace('sandbox = \\\"elevated\\\"', 'sandbox = \\\"unelevated\\\"');",
+    "  if (mutation === 'codex-disabled-windows-sandbox') config = config.replace('sandbox = \\\"elevated\\\"', 'sandbox = \\\"disabled\\\"');",
     "  if (mutation === 'codex-missing-offline-chatgpt-base') config = config.replace('chatgpt_base_url = \\\"http://127.0.0.1:9\\\"\\n', '');",
     "  if (mutation === 'codex-external-chatgpt-base') config = config.replace('chatgpt_base_url = \\\"http://127.0.0.1:9\\\"', 'chatgpt_base_url = \\\"https://chatgpt.com/backend-api/\\\"');",
     "  const projectRoot = argv[argv.indexOf('-C') + 1];",
-    "  const required = 'chatgpt_base_url = \\\"http://127.0.0.1:9\\\"\\ncheck_for_update_on_startup = false\\n\\n[analytics]\\nenabled = false\\n\\n[windows]\\nsandbox = \\\"unelevated\\\"\\n\\n[model_providers.deep_evolve_loopback]';",
+    "  const required = 'chatgpt_base_url = \\\"http://127.0.0.1:9\\\"\\ncheck_for_update_on_startup = false\\n\\n[analytics]\\nenabled = false\\n\\n[windows]\\nsandbox = \\\"elevated\\\"\\n\\n[model_providers.deep_evolve_loopback]';",
     "  const trust = `[projects.${JSON.stringify(projectRoot)}]\\ntrust_level = \\\"trusted\\\"\\n`;",
     "  if (!config.includes(required) || !config.includes(trust)) {",
     "    process.stderr.write('missing exact offline Windows Codex config\\n');",
@@ -1135,6 +1168,8 @@ function runFakeHostSmoke({ host, mutation = 'clean', bootstrapMutation = 'clean
     shell: false,
     env: {
       ...process.env,
+      USER: 'poisoned-inherited-user',
+      USERNAME: 'poisoned-inherited-username',
       DEEP_EVOLVE_TEST_ONLY_FAKE_HOST: '1',
       DEEP_EVOLVE_TEST_ONLY_BOOTSTRAP_MUTATION: bootstrapMutation,
       GIT_TRACE2_EVENT: gitTracePath,
@@ -1393,11 +1428,17 @@ for (const [host, relative, job, version] of HOST_JOBS) {
       const resolveStep = workflowStep(workflowJob, /^Resolve host and native executable paths$/);
       const firewallStep = workflowStep(workflowJob, /^Establish Internet firewall block$/);
       assertContractsAndMutants(resolveStep, [
+        { label: 'single setup helper discovery', pattern: /^\s*\$setupHelpers\s*=\s*@\(Get-ChildItem\s+-LiteralPath\s+\$packageRoot\s+-Recurse\s+-File\s+-Filter\s+['"]codex-windows-sandbox-setup\.exe['"]\)\s*$/im },
+        { label: 'single setup helper count gate', pattern: /^\s*if\s*\(\$setupHelpers\.Count\s+-ne\s+1\)\s*\{\s*$/im },
+        { label: 'setup helper exact path', pattern: /^\s*\$setupHelper\s*=\s*\$setupHelpers\[0\]\.FullName\s*$/im },
+        { label: 'setup helper byte hash', pattern: /^\s*\$setupHelperSha256\s*=\s*\(Get-FileHash\s+-Algorithm\s+SHA256\s+-LiteralPath\s+\$setupHelper\)\.Hash\.ToLowerInvariant\(\)\s*$/im },
         { label: 'resolved git.exe path', pattern: /^\s*\$git\s*=\s*\(Get-Command\s+git\.exe\s+-ErrorAction\s+Stop\)\.Source\s*$/im },
         { label: 'git.exe byte hash', pattern: /^\s*\$gitSha256\s*=\s*\(Get-FileHash\s+-Algorithm\s+SHA256\s+-LiteralPath\s+\$git\)\.Hash\.ToLowerInvariant\(\)\s*$/im },
-        { label: 'git.exe in authenticated programs', pattern: /^\s*\$programs\s*=\s*@\(\$native\[0\]\.FullName,\s*\$node,\s*\$git\)\s*\|\s*Sort-Object\s+-Unique\s*$/im },
+        { label: 'all Codex executables in authenticated programs', pattern: /^\s*\$programs\s*=\s*@\(\$native\[0\]\.FullName,\s*\$setupHelper,\s*\$node,\s*\$git\)\s*\|\s*Sort-Object\s+-Unique\s*$/im },
         receiptContract('git.exe path in host receipt', /^\s*git_executable\s*=\s*\$git\s*$/im),
         receiptContract('git.exe hash in host receipt', /^\s*git_executable_sha256\s*=\s*\$gitSha256\s*$/im),
+        receiptContract('setup helper path in host receipt', /^\s*sandbox_setup_helper\s*=\s*\$setupHelper\s*$/im),
+        receiptContract('setup helper hash in host receipt', /^\s*sandbox_setup_helper_sha256\s*=\s*\$setupHelperSha256\s*$/im),
         receiptContract('authenticated programs in host receipt', /^\s*program_paths\s*=\s*\$programs\s*$/im),
       ], 'Codex authenticated host-path step');
       assertContractsAndMutants(firewallStep, [
@@ -1511,6 +1552,23 @@ test('maintainer host smokes use exact argv arrays, installed caches, and the sh
   assert.match(codex, /apply_patch/);
   assert.match(codex, /diagnostic_only/);
   assert.match(codex, /host-loopback-model\.cjs/);
+  assert.equal(codex.includes(EXACT_CODEX_WINDOWS_SETUP_BLOCK), true,
+    'Windows setup must be the exact guarded, OS-identity, receipt-bearing block');
+  assert.equal((codex.match(/process\.platform === 'win32' \|\| testFakeHost/g) || []).length, 1);
+  assert.equal((codex.match(/codex-windows-sandbox-setup/g) || []).length, 1,
+    'sandbox setup must have one receipt-bearing invocation inside the Windows guard');
+  assert.doesNotMatch(codex, /process\.env\.(?:USER|USERNAME)/);
+  assert.match(codex, /const \{ spawn \} = require\('node:child_process'\);/);
+  assert.equal((codex.match(/(?:node:)?child_process/g) || []).length, 1,
+    'the generic shell-free command runner must be the sole child-process capability');
+  assert.equal((codex.match(/\bspawn\s*\(/g) || []).length, 1,
+    'all subprocesses must use the one generic command runner');
+  assert.doesNotMatch(codex,
+    /\b(?:exec|execFile|fork|spawnSync|execSync|execFileSync)\s*\(/);
+  assert.doesNotMatch(codex,
+    /--current-user|--dangerously-bypass-approvals-and-sandbox|danger-full-access/);
+  assert.doesNotMatch(codex,
+    /['"](?:-c|--config)['"]\s*,\s*['"][^'"]*(?:approval_policy|windows\.sandbox)[^'"]*['"]/);
   assert.match(codex,
     /\[\s*['"]--ask-for-approval['"]\s*,\s*['"]never['"]\s*,\s*['"]exec['"]\s*,\s*['"]--json['"]\s*,\s*['"]--ephemeral['"]\s*,\s*['"]--dangerously-bypass-hook-trust['"]\s*,\s*['"]--sandbox['"]\s*,\s*['"]workspace-write['"]\s*,\s*['"]--skip-git-repo-check['"]\s*,\s*['"]-C['"]\s*,/);
   for (const flag of [
@@ -1523,7 +1581,8 @@ test('maintainer host smokes use exact argv arrays, installed caches, and the sh
     '-C',
   ]) assert.match(codex, new RegExp(flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.doesNotMatch(codex, /--profile/);
-  assert.match(codex, /shell:\s*false/);
+  assert.match(codex,
+    /function runCommand\([\s\S]*?const child = spawn\(command, \[\.\.\.prefix, \.\.\.args\], \{[\s\S]*?shell:\s*false,[\s\S]*?\}\);/);
 
   assert.match(claude, /2\.1\.207/);
   assert.match(claude, /host-loopback-model\.cjs/);
@@ -1616,7 +1675,7 @@ for (const host of ['codex', 'claude']) {
       const trace = fs.readFileSync(run.tracePath, 'utf8').trim().split(/\r?\n/)
         .map((line) => JSON.parse(line));
       const expectedCommands = host === 'codex'
-        ? ['--version', 'marketplace', 'add', 'list', '--ask-for-approval']
+        ? ['--version', 'sandbox', 'marketplace', 'add', 'list', '--ask-for-approval']
         : ['--version', 'marketplace', 'install', 'list', '-p'];
       for (const fragment of expectedCommands) {
         assert.equal(trace.some((argv) => argv.includes(fragment)), true, fragment);
@@ -1628,10 +1687,30 @@ for (const host of ['codex', 'claude']) {
       assert.equal(fs.existsSync(`${run.tracePath}.host-invoked`), true);
       const hostArgv = JSON.parse(fs.readFileSync(`${run.tracePath}.host-invoked`, 'utf8').trim());
       if (host === 'codex') {
-        assert.deepEqual(hostArgv.slice(0, 10), [
+        assert.deepEqual(trace[0], ['--version']);
+        const setupCommands = trace.filter((argv) => argv[0] === 'sandbox');
+        assert.equal(setupCommands.length, 1, 'Windows elevated setup must run exactly once');
+        assert.deepEqual(setupCommands[0], [
+          'sandbox', 'setup', '--elevated', '--user', os.userInfo().username,
+          '--codex-home', path.join(receipt.isolated_root, 'codex home with spaces'),
+        ]);
+        assert.equal(trace.indexOf(setupCommands[0]), 1,
+          'setup must immediately follow the pinned version check');
+        assert.deepEqual(trace[2].slice(0, 3), ['plugin', 'marketplace', 'add']);
+        assert.equal(trace.flat().includes('--current-user'), false);
+        const projectRoot = path.join(receipt.isolated_root, 'project with spaces');
+        const targetPath = path.join(projectRoot, '.deep-evolve', 'session-current',
+          'prepare.cjs');
+        const fixedPrompt = [
+          'Use apply_patch exactly once.',
+          `Change only the exact file ${targetPath}.`,
+          'Replace its single line before with the single line after.',
+          'Do not use another tool and do not modify another file.',
+        ].join(' ');
+        assert.deepEqual(hostArgv, [
           '--ask-for-approval', 'never', 'exec', '--json', '--ephemeral',
           '--dangerously-bypass-hook-trust', '--sandbox', 'workspace-write',
-          '--skip-git-repo-check', '-C',
+          '--skip-git-repo-check', '-C', projectRoot, fixedPrompt,
         ]);
       } else {
         assert.deepEqual(hostArgv.slice(0, 5), ['-p', '--output-format', 'stream-json',
@@ -1677,6 +1756,8 @@ for (const host of ['codex', 'claude']) {
     test('codex fake host rejects offline and Windows sandbox config drift', () => {
       for (const mutation of [
         'codex-missing-analytics',
+        'codex-missing-windows-sandbox',
+        'codex-unelevated-windows-sandbox',
         'codex-disabled-windows-sandbox',
         'codex-missing-offline-chatgpt-base',
         'codex-external-chatgpt-base',
@@ -1940,7 +2021,7 @@ test('shared loopback helper exports the exact interface and complete Codex prov
     'enabled = false',
     '',
     '[windows]',
-    'sandbox = "unelevated"',
+    'sandbox = "elevated"',
     '',
     '[model_providers.deep_evolve_loopback]',
     'name = "Deep Evolve loopback contract"',
@@ -1949,8 +2030,9 @@ test('shared loopback helper exports the exact interface and complete Codex prov
     'requires_openai_auth = false',
     '',
   ].join('\n'));
-  assert.doesNotMatch(helper.buildCodexConfig({ origin, modelCatalogPath: catalogPath }),
-    /\[profiles\.|--profile/);
+  const codexConfig = helper.buildCodexConfig({ origin, modelCatalogPath: catalogPath });
+  assert.doesNotMatch(codexConfig, /sandbox = "(?:unelevated|disabled)"/);
+  assert.doesNotMatch(codexConfig, /\[profiles\.|--profile/);
   assert.throws(() => helper.buildCodexConfig({
     origin,
     modelCatalogPath: 'relative/catalog.json',

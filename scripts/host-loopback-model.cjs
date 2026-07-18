@@ -163,7 +163,7 @@ function buildCodexConfig({ origin, modelCatalogPath }) {
     'enabled = false',
     '',
     '[windows]',
-    'sandbox = "unelevated"',
+    'sandbox = "elevated"',
     '',
     '[model_providers.deep_evolve_loopback]',
     'name = "Deep Evolve loopback contract"',

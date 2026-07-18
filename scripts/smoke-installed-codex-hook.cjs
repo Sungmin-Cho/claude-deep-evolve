@@ -707,6 +707,23 @@ async function acceptance(argv) {
         'unsupported_pinned_host_install_contract');
     }
 
+    if (process.platform === 'win32' || testFakeHost) {
+      const setupUser = os.userInfo().username;
+      if (typeof setupUser !== 'string' || !setupUser) {
+        throw fatal('Windows sandbox setup requires a non-empty OS user identity',
+          'unsupported_pinned_host_install_contract');
+      }
+      await requireSuccess(context, [
+        'sandbox',
+        'setup',
+        '--elevated',
+        '--user',
+        setupUser,
+        '--codex-home',
+        codexHome,
+      ], 'codex-windows-sandbox-setup', 120_000);
+    }
+
     await requireSuccess(context,
       ['plugin', 'marketplace', 'add', marketplaceRoot, '--json'], 'codex-marketplace-add');
     await requireSuccess(context,
