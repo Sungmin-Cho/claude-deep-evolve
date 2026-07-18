@@ -593,7 +593,9 @@ test('parsed secondary shell executables select the payload dialect without trus
 
   for (const command of [
     `cmd.exe /d /c echo powershell.exe pre${backtick}pare.cjs`,
+    `cmd.exe /d /c echo powershell.exe -Command "Set-Content pre${backtick}pare.cjs"`,
     `powershell.exe -NoProfile -Command "Write-Output cmd.exe pre^pare.cjs"`,
+    `powershell.exe -NoProfile -Command "Write-Output 'echo compromised>pre^pare.cjs'"`,
     `sh -c 'printf "%s\\n" powershell.exe pre${backtick}pare.cjs >/dev/null'`,
   ]) {
     assert.deepEqual(
@@ -978,6 +980,18 @@ test('native Windows PowerShell to cmd legacy-envelope probe cannot mutate prote
   assert.equal(guard.stdout, '');
   assert.match(guard.stderr, /ambiguous_protected_reference/);
   assert.deepEqual(fs.readFileSync(target), before);
+}));
+
+test('nested Windows shell escapes are denied as ambiguous without execution', () => withProject({}, ({ projectRoot, sessionRoot }) => {
+  const backtick = String.fromCharCode(96);
+  for (const command of [
+    `cmd.exe /d /s /c powershell.exe -NoProfile -NonInteractive -Command "Set-Location -LiteralPath '${sessionRoot}'; Set-Content -LiteralPath pre${backtick}pare.cjs -Value compromised"`,
+    `powershell.exe -NoProfile -NonInteractive -Command "Set-Location -LiteralPath '${sessionRoot}'; cmd.exe /d /c 'echo compromised>pre^pare.cjs'"`,
+  ]) {
+    const result = evaluateHook(claudeEvent('Bash', { command }, projectRoot), {}, projectRoot);
+    assert.equal(result.exitCode, 2, command);
+    assert.match(parseBlock(result).reason, /ambiguous_protected_reference/);
+  }
 }));
 
 test('only an exact direct Node prepare.cjs command receives the shell execution exception', () => withProject({}, ({ projectRoot, sessionRoot }) => {

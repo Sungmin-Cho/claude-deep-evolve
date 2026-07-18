@@ -947,6 +947,9 @@ function normalizeValue(value, replacements, typedIds = new Map()) {
   if (typeof value === 'string') {
     let output = value;
     for (const [from, to] of replacements) output = replaceLiteral(output, from, to);
+    for (const placeholder of ['{{SESSION_ROOT}}', '{{PROJECT_ROOT}}']) {
+      output = replaceLiteral(output, `${placeholder}\\`, `${placeholder}/`);
+    }
     return output;
   }
   if (Array.isArray(value)) {

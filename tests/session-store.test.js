@@ -566,15 +566,30 @@ test('a reclaimed owner cannot resume and install over the replacement transacti
   assert.equal(fs.readFileSync(path.join(stateRoot, secondRel), 'utf8'), 'owner-b-session\n');
 });
 
-test('native Windows open-target retry probe is bounded', { skip: process.platform !== 'win32' }, (t) => {
+test('native Windows open-target retry probe is bounded', { skip: process.platform !== 'win32' }, async (t) => {
   const root = fixture(t, 'evolve native windows target ');
   const target = path.join(root, 'state.json');
   fs.writeFileSync(target, 'old');
-  const fd = fs.openSync(target, 'r');
+  const childSource = [
+    "const fs = require('node:fs');",
+    "const fd = fs.openSync(process.argv[1], 'r');",
+    "process.stdout.write('ready\\n');",
+    'setTimeout(() => { fs.closeSync(fd); }, 100);',
+  ].join('\n');
+  const holder = spawn(process.execPath, ['-e', childSource, target], {
+    stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+  });
+  const holderClosed = new Promise((resolve) => holder.once('close', resolve));
+  let ready = '';
+  for await (const chunk of holder.stdout) {
+    ready += chunk.toString('utf8');
+    if (ready.includes('ready\n')) break;
+  }
+  assert.match(ready, /ready/);
   try {
     atomicWriteFile(target, 'new', { platform: 'win32' });
   } finally {
-    fs.closeSync(fd);
+    await holderClosed;
   }
   assert.equal(fs.readFileSync(target, 'utf8'), 'new');
 });

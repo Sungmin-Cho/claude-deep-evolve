@@ -29,7 +29,8 @@ function startInitialState(initializationId = '01J00000000000000000000000') {
 
 function makeProject(label = 'project with spaces') {
   const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'evolve-session-'));
-  const root = path.join(outer, label);
+  const portableLabel = label.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '_');
+  const root = path.join(outer, portableLabel);
   fs.mkdirSync(path.join(root, '.deep-evolve'), { recursive: true });
   fs.mkdirSync(path.join(root, 'src'), { recursive: true });
   fs.writeFileSync(path.join(root, 'src', 'index.js'), 'module.exports = 1;\n');
@@ -2107,8 +2108,10 @@ test('strict completed sessions consume only the recorded digest-bound versioned
       'append_meta_archive_local', '--dry-run', started.session_id,
     ]);
     assert.equal(legacyDryRun.status, 0, legacyDryRun.stderr);
-    assert.match(legacyDryRun.stderr,
-      new RegExp(relativeReceipt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    const receiptPattern = relativeReceipt.split('/')
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('[\\\\/]');
+    assert.match(legacyDryRun.stderr, new RegExp(receiptPattern));
 
     const recordedBytes = fs.readFileSync(published.artifact_path);
     fs.writeFileSync(published.artifact_path, '{"tampered":true}\n');

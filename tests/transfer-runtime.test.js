@@ -42,7 +42,8 @@ function envelopeOptions() {
 }
 
 test('data root preserves the shared ~/.claude/deep-evolve default and explicit override', () => {
-  assert.equal(resolveDataRoot({}, () => '/home/codex'), path.join('/home/codex', '.claude', 'deep-evolve'));
+  assert.equal(resolveDataRoot({}, () => path.resolve('/home/codex')),
+    path.join(path.resolve('/home/codex'), '.claude', 'deep-evolve'));
   assert.equal(resolveDataRoot({ DEEP_EVOLVE_DATA_ROOT: '/shared/archive' }, () => '/ignored'), path.resolve('/shared/archive'));
 });
 

@@ -13,6 +13,7 @@ const PUBLICATION_ID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const BUILDER_VERSION = '1.0';
 const TRANSIENT_CONFLICT_CODES = new Set(['EEXIST']);
+const PATH_AUTHORITY_ERRORS = new Set(['EACCES', 'ELOOP', 'ENOENT', 'EPERM']);
 
 function artifactError(code, message, rc = 2, details) {
   const error = Object.assign(new Error(message), { code, rc });
@@ -166,12 +167,22 @@ function assertContainedPath(root, candidate, {
         }
         break;
       }
+      if (PATH_AUTHORITY_ERRORS.has(error && error.code)) {
+        throw artifactError(code, `artifact path cannot be authenticated: ${current}`);
+      }
       throw error;
     }
     if (stat.isSymbolicLink()) {
       throw artifactError(code, `artifact path contains a symlink: ${current}`);
     }
-    const resolved = io.realpathSync(current);
+    let resolved;
+    try { resolved = io.realpathSync(current); }
+    catch (error) {
+      if (PATH_AUTHORITY_ERRORS.has(error && error.code)) {
+        throw artifactError(code, `artifact path cannot be authenticated: ${current}`);
+      }
+      throw error;
+    }
     if (!isPathInside(rootPhysical, resolved)) {
       throw artifactError(code, `artifact path resolves outside its root: ${current}`);
     }
@@ -196,8 +207,18 @@ function ensureDirectoryTree(root, candidate, { io = fs } = {}) {
     catch (error) {
       if (!(error && error.code === 'EEXIST')) throw error;
     }
-    const stat = io.lstatSync(current);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || io.realpathSync(current) !== current) {
+    let stat;
+    let resolved;
+    try {
+      stat = io.lstatSync(current);
+      resolved = io.realpathSync(current);
+    } catch (error) {
+      if (PATH_AUTHORITY_ERRORS.has(error && error.code)) {
+        throw artifactError('artifact_path_escape', `artifact directory cannot be authenticated: ${current}`);
+      }
+      throw error;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink() || resolved !== current) {
       throw artifactError('artifact_path_escape', `artifact directory is not private: ${current}`);
     }
   }

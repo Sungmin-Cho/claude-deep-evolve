@@ -26,6 +26,17 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+function runNpm(args, options) {
+  const npmCli = [
+    process.env.npm_execpath,
+    path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  ].find((candidate) => candidate && fs.existsSync(candidate));
+  if (npmCli) {
+    return spawnSync(process.execPath, [npmCli, ...args], options);
+  }
+  return spawnSync('npm', args, options);
+}
+
 function makeProject() {
   const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'evolve harness project with spaces ')));
   const sessionId = 'session-current';
@@ -582,8 +593,7 @@ test('supported runtime and tests have no Python or shell child-process edge', (
 });
 
 test('package contains native harnesses and excludes every legacy, Python, and shell file', () => {
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const packed = spawnSync(npm, ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+  const packed = runNpm(['pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: repoRoot, encoding: 'utf8', timeout: 30_000, shell: false,
   });
   assert.equal(packed.status, 0, packed.stderr);

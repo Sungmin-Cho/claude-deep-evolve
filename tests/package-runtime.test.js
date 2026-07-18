@@ -14,6 +14,17 @@ const root = path.resolve(__dirname, '..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 const readJson = (relative) => JSON.parse(read(relative));
 
+function runNpm(args, options) {
+  const npmCli = [
+    process.env.npm_execpath,
+    path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  ].find((candidate) => candidate && fs.existsSync(candidate));
+  if (npmCli) {
+    return spawnSync(process.execPath, [npmCli, ...args], options);
+  }
+  return spawnSync('npm', args, options);
+}
+
 const EXPECTED_FILES = [
   '.claude-plugin/',
   '.codex-plugin/',
@@ -1316,8 +1327,7 @@ test('package manifest pins Node 22 and the exact self-contained runtime boundar
 });
 
 test('npm artifact contains both policies and no legacy, Python, shell, or maintainer runtime', () => {
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const packed = spawnSync(npm, ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+  const packed = runNpm(['pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: root,
     encoding: 'utf8',
     timeout: 30_000,
@@ -2608,7 +2618,7 @@ test('Claude normalizer authenticates the exact pinned seven-record Write lifecy
     hook_event_name: 'PreToolUse',
     tool_name: 'Write',
     tool_input: {
-      file_path: path.join('{{SESSION_ROOT}}', 'program.md'),
+      file_path: '{{SESSION_ROOT}}/program.md',
       content: 'after',
     },
     provenance: {

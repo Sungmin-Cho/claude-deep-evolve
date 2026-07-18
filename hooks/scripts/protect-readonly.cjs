@@ -175,7 +175,10 @@ function parsePatchCommand(command) {
 
 function extractPatchPaths(command) {
   const parsed = parsePatchCommand(command);
-  return parsed.valid ? parsed.paths : [];
+  return parsed.valid ? parsed.paths.map((candidate) => {
+    const api = inferPathPlatform(candidate) === 'win32' ? path.win32 : path.posix;
+    return api.normalize(candidate);
+  }) : [];
 }
 
 function tokenizeCommand(command, platform = process.platform) {
@@ -447,6 +450,37 @@ function globPatternMatchesName(pattern, name, caseInsensitive = false) {
     || (parsed.ambiguous && ambiguousGlobCouldMatch(candidate, target));
 }
 
+function escapedShellTextMatchesName(source, name, caseInsensitive = false, platform = process.platform) {
+  const text = String(source || '');
+  const deescaped = text.replace(/[\^`]/g, '');
+  if (deescaped === text) return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const flags = caseInsensitive ? 'i' : '';
+  const target = `(?:^|[^A-Za-z0-9_.-])${escaped}(?=$|[^A-Za-z0-9_.-])`;
+  if (!new RegExp(target, flags).test(deescaped)) return false;
+  const redirected = new RegExp(
+    `>{1,2}\\s*["']?(?:[^\\s"'<>]*[\\\\/])?${escaped}(?=$|[^A-Za-z0-9_.-])`, flags,
+  );
+  const mutators = new Set([
+    'set-content', 'add-content', 'clear-content', 'out-file', 'remove-item',
+    'move-item', 'copy-item', 'rename-item', 'new-item', 'rm', 'del', 'erase',
+    'move', 'copy', 'ren', 'tee', 'sed',
+  ]);
+  const split = splitCommandSegments(deescaped, platform);
+  if (!split.valid) return true;
+  for (const segment of split.segments) {
+    if (!new RegExp(target, flags).test(segment)) continue;
+    const parsed = tokenizeCommand(segment, platform);
+    if (!parsed.valid) return true;
+    const executable = parsedExecutable(parsed.words);
+    if (executable.ambiguous) return true;
+    if (mutators.has(executable.executable || '')) return true;
+    if (parsed.controls.some((control) => control === '>' || control === '>>')
+      && redirected.test(segment)) return true;
+  }
+  return false;
+}
+
 function splitCommandSegments(command, platform) {
   const powershell = platform === 'powershell';
   const posixShell = platform !== 'win32' && !powershell;
@@ -635,7 +669,7 @@ function lexicalReconstructions(command, primaryPlatform) {
   const reconstructions = [];
   const seen = new Set();
   let ambiguous = false;
-  const add = (source, platform) => {
+  const add = (source, platform, shellPayload = false) => {
     if (Buffer.byteLength(source, 'utf8') > MAX_INSPECTION_BYTES) {
       ambiguous = true;
       return null;
@@ -645,15 +679,15 @@ function lexicalReconstructions(command, primaryPlatform) {
       ambiguous = true;
       return null;
     }
-    const key = `${platform}\0${parsed.valid}\0${parsed.words.join('\0')}\0${parsed.controls.join('\0')}`;
+    const key = `${platform}\0${shellPayload}\0${parsed.valid}\0${parsed.words.join('\0')}\0${parsed.controls.join('\0')}`;
     if (!seen.has(key)) {
       seen.add(key);
-      reconstructions.push({ platform, parsed });
+      reconstructions.push({ platform, parsed, shellPayload, source });
     }
     return parsed;
   };
   const inspect = (source, platform, depth) => {
-    const parsed = add(source, platform);
+    const parsed = add(source, platform, depth > 0);
     if (!parsed) return;
     const split = splitCommandSegments(source, platform);
     if (!split.valid || split.segments.length > MAX_INSPECTION_SEGMENTS) {
@@ -673,7 +707,7 @@ function lexicalReconstructions(command, primaryPlatform) {
       }
       const dialect = shellDialect(outerExecutable.executable || '');
       if (!dialect) continue;
-      const shellParsed = dialect === platform ? outerParsed : add(segment, dialect);
+      const shellParsed = dialect === platform ? outerParsed : add(segment, dialect, depth > 0);
       if (!shellParsed || !shellParsed.valid) {
         ambiguous = true;
         continue;
@@ -702,6 +736,8 @@ function lexicalReconstructions(command, primaryPlatform) {
   if (ambiguous) reconstructions.push({
     platform: 'ambiguous',
     ambiguous: true,
+    shellPayload: false,
+    source: '',
     parsed: { valid: false, words: [], controls: [] },
   });
   return reconstructions;
@@ -733,13 +769,16 @@ function commandPatternTargets(command, platform = inferCommandPlatform(command)
   const targets = new Set();
   const reconstructions = lexicalReconstructions(command, platform);
   for (let lane = 0; lane < reconstructions.length; lane += 1) {
-    const { platform: lanePlatform, parsed, ambiguous } = reconstructions[lane];
+    const {
+      platform: lanePlatform, parsed, ambiguous, shellPayload, source,
+    } = reconstructions[lane];
     if (ambiguous) {
       targets.add('ambiguous');
       continue;
     }
     const fragments = new Set();
-    const sources = lane === 0 ? [String(command || ''), ...parsed.words] : parsed.words;
+    const sources = lane === 0 || shellPayload
+      ? [String(source || command || ''), ...parsed.words] : parsed.words;
     for (const source of sources) {
       for (const fragment of splitGlobFragments(source)) fragments.add(fragment);
     }
@@ -748,6 +787,9 @@ function commandPatternTargets(command, platform = inferCommandPlatform(command)
       if (names.some((name) => [...fragments].some(
         (fragment) => globPatternMatchesName(fragment, name, caseInsensitive),
       ))) targets.add(kind);
+      if (shellPayload && names.some((name) => escapedShellTextMatchesName(
+        source, name, caseInsensitive, lanePlatform,
+      ))) targets.add('ambiguous');
     }
   }
   return targets;

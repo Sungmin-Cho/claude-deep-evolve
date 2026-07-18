@@ -46,9 +46,11 @@ test('baseline cascade preserves preferred, non-quarantine, best-effort, and no-
 test('seed dispatch builder returns the same typed object through both supported exports', () => {
   assert.equal(typeof buildSeedDispatchContext, 'function');
   const sessionId = '01J00000000000000000000000';
+  const projectRoot = path.resolve('/tmp/project with spaces');
+  const sessionRoot = path.join(projectRoot, '.deep-evolve', sessionId);
   const input = {
-    project_root: '/tmp/project with spaces',
-    session_root: `/tmp/project with spaces/.deep-evolve/${sessionId}`,
+    project_root: projectRoot,
+    session_root: sessionRoot,
     session: {
       session_id: sessionId,
       status: 'active',
@@ -57,7 +59,7 @@ test('seed dispatch builder returns the same typed object through both supported
       virtual_parallel: { seeds: [{
         id: 2,
         status: 'active',
-        worktree_path: `/tmp/project with spaces/.deep-evolve/${sessionId}/worktrees/seed_2`,
+        worktree_path: path.join(sessionRoot, 'worktrees', 'seed_2'),
         branch: `evolve/${sessionId}/seed-2`,
       }] },
     },
