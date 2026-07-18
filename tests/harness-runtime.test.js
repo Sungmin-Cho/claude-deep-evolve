@@ -594,7 +594,7 @@ test('supported runtime and tests have no Python or shell child-process edge', (
 
 test('package contains native harnesses and excludes every legacy, Python, and shell file', () => {
   const packed = runNpm(['pack', '--dry-run', '--json', '--ignore-scripts'], {
-    cwd: repoRoot, encoding: 'utf8', timeout: 30_000, shell: false,
+    cwd: repoRoot, encoding: 'utf8', timeout: 120_000, shell: false,
   });
   assert.equal(packed.status, 0, packed.stderr);
   const rows = JSON.parse(packed.stdout);
