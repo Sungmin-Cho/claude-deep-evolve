@@ -1187,7 +1187,7 @@ test('Task 2 Codex smoke is explicitly diagnostic-only and exercises the shared 
   assert.match(child.stderr, /does not prove installed-host hook registration/i);
 }));
 
-test('the extracted npm artifact runs its guard and diagnostic without stack or path leakage', () => {
+test('the extracted npm artifact runs its packaged guard while maintainer smoke stays absent', () => {
   const packRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'evolve packed artifact ')));
   const installRoot = path.join(packRoot, 'installed');
   fs.mkdirSync(installRoot, { recursive: true });
@@ -1222,6 +1222,7 @@ test('the extracted npm artifact runs its guard and diagnostic without stack or 
     const installedPlugin = path.join(installRoot, 'node_modules', '@deep-evolve', 'deep-evolve');
     const installedGuard = path.join(installedPlugin, 'hooks', 'scripts', 'protect-readonly.cjs');
     const installedSmoke = path.join(installedPlugin, 'scripts', 'smoke-installed-codex-hook.cjs');
+    assert.equal(fs.existsSync(installedSmoke), false, 'maintainer smoke must not ship');
     project = makeProject();
     const target = path.join(project.sessionRoot, 'prepare.cjs');
     const guard = spawnSync(process.execPath, [installedGuard], {
@@ -1239,25 +1240,7 @@ test('the extracted npm artifact runs its guard and diagnostic without stack or 
     const guardLines = guard.stderr.trim().split(/\r?\n/);
     assert.equal(guardLines.length, 1);
     assert.match(guardLines[0], /Deep Evolve Guard/);
-
-    const smoke = spawnSync(process.execPath, [
-      installedSmoke,
-      '--diagnose-command',
-      '--project-root', project.projectRoot,
-      '--target', target,
-    ], {
-      cwd: project.projectRoot,
-      encoding: 'utf8',
-    });
-    assert.equal(smoke.status, 0, smoke.stderr || smoke.stdout);
-    assert.equal(smoke.stdout.trim().split(/\r?\n/).length, 1);
-    assert.deepEqual(JSON.parse(smoke.stdout), {
-      diagnostic_only: true,
-      ok: true,
-      guard_exit_code: 2,
-      marker: 'Deep Evolve Guard',
-    });
-    const combinedOutput = `${guard.stdout}\n${guard.stderr}\n${smoke.stdout}\n${smoke.stderr}`;
+    const combinedOutput = `${guard.stdout}\n${guard.stderr}`;
     assert.doesNotMatch(combinedOutput, /\n\s*at\s|MODULE_NOT_FOUND|require stack|stack trace/i);
     assert.doesNotMatch(combinedOutput, new RegExp(packRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(combinedOutput, new RegExp(project.projectRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -1267,7 +1250,9 @@ test('the extracted npm artifact runs its guard and diagnostic without stack or 
   }
 });
 
-test('the Unix compatibility wrapper delegates to the same Node decision', () => withProject({}, ({ projectRoot, sessionRoot }) => {
+test('the Unix compatibility wrapper delegates to the same Node decision', {
+  skip: process.platform === 'win32',
+}, () => withProject({}, ({ projectRoot, sessionRoot }) => {
   const input = JSON.stringify(claudeEvent(
     'Edit', { file_path: path.join(sessionRoot, 'program.md') }, projectRoot,
   ));

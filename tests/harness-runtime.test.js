@@ -581,7 +581,7 @@ test('supported runtime and tests have no Python or shell child-process edge', (
   }
 });
 
-test('package contains native harnesses and excludes Task 6 legacy templates and every Python file', () => {
+test('package contains native harnesses and excludes every legacy, Python, and shell file', () => {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
   const packed = spawnSync(npm, ['pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: repoRoot, encoding: 'utf8', timeout: 30_000, shell: false,
@@ -595,7 +595,7 @@ test('package contains native harnesses and excludes Task 6 legacy templates and
     'templates/prepare-test-runner.cjs',
     'templates/prepare-scenario.cjs',
   ]) assert.equal(files.includes(required), true, required);
-  assert.deepEqual(files.filter((file) => file.startsWith('legacy/')), ['legacy/session-helper-v3.4.3.sh']);
-  assert.equal(files.some((file) => file.startsWith('legacy/templates/')), false);
+  assert.equal(files.some((file) => file.startsWith('legacy/')), false);
   assert.equal(files.some((file) => file.endsWith('.py')), false);
+  assert.equal(files.some((file) => file.endsWith('.sh')), false);
 });

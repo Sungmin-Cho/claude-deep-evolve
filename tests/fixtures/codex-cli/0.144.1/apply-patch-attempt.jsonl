@@ -1,0 +1,1 @@
+{"thread_id":"{{CODEX_THREAD_ID}}","tool_name":"apply_patch","tool_input":{"command":"*** Begin Patch\n*** Update File: {{SESSION_ROOT}}\\prepare.cjs\n@@\n-before\n+after\n*** End Patch"},"provenance":{"source":"actual_exact_pinned_host_stderr","raw_stderr_sha256":"9f9e1790bf36f4defacee79c635f1982fdaf30550b9b352c62f404b23b14b359"}}

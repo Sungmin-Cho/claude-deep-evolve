@@ -16,24 +16,27 @@
     "experiment-loop",
     "autonomous"
   ],
+  "engines": {
+    "node": ">=22"
+  },
   "files": [
     ".claude-plugin/",
     ".codex-plugin/",
     "hooks/hooks.json",
     "hooks/hooks.claude.json",
     "hooks/scripts/*.cjs",
-    "hooks/scripts/runtime/",
-    "hooks/scripts/kill-request-writer.sh",
-    "hooks/scripts/protect-readonly.sh",
-    "hooks/scripts/session-helper.sh",
     "hooks/scripts/*.js",
-    "legacy/session-helper-v3.4.3.sh",
-    "scripts/",
+    "hooks/scripts/runtime/",
+    "agents/",
     "skills/",
     "templates/",
-    "tests/"
+    "tests/",
+    "scripts/validate-envelope-emit.js"
   ],
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "test:legacy": "pytest legacy/test_oracle_parity.py hooks/scripts/tests/test_package_manifest.py -q",
+    "validate:codex": "node scripts/validate-codex-plugin.cjs",
+    "verify": "npm test && npm pack --dry-run"
   }
 }

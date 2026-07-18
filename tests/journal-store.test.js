@@ -596,7 +596,7 @@ test('every Task 4 coordination operation executes through the dispatcher', (t) 
   assert.equal(readJsonl({ stateRoot, relativePath: 's1/forum.jsonl' }).records.length, 2);
 });
 
-test('kill-request shell is a thin dispatcher adapter and package excludes six Python oracles and broad shell/Python globs', () => {
+test('kill-request shell stays a thin source adapter while every wrapper stays package-absent', () => {
   const wrapper = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'scripts', 'kill-request-writer.sh'), 'utf8');
   assert.match(wrapper, /deep-evolve-runtime\.cjs/);
   assert.match(wrapper, /coord\.queue-user-kill/);
@@ -607,8 +607,11 @@ test('kill-request shell is a thin dispatcher adapter and package excludes six P
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json')));
   assert.equal(manifest.files.includes('hooks/scripts/*.py'), false);
   assert.equal(manifest.files.includes('hooks/scripts/*.sh'), false);
-  assert.ok(manifest.files.includes('hooks/scripts/kill-request-writer.sh'));
-  assert.ok(manifest.files.includes('hooks/scripts/session-helper.sh'));
+  for (const adapter of [
+    'hooks/scripts/kill-request-writer.sh',
+    'hooks/scripts/protect-readonly.sh',
+    'hooks/scripts/session-helper.sh',
+  ]) assert.equal(manifest.files.includes(adapter), false, adapter);
 });
 
 test('supported Node journal store never imports or spawns Python', () => {
