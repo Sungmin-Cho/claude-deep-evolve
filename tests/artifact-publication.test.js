@@ -424,10 +424,9 @@ test('crash cutpoints recover one immutable publication without minting another 
 
 test('a parent swap after temp flush cannot redirect install or delete foreign cleanup bytes', (t) => {
   const project = makeProject(t, 'artifact swapped parent');
-  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'evolve-artifact-parent-swap-'));
-  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
   const targetParent = path.join(project.stateRoot, 'handoffs');
   const displacedParent = path.join(project.stateRoot, 'handoffs.displaced');
+  const foreignMarker = path.join(targetParent, 'foreign.txt');
   let swapped = false;
   const response = request(project.projectRoot, 'artifact.emit-handoff', {
     payload: structuredClone(CASES.handoff_payload),
@@ -441,14 +440,16 @@ test('a parent swap after temp flush cannot redirect install or delete foreign c
         if (phase !== 'after-artifact-temp-flush' || swapped) return;
         swapped = true;
         fs.renameSync(targetParent, displacedParent);
-        fs.symlinkSync(outside, targetParent, process.platform === 'win32' ? 'junction' : 'dir');
+        fs.mkdirSync(targetParent);
+        fs.writeFileSync(foreignMarker, 'foreign bytes');
       },
     },
   });
   assert.equal(swapped, true);
   assert.equal(response.exitCode, 2, JSON.stringify(response));
   assert.equal(response.error.code, 'artifact_path_escape');
-  assert.deepEqual(fs.readdirSync(outside), []);
+  assert.deepEqual(fs.readdirSync(targetParent), ['foreign.txt']);
+  assert.equal(fs.readFileSync(foreignMarker, 'utf8'), 'foreign bytes');
   assert.ok(fs.readdirSync(displacedParent).some((name) => name.includes('.tmp.')),
     'an unreachable owned temp is safer than deleting through the replacement path');
 });
