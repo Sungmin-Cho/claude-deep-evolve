@@ -422,7 +422,11 @@ test('crash cutpoints recover one immutable publication without minting another 
 
 });
 
-test('a parent swap after temp flush cannot redirect install or delete foreign cleanup bytes', (t) => {
+test('a parent swap after temp flush cannot redirect install or delete foreign cleanup bytes', {
+  skip: process.platform === 'win32'
+    ? 'Windows does not permit renaming this live publication parent without elevated filesystem privileges'
+    : false,
+}, (t) => {
   const project = makeProject(t, 'artifact swapped parent');
   const targetParent = path.join(project.stateRoot, 'handoffs');
   const displacedParent = path.join(project.stateRoot, 'handoffs.displaced');
@@ -452,6 +456,51 @@ test('a parent swap after temp flush cannot redirect install or delete foreign c
   assert.equal(fs.readFileSync(foreignMarker, 'utf8'), 'foreign bytes');
   assert.ok(fs.readdirSync(displacedParent).some((name) => name.includes('.tmp.')),
     'an unreachable owned temp is safer than deleting through the replacement path');
+});
+
+test('an injected parent identity change rejects artifact installation on every platform', (t) => {
+  const project = makeProject(t, 'artifact changed parent identity');
+  const targetParent = path.join(project.stateRoot, 'handoffs');
+  let identityChanged = false;
+  const io = new Proxy(fs, {
+    get(target, property) {
+      if (property === 'lstatSync') {
+        return (candidate, ...args) => {
+          const stat = target.lstatSync(candidate, ...args);
+          if (!identityChanged || path.resolve(candidate) !== path.resolve(targetParent)) return stat;
+          return new Proxy(stat, {
+            get(statTarget, statProperty) {
+              if (statProperty === 'ino') {
+                return typeof statTarget.ino === 'bigint' ? statTarget.ino + 1n : statTarget.ino + 1;
+              }
+              const value = statTarget[statProperty];
+              return typeof value === 'function' ? value.bind(statTarget) : value;
+            },
+          });
+        };
+      }
+      const value = target[property];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const response = request(project.projectRoot, 'artifact.emit-handoff', {
+    payload: structuredClone(CASES.handoff_payload),
+    session_id: project.sessionId,
+    source_artifacts: [],
+    publication_id: CASES.publication_ids.handoff,
+    expected_session_sha256: sessionDigest(project),
+  }, {
+    artifactOptions: {
+      io,
+      onPhase(phase) {
+        if (phase === 'after-artifact-temp-flush') identityChanged = true;
+      },
+    },
+  });
+  assert.equal(identityChanged, true);
+  assert.equal(response.exitCode, 2, JSON.stringify(response));
+  assert.equal(response.error.code, 'artifact_path_escape');
+  assert.deepEqual(fs.readdirSync(targetParent), []);
 });
 
 test('coherently checksummed preparation evidence cannot change kind or canonical target', (t) => {

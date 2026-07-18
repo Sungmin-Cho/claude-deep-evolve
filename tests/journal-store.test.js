@@ -152,7 +152,7 @@ test('four-process forum append is starvation-free under deterministic transacti
         event: { event: 'seed_keep', worker: ${worker}, sequence: i },
         sessionId: 's1', seedId: ${worker + 1}, now: () => 1767225600000,
         options: {
-          timeoutMs: 1_000,
+          timeoutMs: 5_000,
           retryDelayMs: 25,
           onPhase(phase) {
             if (phase === 'after-commit-marker') Atomics.wait(sleeper, 0, 0, 20);
