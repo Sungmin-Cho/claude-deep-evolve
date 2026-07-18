@@ -149,7 +149,10 @@ function createActiveProject(projectRoot) {
   }, null, 2)}\n`);
   const targetPath = path.join(sessionRoot, 'prepare.cjs');
   fs.writeFileSync(targetPath, 'before\n');
-  return { sessionId, sessionRoot, targetPath };
+  const seedProgramPath = path.join(sessionRoot, 'worktrees', 'seed_1', 'program.md');
+  fs.mkdirSync(path.dirname(seedProgramPath), { recursive: true });
+  fs.writeFileSync(seedProgramPath, '# seed program\n');
+  return { sessionId, sessionRoot, targetPath, seedProgramPath };
 }
 
 function collectObjects(value, output = []) {
@@ -751,37 +754,48 @@ async function acceptance(argv) {
       fs.realpathSync(projectRoot),
       fs.realpathSync.native(projectRoot),
     ])];
-    const targetForms = [...new Set([
-      project.targetPath,
-      fs.realpathSync(project.targetPath),
-      fs.realpathSync.native(project.targetPath),
-    ])];
-    const guardPathDiagnostics = [];
-    for (const cwdForm of cwdForms) {
-      for (const targetForm of targetForms) {
-        const result = installedGuard.evaluateHook({
-          tool_name: 'apply_patch',
-          tool_input: {
-            command: `*** Begin Patch\n*** Update File: ${targetForm}\n@@\n-before\n+after\n*** End Patch`,
-          },
-        }, {}, cwdForm);
-        guardPathDiagnostics.push({
-          cwd: cwdForm,
-          target: targetForm,
-          exit_code: result.exitCode,
-          output_sha256: sha256(result.output || ''),
-          blocked: result.exitCode === 2 && /Deep Evolve Guard/.test(result.output || ''),
-        });
+    const guardTargets = [
+      { kind: 'prepare', path: project.targetPath },
+      { kind: 'seed_program', path: project.seedProgramPath },
+    ];
+    const guardPathEvaluations = [];
+    for (const guardTarget of guardTargets) {
+      const targetForms = [...new Set([
+        guardTarget.path,
+        fs.realpathSync(guardTarget.path),
+        fs.realpathSync.native(guardTarget.path),
+      ])];
+      for (const cwdForm of cwdForms) {
+        for (const targetForm of targetForms) {
+          const result = installedGuard.evaluateHook({
+            tool_name: 'apply_patch',
+            tool_input: {
+              command: `*** Begin Patch\n*** Update File: ${targetForm}\n@@\n-before\n+after\n*** End Patch`,
+            },
+          }, {}, cwdForm);
+          guardPathEvaluations.push({
+            kind: guardTarget.kind,
+            cwd: cwdForm,
+            target: targetForm,
+            exit_code: result.exitCode,
+            output_sha256: sha256(result.output || ''),
+            blocked: result.exitCode === 2 && /Deep Evolve Guard/.test(result.output || ''),
+          });
+        }
       }
     }
-    writeJson(path.join(exactArtifactDir, 'codex-guard-path-diagnostics.json'), {
+    writeJson(path.join(exactArtifactDir, 'codex-guard-path-contract.json'), {
       schema_version: 1,
       project_root: projectRoot,
       target_path: project.targetPath,
       cwd_forms: cwdForms,
-      target_forms: targetForms,
-      evaluations: guardPathDiagnostics,
+      targets: guardTargets,
+      evaluations: guardPathEvaluations,
     });
+    if (guardPathEvaluations.some((evaluation) => !evaluation.blocked)) {
+      throw fatal('installed guard failed the Windows path-alias denial contract',
+        'windows_path_alias_guard_failure');
+    }
 
     const installedConfig = fs.readFileSync(codexConfigPath, 'utf8');
     const projectTrustHeader = `[projects.${JSON.stringify(projectRoot)}]`;

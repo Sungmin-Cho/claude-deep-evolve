@@ -78,11 +78,44 @@ function normalizeHookPath(value, platform = inferPathPlatform(value)) {
   return normalizeForComparison(value, platform);
 }
 
+function canonicalWindowsPath(value) {
+  const api = path.win32;
+  let cursor = api.resolve(value);
+  const missing = [];
+  for (;;) {
+    try {
+      return api.resolve(fs.realpathSync.native(cursor), ...missing);
+    } catch {
+      const parent = api.dirname(cursor);
+      if (parent === cursor) return api.resolve(value);
+      missing.unshift(api.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
 function sameHookPath(left, right, platform = inferPathPlatform(`${left || ''}${right || ''}`)) {
   try {
-    return normalizeHookPath(left, platform) === normalizeHookPath(right, platform);
+    const normalizedLeft = normalizeHookPath(left, platform);
+    const normalizedRight = normalizeHookPath(right, platform);
+    if (normalizedLeft === normalizedRight) return true;
+    if (platform !== 'win32') return false;
+    return normalizeHookPath(canonicalWindowsPath(left), platform)
+      === normalizeHookPath(canonicalWindowsPath(right), platform);
   } catch {
     return false;
+  }
+}
+
+function relativeHookPath(parent, candidate, platform = inferPathPlatform(`${parent || ''}${candidate || ''}`)) {
+  try {
+    const api = platform === 'win32' ? path.win32 : path.posix;
+    const base = platform === 'win32' ? canonicalWindowsPath(parent) : parent;
+    const child = platform === 'win32' ? canonicalWindowsPath(candidate) : candidate;
+    if (!isPathInside(base, child, platform)) return null;
+    return api.relative(base, child).replace(/\\/g, '/');
+  } catch {
+    return null;
   }
 }
 
@@ -895,11 +928,8 @@ function protectedKind(candidate, context) {
   if (same('strategy.yaml')) return 'strategy';
 
   const worktreesRoot = path.join(context.sessionRoot, 'worktrees');
-  if (isPathInside(worktreesRoot, requested, platform)) {
-    const api = platform === 'win32' ? path.win32 : path.posix;
-    const relative = api.relative(worktreesRoot, requested).replace(/\\/g, '/');
-    if (/^seed_[^/]+\/program\.md$/i.test(relative)) return 'program';
-  }
+  const relative = relativeHookPath(worktreesRoot, requested, platform);
+  if (relative && /^seed_[^/]+\/program\.md$/i.test(relative)) return 'program';
   return null;
 }
 
@@ -1076,6 +1106,7 @@ module.exports = {
   evaluateHook,
   extractPatchPaths,
   normalizeHookPath,
+  relativeHookPath,
   sameHookPath,
   tokenizeCommand,
 };
