@@ -744,6 +744,45 @@ async function acceptance(argv) {
     }
     writeJson(path.join(exactArtifactDir, 'installed-cache-manifest.json'), installed.manifest);
 
+    const installedGuard = require(path.join(installed.root, 'hooks', 'scripts',
+      'protect-readonly.cjs'));
+    const cwdForms = [...new Set([
+      projectRoot,
+      fs.realpathSync(projectRoot),
+      fs.realpathSync.native(projectRoot),
+    ])];
+    const targetForms = [...new Set([
+      project.targetPath,
+      fs.realpathSync(project.targetPath),
+      fs.realpathSync.native(project.targetPath),
+    ])];
+    const guardPathDiagnostics = [];
+    for (const cwdForm of cwdForms) {
+      for (const targetForm of targetForms) {
+        const result = installedGuard.evaluateHook({
+          tool_name: 'apply_patch',
+          tool_input: {
+            command: `*** Begin Patch\n*** Update File: ${targetForm}\n@@\n-before\n+after\n*** End Patch`,
+          },
+        }, {}, cwdForm);
+        guardPathDiagnostics.push({
+          cwd: cwdForm,
+          target: targetForm,
+          exit_code: result.exitCode,
+          output_sha256: sha256(result.output || ''),
+          blocked: result.exitCode === 2 && /Deep Evolve Guard/.test(result.output || ''),
+        });
+      }
+    }
+    writeJson(path.join(exactArtifactDir, 'codex-guard-path-diagnostics.json'), {
+      schema_version: 1,
+      project_root: projectRoot,
+      target_path: project.targetPath,
+      cwd_forms: cwdForms,
+      target_forms: targetForms,
+      evaluations: guardPathDiagnostics,
+    });
+
     const installedConfig = fs.readFileSync(codexConfigPath, 'utf8');
     const projectTrustHeader = `[projects.${JSON.stringify(projectRoot)}]`;
     if (installedConfig.split(/\r?\n/).includes(projectTrustHeader)) {
