@@ -141,7 +141,7 @@ const {
 } = require('./runtime/artifact-store.cjs');
 const { findProjectRoot, isPathInside } = require('./runtime/runtime-paths.cjs');
 
-const RUNTIME_VERSION = require('../../package.json').version;
+const RUNTIME_VERSION = '3.5.0';
 
 const OPERATIONS = Object.freeze([
   'session.resolve-current',
@@ -6074,7 +6074,8 @@ function dispatch(request, dependencies = {}) {
 }
 
 function legacyHelp() {
-  return `session-helper.sh v${RUNTIME_VERSION}
+  // Compatibility output is a frozen legacy protocol surface, not a release source.
+  return `session-helper.sh v3.4.3
 
 Session lifecycle:
   compute_session_id, resolve_current, list_sessions,

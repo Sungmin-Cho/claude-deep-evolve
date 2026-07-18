@@ -4,8 +4,9 @@ deep-evolve is a goal-driven autonomous experimentation plugin. The repository
 contains shared Claude Code/Codex skills, checked-in agent policies, manifests,
 zero-dependency Node runtime, hooks, evaluator templates, and tests.
 
-Read the current version from `.claude-plugin/plugin.json`. Release history
-belongs in [`CHANGELOG.md`](CHANGELOG.md) and [`CHANGELOG.ko.md`](CHANGELOG.ko.md).
+Read the current version with
+`node -p "require('./package.json').version"`. Release history belongs in
+[`CHANGELOG.md`](CHANGELOG.md) and [`CHANGELOG.ko.md`](CHANGELOG.ko.md).
 
 > 📄 Documentation in this repo follows `docs/DOCS_RULE.md` (local maintainer guide).
 
@@ -27,8 +28,8 @@ policy and then verify their exact worktree. Both follow
 
 ## Core contracts
 
-- Supported runtime is zero-dependency Node CommonJS; do not fetch code or add
-  an MCP server.
+- Supported runtime is zero-dependency Node 22 CommonJS on Ubuntu, macOS, and
+  native Windows; do not fetch code or add an MCP server.
 - Canonical state/coordination/artifacts use registered `runtime-op:` requests.
 - CLI evaluation uses only `prepare.cjs` plus validated config; protocol mode
   uses its fixed configured tool sequence.
@@ -43,12 +44,13 @@ policy and then verify their exact worktree. Both follow
 ## Documentation and release boundaries
 
 README files describe evergreen usage and remain structurally bilingual.
-Release narration belongs only in the changelogs. Version synchronization,
-package membership, CI, release, and suite pins are performed only in their
-owned release task.
+Release narration belongs only in the changelogs. Synchronize the Claude
+manifest, Codex manifest, package metadata, workflow skill frontmatter, and
+runtime version; run the local rulebook validator before release. deep-suite
+owns post-merge marketplace pins.
 
 ## Verification
 
-Run `npm test`. For the cross-host instruction contract, run Node's test runner
+Run `npm test` and `npm pack --dry-run`. For the cross-host instruction contract, run Node's test runner
 over `tests/protocol-runtime-contract.test.js`, `tests/runtime-dispatch.test.js`,
 `tests/plugin-contract.test.js`, and `tests/active-harness-entrypoints.test.js`.

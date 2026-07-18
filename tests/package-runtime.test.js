@@ -25,6 +25,120 @@ function runNpm(args, options) {
   return spawnSync('npm', args, options);
 }
 
+function runDocsRulebookValidator(args) {
+  return spawnSync(process.execPath, [
+    path.join(root, 'scripts', 'validate-docs-rulebooks.cjs'),
+    ...args,
+  ], {
+    cwd: root,
+    encoding: 'utf8',
+    shell: false,
+  });
+}
+
+function parseDiagnostics(source) {
+  return source.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+}
+
+const ALIGNED_EVOLVE_RULEBOOK = `# Documentation Maintenance Rules
+
+Read the release version with Node: \`node -p "require('./package.json').version"\`.
+The five release sources are the Claude manifest, Codex manifest, package metadata,
+workflow skill frontmatter, and the Node \`RUNTIME_VERSION\` constant.
+The thin \`session-helper.sh\` adapter and removed \`HELPER_VERSION\` are explicitly
+excluded from release version sources.
+Supported runtime and ordinary CI use Node 22 on Ubuntu, macOS, and Windows.
+Ordinary CI is Node-only. Python 3.11, PyYAML, and pytest are allowed only in the
+separately named isolated Unix-only \`legacy-oracle\` job.
+The maintainer Codex validator remains outside supported runtime and ordinary CI.
+`;
+
+const ALIGNED_SUITE_RULEBOOK = `# Documentation Maintenance Rules
+
+Read registry SHA pins with Node-only tooling. This suite has no plugin version triple.
+The thin \`session-helper.sh\` adapter and removed \`HELPER_VERSION\` are never release
+version sources.
+Supported runtime and ordinary CI use Node 22 on Ubuntu, macOS, and Windows.
+Ordinary CI is Node-only. Python 3.11, PyYAML, and pytest are allowed only in the
+separately named isolated Unix-only \`legacy-oracle\` job.
+The maintainer Codex validator remains outside supported runtime and ordinary CI.
+`;
+
+test('maintainer rulebook validator rejects every obsolete policy and accepts aligned fixtures', (t) => {
+  const validator = path.join(root, 'scripts', 'validate-docs-rulebooks.cjs');
+  assert.equal(fs.existsSync(validator), true, 'maintainer rulebook validator must exist');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-evolve docs rules '));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const evolveRule = path.join(directory, 'evolve rule.md');
+  const suiteRule = path.join(directory, 'suite rule.md');
+
+  function writeFixtures(evolve = ALIGNED_EVOLVE_RULEBOOK, suite = ALIGNED_SUITE_RULEBOOK) {
+    fs.writeFileSync(evolveRule, evolve);
+    fs.writeFileSync(suiteRule, suite);
+  }
+
+  function run(evolvePath = evolveRule, suitePath = suiteRule) {
+    return runDocsRulebookValidator([
+      '--evolve-rule', evolvePath,
+      '--suite-rule', suitePath,
+    ]);
+  }
+
+  writeFixtures();
+  let result = run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(parseDiagnostics(result.stdout).map(({ type }) => type),
+    ['docs_rulebooks_valid']);
+
+  result = run(path.join(directory, 'missing.md'));
+  assert.equal(result.status, 1);
+  assert.ok(parseDiagnostics(result.stderr)
+    .some(({ type, code, rule }) => type === 'docs_rulebook_error'
+      && code === 'missing_rulebook' && rule === 'evolve'));
+
+  result = run(evolveRule, path.join(directory, 'missing suite.md'));
+  assert.equal(result.status, 1);
+  assert.ok(parseDiagnostics(result.stderr)
+    .some(({ type, code, rule }) => type === 'docs_rulebook_error'
+      && code === 'missing_rulebook' && rule === 'suite'));
+
+  const obsoleteCases = [
+    ['outdated_jq_version_read', `${ALIGNED_EVOLVE_RULEBOOK}\nUse jq -r .version package.json.\n`],
+    ['outdated_legacy_version_source', ALIGNED_EVOLVE_RULEBOOK
+      .replace('are explicitly\nexcluded from release version sources', 'must stay in lockstep as release version sources')],
+    ['outdated_legacy_version_source', `${ALIGNED_EVOLVE_RULEBOOK}\nVersion sync also keeps session-helper.sh HELPER_VERSION in lockstep.\n`],
+    ['supported_ci_uses_python', ALIGNED_EVOLVE_RULEBOOK
+      .replace('Ordinary CI is Node-only.', 'Ordinary CI runs Python and pytest.')],
+    ['missing_node22_three_os_matrix', ALIGNED_EVOLVE_RULEBOOK.replace(', and Windows', '')],
+    ['missing_isolated_unix_legacy_oracle', ALIGNED_EVOLVE_RULEBOOK
+      .replace('separately named isolated Unix-only `legacy-oracle` job', 'compatibility job')],
+    ['missing_maintainer_codex_boundary', ALIGNED_EVOLVE_RULEBOOK
+      .replace('The maintainer Codex validator remains outside supported runtime and ordinary CI.\n', '')],
+    ['missing_five_release_sources', ALIGNED_EVOLVE_RULEBOOK
+      .replace('The five release sources are', 'Release metadata includes')],
+  ];
+
+  for (const [code, source] of obsoleteCases) {
+    writeFixtures(source);
+    result = run();
+    assert.equal(result.status, 1, `${code}: ${result.stdout}`);
+    assert.ok(parseDiagnostics(result.stderr).some((diagnostic) => diagnostic.code === code),
+      `${code}: ${result.stderr}`);
+  }
+
+  writeFixtures(ALIGNED_EVOLVE_RULEBOOK,
+    ALIGNED_SUITE_RULEBOOK.replace('Read registry SHA pins with Node-only tooling. '
+      + 'This suite has no plugin version triple.', 'Read registry pins from the manifests.'));
+  result = run();
+  assert.equal(result.status, 1);
+  assert.ok(parseDiagnostics(result.stderr)
+    .some(({ code, rule }) => code === 'missing_suite_node_pin_policy' && rule === 'suite'));
+
+  writeFixtures();
+  result = run();
+  assert.equal(result.status, 0, result.stderr);
+});
+
 const EXPECTED_FILES = [
   '.claude-plugin/',
   '.codex-plugin/',

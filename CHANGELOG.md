@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] — 2026-07-11
+
+### Added
+
+- Native Node evaluation and release checks now cover Ubuntu, macOS, and Windows 11.
+
+### Changed
+
+- Claude Code and Codex now share the same documented workflows, state contracts, and legacy-session migration behavior.
+
+### Fixed
+
+- Cross-platform readonly hooks now fail closed without shell expansion, duplicate registration, or host startup errors.
+
 ## [3.4.3] — 2026-07-07 (stagnation detection restore + coordinator termination hardening)
 
 ### Fixed

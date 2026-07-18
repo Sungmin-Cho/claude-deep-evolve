@@ -4,8 +4,9 @@ Asserts the supported version sources stay in lockstep:
 
   * package.json                                            → "version"
   * .claude-plugin/plugin.json                              → "version"
+  * .codex-plugin/plugin.json                               → "version"
   * skills/deep-evolve-workflow/SKILL.md frontmatter        → "version"
-  * hooks/scripts/deep-evolve-runtime.cjs                  → RUNTIME_VERSION
+  * hooks/scripts/deep-evolve-runtime.cjs                   → RUNTIME_VERSION
 
 Drift in any of these caused the v3.3.0–v3.3.2 release-window incident where
 SKILL.md frontmatter advertised v3.2.0 while the plugin manifest had moved on.
@@ -71,6 +72,12 @@ def _read_plugin_manifest_version() -> str:
     )["version"]
 
 
+def _read_codex_manifest_version() -> str:
+    return json.loads(
+        (ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )["version"]
+
+
 _SKILL_VERSION_RE = re.compile(r'^version:\s*"([^"]+)"\s*$', re.MULTILINE)
 
 
@@ -87,7 +94,7 @@ def _read_skill_version() -> str:
 
 
 _RUNTIME_VERSION_RE = re.compile(
-    r"^const RUNTIME_VERSION = require\('\.\./\.\./package\.json'\)\.version;\s*$",
+    r"^const RUNTIME_VERSION = '([^']+)';\s*$",
     re.MULTILINE,
 )
 
@@ -98,12 +105,17 @@ def _read_runtime_version() -> str:
     )
     m = _RUNTIME_VERSION_RE.search(runtime)
     assert m, "deep-evolve-runtime.cjs must declare RUNTIME_VERSION"
-    return _read_package_version()
+    return m.group(1)
 
 
 def test_plugin_and_package_versions_match():
     plugin_v = _read_plugin_manifest_version()
+    codex_v = _read_codex_manifest_version()
     pkg_v = _read_package_version()
+    assert codex_v == plugin_v, (
+        f".codex-plugin/plugin.json version={codex_v!r} drifted from "
+        f".claude-plugin/plugin.json version={plugin_v!r}; bump both together."
+    )
     assert plugin_v == pkg_v, (
         f".claude-plugin/plugin.json version={plugin_v!r} drifted from "
         f"package.json version={pkg_v!r}; bump both together."

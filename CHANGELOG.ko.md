@@ -5,6 +5,20 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)를 따르며,
 [유의적 버전](https://semver.org/spec/v2.0.0.html)을 준수합니다.
 
+## [3.5.0] — 2026-07-11
+
+### Added
+
+- 네이티브 Node 평가 및 릴리스 검사가 Ubuntu, macOS, Windows 11을 지원합니다.
+
+### Changed
+
+- Claude Code와 Codex가 동일한 워크플로우, 상태 계약, 레거시 세션 마이그레이션 동작을 공유합니다.
+
+### Fixed
+
+- 크로스 플랫폼 읽기 전용 훅이 셸 확장, 중복 등록, 호스트 시작 오류 없이 fail-closed로 동작합니다.
+
 ## [3.4.3] — 2026-07-07 (stagnation 감지 복원 + coordinator 종료조건 경화)
 
 ### Fixed
