@@ -1,6 +1,6 @@
 {
   "name": "deep-evolve",
-  "version": "3.5.0",
+  "version": "3.6.0",
   "description": "Autonomous Experimentation Protocol — shared Claude Code and Codex agent policies for goal-driven measured improvement loops",
   "author": {
     "name": "sungmin"

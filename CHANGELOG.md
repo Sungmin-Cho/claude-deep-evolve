@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0] — 2026-07-19
+
+### Added
+
+- Guard hook startup now reports a clear diagnostic when the plugin root environment is missing.
+
+### Changed
+
+- Hook commands on both host surfaces resolve the plugin root from the runtime environment instead of template expansion, removing startup crashes on hosts that do not expand the template variable.
+
+### Fixed
+
+- Guard infrastructure failures such as a missing root, a missing script, or a crashed or timed-out child now fail closed instead of silently skipping readonly protection.
+
 ## [3.5.0] — 2026-07-11
 
 ### Added

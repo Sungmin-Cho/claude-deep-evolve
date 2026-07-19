@@ -8,7 +8,7 @@ const root = path.resolve(__dirname, '..');
 const readJson = (relative) => JSON.parse(fs.readFileSync(path.join(root, relative), 'utf8'));
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
-const RELEASE_VERSION = '3.5.0';
+const RELEASE_VERSION = '3.6.0';
 
 // Both host surfaces pin the identical env-bootstrap guard command (E2 fix).
 // Double-quoted so the embedded single quotes stay literal.
@@ -48,7 +48,7 @@ function currentRelease(source) {
   return source.slice(start, next === -1 ? source.length : next);
 }
 
-test('3.5.0 is synchronized across all five supported release sources', () => {
+test('3.6.0 is synchronized across all five supported release sources', () => {
   const versions = {
     claude: readJson('.claude-plugin/plugin.json').version,
     codex: readJson('.codex-plugin/plugin.json').version,
@@ -143,11 +143,11 @@ test('evergreen bilingual READMEs document the same supported cross-host surface
   assert.match(korean, /MCP 서버를 번들하지 않습니다/i);
 });
 
-test('3.5.0 changelogs are concise, bilingual, and user-observable', () => {
+test('3.6.0 changelogs are concise, bilingual, and user-observable', () => {
   const english = currentRelease(read('CHANGELOG.md'));
   const korean = currentRelease(read('CHANGELOG.ko.md'));
-  assert.match(english, /^## \[3\.5\.0\] — 2026-07-11$/m);
-  assert.match(korean, /^## \[3\.5\.0\] — 2026-07-11$/m);
+  assert.match(english, /^## \[3\.6\.0\] — 2026-07-19$/m);
+  assert.match(korean, /^## \[3\.6\.0\] — 2026-07-19$/m);
   assert.deepEqual(headingDepths(english), headingDepths(korean));
   assert.deepEqual(headingDepths(english), [2, 3, 3, 3]);
   assert.match(english, /^### Added$/m);
