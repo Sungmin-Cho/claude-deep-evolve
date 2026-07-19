@@ -10,6 +10,10 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
 const RELEASE_VERSION = '3.5.0';
 
+// Both host surfaces pin the identical env-bootstrap guard command (E2 fix).
+// Double-quoted so the embedded single quotes stay literal.
+const GUARD_BOOTSTRAP_COMMAND = "node -e \"const{spawn}=require('node:child_process');const{existsSync}=require('node:fs');const{join}=require('node:path');const r=process.env.CLAUDE_PLUGIN_ROOT||process.env.PLUGIN_ROOT||'';if(r===''){console.error('deep-evolve protect-readonly bootstrap: CLAUDE_PLUGIN_ROOT/PLUGIN_ROOT unset; fail-closed');process.exit(2);}const s=join(r,'hooks','scripts','protect-readonly.cjs');if(existsSync(s)===false){console.error('deep-evolve protect-readonly bootstrap: missing '+s+'; fail-closed');process.exit(2);}const w=process.platform==='win32';const c=spawn(process.execPath,[s],{stdio:'inherit',detached:w===false});let z=false;let k=false;let g;const f=(code)=>{if(z){return;}z=true;clearTimeout(t);clearTimeout(g);process.exit(code);};const t=setTimeout(()=>{k=true;console.error('deep-evolve protect-readonly bootstrap: deadline 4000ms exceeded; killing tree; fail-closed');try{if(w){const tk=spawn('taskkill',['/PID',String(c.pid),'/T','/F']);tk.on('error',()=>{});}else{process.kill(-c.pid,'SIGKILL');}}catch(e){}g=setTimeout(()=>{console.error('deep-evolve protect-readonly bootstrap: kill grace 800ms expired; fail-closed');f(2);},800);},4000);c.on('error',(e)=>{console.error('deep-evolve protect-readonly bootstrap: spawn error '+e.message+'; fail-closed');f(2);});c.on('exit',(code,sig)=>{if(k){f(2);return;}if(code===0){f(0);return;}if(code===2){f(2);return;}console.error('deep-evolve protect-readonly bootstrap: child exit '+code+' signal '+sig+'; fail-closed');f(2);});\"";
+
 function frontmatterVersion(source) {
   const match = source.match(/^version:\s*"([^"]+)"\s*$/m);
   assert.ok(match, 'workflow skill must declare a quoted frontmatter version');
@@ -197,7 +201,7 @@ test('Codex uses one default-discovered Node guard and no plugin-level hook supp
   assert.equal(registration.hooks.length, 1);
   assert.deepEqual(registration.hooks[0], {
     type: 'command',
-    command: 'node "${PLUGIN_ROOT}/hooks/scripts/protect-readonly.cjs"',
+    command: GUARD_BOOTSTRAP_COMMAND,
     commandWindows: 'node "${PLUGIN_ROOT}\\hooks\\scripts\\protect-readonly.cjs" ; exit $LASTEXITCODE',
     timeout: 5,
   });
@@ -209,7 +213,7 @@ test('Codex uses one default-discovered Node guard and no plugin-level hook supp
   assert.doesNotMatch(registration.matcher, /Read|Write|Edit|MultiEdit/);
 });
 
-test('Claude uses one custom-path shell-free Node guard without Codex-only fields', () => {
+test('Claude uses one custom-path env-bootstrap Node guard without Codex-only fields', () => {
   const manifest = readJson('.claude-plugin/plugin.json');
   assert.equal(manifest.hooks, './hooks/hooks.claude.json');
   assert.equal(Object.hasOwn(manifest, 'mcpServers'), false);
@@ -223,10 +227,10 @@ test('Claude uses one custom-path shell-free Node guard without Codex-only field
   assert.equal(registration.hooks.length, 1);
   assert.deepEqual(registration.hooks[0], {
     type: 'command',
-    command: 'node',
-    args: ['${CLAUDE_PLUGIN_ROOT}/hooks/scripts/protect-readonly.cjs'],
+    command: GUARD_BOOTSTRAP_COMMAND,
     timeout: 5,
   });
+  assert.equal(Object.hasOwn(registration.hooks[0], 'args'), false);
   assert.equal(Object.hasOwn(registration.hooks[0], 'commandWindows'), false);
   assert.doesNotMatch(registration.matcher, /apply_patch/);
 });

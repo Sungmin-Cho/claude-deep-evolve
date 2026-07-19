@@ -201,10 +201,12 @@ function authenticateInstalledCache({ candidates, sourceManifest }) {
   const commands = collectObjects(hooks)
     .filter((value) => value.type === 'command')
     .map((value) => ({ command: value.command, args: value.args }));
-  if (commands.length !== 1 || commands[0].command !== 'node'
-    || !Array.isArray(commands[0].args) || commands[0].args.length !== 1
-    || !commands[0].args[0].includes('${CLAUDE_PLUGIN_ROOT}')) {
-    throw fatal('installed Claude hook command is not the shell-free shared Node guard',
+  if (commands.length !== 1 || typeof commands[0].command !== 'string'
+    || !commands[0].command.startsWith('node -e "')
+    || commands[0].command.includes('${')
+    || !commands[0].command.includes('CLAUDE_PLUGIN_ROOT')
+    || commands[0].args !== undefined) {
+    throw fatal('installed Claude hook command is not the env-bootstrap shared Node guard',
       'unsupported_pinned_host_install_contract');
   }
   return { root: installed, manifest: fileManifest(installed) };
