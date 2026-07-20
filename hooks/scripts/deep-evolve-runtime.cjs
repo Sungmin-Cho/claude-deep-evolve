@@ -141,7 +141,7 @@ const {
 } = require('./runtime/artifact-store.cjs');
 const { findProjectRoot, isPathInside } = require('./runtime/runtime-paths.cjs');
 
-const RUNTIME_VERSION = '3.5.0';
+const RUNTIME_VERSION = '3.6.0';
 
 const OPERATIONS = Object.freeze([
   'session.resolve-current',

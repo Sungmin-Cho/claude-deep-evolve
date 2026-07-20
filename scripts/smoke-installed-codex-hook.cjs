@@ -230,7 +230,11 @@ function authenticateInstalledCache({ candidates, sourceManifest }) {
   const commands = collectObjects(hooks)
     .map((value) => value.command)
     .filter((value) => typeof value === 'string');
-  if (commands.length !== 1 || !commands[0].includes('${PLUGIN_ROOT}')) {
+  if (commands.length !== 1 || typeof commands[0] !== 'string'
+    || !commands[0].startsWith('node -e "')
+    || commands[0].includes('${')
+    || !commands[0].includes('CLAUDE_PLUGIN_ROOT')
+    || !commands[0].includes('process.env.PLUGIN_ROOT')) {
     throw fatal('installed Codex default hook manifest is not exact',
       'unsupported_pinned_host_install_contract');
   }
