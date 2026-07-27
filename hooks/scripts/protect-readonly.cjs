@@ -18,6 +18,16 @@ const {
 
 const CLAUDE_TOOLS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'Bash']);
 const RECOGNIZED_INACTIVE = new Set(['initializing', 'paused', 'completed', 'aborted']);
+// Legacy pre-strict-codec sessions serialized session.yaml as free-form YAML
+// that parseStateDocument cannot read (UNSUPPORTED_YAML) or that fails the
+// current schema (STATE_VALIDATION_FAILED). When a stale current.json still
+// points at such a session, the guard would otherwise fail closed on every
+// invocation forever. sessions.jsonl is the runtime's own append-only
+// lifecycle registry; a terminal status recorded there for that exact
+// session_id is independent evidence that the session no longer needs
+// protection. Anything weaker keeps the existing fail-closed denial.
+const LEGACY_UNREADABLE_CODES = new Set(['UNSUPPORTED_YAML', 'STATE_VALIDATION_FAILED']);
+const JOURNAL_TERMINAL_STATUSES = new Set(['completed', 'aborted']);
 const LOCK_OPTIONS = Object.freeze({ timeoutMs: 250, recoveryTimeoutMs: 250 });
 const PROTECTED_BASENAME = /(?:^|[\\/\s"'])(?:prepare\.(?:cjs|py)|prepare\.config\.json|prepare-protocol\.md|program\.md|strategy\.yaml)(?=$|[\\/\s"':])/i;
 const PROTECTED_NAME_KINDS = Object.freeze([
@@ -818,11 +828,39 @@ function findEvolveRoot(cwd) {
   }
 }
 
+// Mirror of the runtime's registryStatus() fold (deep-evolve-runtime.cjs):
+// the last status-bearing sessions.jsonl event for the session wins
+// (reconciled → .to; created/migrated/status_change/finished → .status).
+// Any unreadable journal — missing, lock contention, or a malformed line —
+// yields null so the caller stays fail-closed.
+function journalStatusFor(stateRoot, sessionId) {
+  let raw;
+  try {
+    raw = readCoordinationFiles(stateRoot, ['sessions.jsonl'], LOCK_OPTIONS)['sessions.jsonl'];
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  let status = null;
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let event;
+    try { event = JSON.parse(trimmed); } catch { return null; }
+    if (!plainObject(event) || event.session_id !== sessionId) continue;
+    if (event.event === 'reconciled' && typeof event.to === 'string') status = event.to;
+    else if (['created', 'migrated', 'status_change', 'finished'].includes(event.event)
+      && typeof event.status === 'string') status = event.status;
+  }
+  return status;
+}
+
 function loadSessionContext(cwd) {
   const projectRoot = findEvolveRoot(cwd);
   if (!projectRoot) return { kind: 'absent' };
   const stateRoot = path.join(projectRoot, '.deep-evolve');
   const currentRaw = readCoordinationFiles(stateRoot, ['current.json'], LOCK_OPTIONS)['current.json'];
+  let pointerSessionId = null;
   let sessionRoot;
   let sessionPath;
   let sessionRaw;
@@ -837,6 +875,7 @@ function loadSessionContext(cwd) {
     if (!isPathInside(stateRoot, sessionRoot) || sameHookPath(stateRoot, sessionRoot)) {
       throw Object.assign(new Error('current.json session_id escapes state root'), { code: 'current_invalid' });
     }
+    pointerSessionId = current.session_id;
     sessionPath = path.join(sessionRoot, 'session.yaml');
     const relativeSession = path.relative(stateRoot, sessionPath);
     const snapshot = readCoordinationFiles(stateRoot, ['current.json', relativeSession], LOCK_OPTIONS);
@@ -857,7 +896,29 @@ function loadSessionContext(cwd) {
     sessionRaw = snapshot['session.yaml'];
   }
   if (!sessionRaw) return { kind: 'absent' };
-  const session = validateSession(parseStateDocument(sessionRaw, { sourcePath: sessionPath }));
+  let session;
+  try {
+    session = validateSession(parseStateDocument(sessionRaw, { sourcePath: sessionPath }));
+  } catch (error) {
+    // Legacy-format fallback: only when current.json names the session (so the
+    // identity is known without the unreadable document) AND the runtime's own
+    // lifecycle registry proves a terminal status for that exact session.
+    // The flat (pointer-less) layout keeps the existing fail-closed behavior.
+    const code = error && error.code;
+    if (pointerSessionId && LEGACY_UNREADABLE_CODES.has(code)) {
+      const journalStatus = journalStatusFor(stateRoot, pointerSessionId);
+      if (journalStatus && JOURNAL_TERMINAL_STATUSES.has(journalStatus)) {
+        return {
+          kind: 'inactive',
+          projectRoot,
+          stateRoot,
+          sessionRoot,
+          session: { session_id: pointerSessionId, status: journalStatus },
+        };
+      }
+    }
+    throw error;
+  }
   if (session.status !== 'active') {
     if (!RECOGNIZED_INACTIVE.has(session.status)) {
       throw Object.assign(new Error(`unsupported session status ${JSON.stringify(session.status)}`), { code: 'state_invalid' });

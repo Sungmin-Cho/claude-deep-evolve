@@ -5,6 +5,13 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.1] — 2026-07-27
+
+### Fixed
+
+- The readonly guard no longer fails closed forever when a stale active-session pointer references a legacy session whose state document predates the strict codec and can no longer be parsed or validated: when the runtime's own session lifecycle registry records a terminal status (completed or aborted) for that exact session, the guard treats it as inactive and stops denying unrelated requests.
+- Weaker evidence keeps the previous fail-closed denial — a missing, damaged, or non-terminal lifecycle registry, a record for a different session, or the pointer-less flat layout — and a readable active state document always wins over the registry.
+
 ## [3.6.0] — 2026-07-19
 
 ### Added
