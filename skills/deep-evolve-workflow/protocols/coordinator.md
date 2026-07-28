@@ -6,7 +6,8 @@ validates worktrees, and routes outer evolution/synthesis/completion. It never
 performs seed experiment work.
 
 Every `runtime-op:` call invokes the packaged Node dispatcher at
-`hooks/scripts/deep-evolve-runtime.cjs` through the host-neutral runtime contract.
+`${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deep-evolve-runtime.cjs` through the
+host-neutral runtime contract.
 
 ## Version and session gate
 

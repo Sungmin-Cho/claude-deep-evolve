@@ -2,7 +2,7 @@
 
 Synthesis authenticates terminal seed evidence, selects a deterministic
 baseline, attempts bounded integration in an isolated worktree, and applies the
-exact P7 fallback ladder. It never merges unauthenticated prose or defaults an
+exact fallback ladder. It never merges unauthenticated prose or defaults an
 unknown interaction to mutation.
 
 ## Entry and final-state collection
@@ -31,9 +31,10 @@ worktree/head context and a report-only allocation.
 
 host-route: codex
 
-Dispatch a generic subagent whose first action reads `agents/evolve-seed.md`
-and second verifies the exact literal worktree before read or mutation. The
-report-only contract is identical. Missing capability returns to root.
+Dispatch a generic subagent whose first action reads
+`${CLAUDE_PLUGIN_ROOT}/agents/evolve-seed.md` and second verifies the exact
+literal worktree before read or mutation. The report-only contract is identical.
+Missing capability returns to root.
 
 ## Deterministic baseline and K/budget policy
 
@@ -62,8 +63,9 @@ bounded candidate heads, allowed targets, K/budget, audit, and stop conditions.
 host-route: codex
 
 Dispatch a generic subagent whose first action reads
-`agents/evolve-coordinator.md` and second verifies the exact synthesis worktree
-before mutation. It receives the identical integration contract.
+`${CLAUDE_PLUGIN_ROOT}/agents/evolve-coordinator.md` and second verifies the
+exact synthesis worktree before mutation. It receives the identical integration
+contract.
 
 The integration may inspect only authenticated commits, modify only allowed
 targets, preserve evaluator/program/strategy/state seals, stay within budget,
@@ -75,7 +77,7 @@ finite score or the exact failure sentinel, target-only diff, clean worktree,
 audit acceptance, full commit, and ancestry. Dirty/ambiguous failure retains a
 checksummed recovery path before cleanup.
 
-## Exact P7 finalization
+## Exact finalization
 
 Call `runtime-op: synthesis.finalize` with exactly N, baseline Q, synthesis Q,
 nonnegative finite tolerance, and `user_choice` only when the prompt window

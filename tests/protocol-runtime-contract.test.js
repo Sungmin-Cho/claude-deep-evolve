@@ -1496,7 +1496,12 @@ test('runtime invocation, interaction adapters, and fail-closed Codex fallback a
   assert.equal(fs.existsSync(runtimeContract), true,
     'missing ' + relative(runtimeContract));
   const source = read(runtimeContract);
-  assert.match(source, /derive.*literal absolute plugin root.*loaded skill file/is);
+  // The plugin root is named by its anchor, never derived from where a document
+  // happened to be loaded: a source-relative derivation resolves against the
+  // target workspace, which the seeds are actively modifying.
+  assert.match(source, /\$\{CLAUDE_PLUGIN_ROOT\}[\s\S]{0,40}literal absolute plugin root/i);
+  assert.match(source, /never inferred from the\s+workspace/i);
+  assert.doesNotMatch(source, /derive[^.]*plugin root[^.]*loaded skill file/is);
   assert.match(source, /PROJECT_ROOT\/\.deep-evolve\/\.runtime-requests\//);
   assert.match(source, /node "C:\\Users\\dev\\Deep Evolve Plugin\\hooks\\scripts\\deep-evolve-runtime\.cjs" --request "C:\\Users\\dev\\Project With Spaces\\\.deep-evolve\\\.runtime-requests\\01J00000000000000000000000\.json"/);
   assert.match(source, /node "\/Users\/dev\/Deep Evolve Plugin\/hooks\/scripts\/deep-evolve-runtime\.cjs" --request "\/Users\/dev\/Project With Spaces\/\.deep-evolve\/\.runtime-requests\/01J00000000000000000000000\.json"/);
@@ -1563,8 +1568,12 @@ test('coordinator, seed, and synthesis policies expose both host dispatch routes
     if (!/generic subagent/i.test(source)) {
       issues.push(relative(file) + ' lacks Codex generic-subagent route');
     }
-    if (!new RegExp('first action[^\\n]*Read ' + agentPath.replaceAll('.', '\\.'), 'i').test(source)) {
-      issues.push(relative(file) + ' lacks first policy read');
+    // The policy read must name the plugin root explicitly. A bare
+    // `Read agents/…` resolves against the target workspace, so a project under
+    // experimentation could serve its own coordinator/seed policy.
+    const anchoredRead = 'Read \\$\\{CLAUDE_PLUGIN_ROOT\\}/' + agentPath.replaceAll('.', '\\.');
+    if (!new RegExp('first action[^\\n]*' + anchoredRead, 'i').test(source)) {
+      issues.push(relative(file) + ' lacks an anchored first policy read');
     }
     if (!/second action[^\n]*verif(?:y|ies)[^\n]*worktree/i.test(source)) {
       issues.push(relative(file) + ' lacks second worktree verification');

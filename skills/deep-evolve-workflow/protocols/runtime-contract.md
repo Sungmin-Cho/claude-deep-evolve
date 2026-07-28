@@ -7,8 +7,10 @@ request with direct state mutation.
 
 ## Literal request and dispatcher paths
 
-Derive the literal absolute plugin root from the loaded skill file. Derive and
-authenticate the literal project root from the loaded workspace. Store each
+`${CLAUDE_PLUGIN_ROOT}` is the literal absolute plugin root; hosts that export
+only `PLUGIN_ROOT` name the same directory. It is never inferred from the
+workspace, the current directory, or where a document was loaded from. Derive
+and authenticate the literal project root from the loaded workspace. Store each
 complete request below literal `PROJECT_ROOT/.deep-evolve/.runtime-requests/`
 with a unique JSON name. The request has exactly `schema_version`, `operation`,
 `context`, and `payload`; schema version is `1.0`, and context carries the

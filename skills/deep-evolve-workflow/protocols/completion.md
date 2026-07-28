@@ -1,4 +1,4 @@
-# Completion Report (Section E)
+# Completion Protocol
 
 ## Protocol Entry — Version Gate
 
@@ -13,11 +13,12 @@ a duplicate writer; the single `session.complete` transaction below owns final
 status, outcome, Git identity, report/receipt references, synthesis, strategy,
 registry, journal, and D0-to-D1 authority.
 
-## Pre-completion: Meta Archive Update
+## Pre-completion: meta archive update
 
-Before generating the report, execute **Meta Archive Update (E.0)** from
-`protocols/transfer.md`. This updates transfer learning evidence; it does not
-publish the final receipt or complete the session.
+Before generating the report, run the recording gate in
+`${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/transfer.md`
+(`runtime-op: transfer.record`). It updates cross-project transfer evidence; it
+does not publish the final receipt or complete the session.
 
 ## Completion Report
 
