@@ -62,12 +62,11 @@ to deep-suite after the release merges.
 
 ## Verification
 
-Run `npm test` and `npm pack --dry-run` from the repository root. For cross-host
-instruction changes also run the focused contract suite:
-`${CLAUDE_PLUGIN_ROOT}/tests/protocol-runtime-contract.test.js`,
-`${CLAUDE_PLUGIN_ROOT}/tests/runtime-dispatch.test.js`,
-`${CLAUDE_PLUGIN_ROOT}/tests/plugin-contract.test.js`,
-`${CLAUDE_PLUGIN_ROOT}/tests/active-harness-entrypoints.test.js`, and
-`${CLAUDE_PLUGIN_ROOT}/tests/skill-reference-integrity.test.js`. These ship with
-the package, so the anchor names the installed copy; in a clone the same paths
-sit beneath the repository root.
+Run `npm test` and `npm pack --dry-run` from the repository root; `npm test`
+covers every suite. For cross-host instruction changes the load-bearing suites
+are protocol-runtime-contract, runtime-dispatch, plugin-contract,
+active-harness-entrypoints, and the reference guard skill-reference-integrity.
+
+These are maintainer commands, run with the repository as the working directory,
+so they name suites rather than paths — a plugin path in an instruction would
+have to be anchored, and an anchored path would be wrong for a clone.

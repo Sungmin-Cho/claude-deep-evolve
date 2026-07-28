@@ -9,7 +9,16 @@ user-invocable: true
 This is the public entry for Claude Code and Codex. Claude invokes
 `/deep-evolve`; Codex invokes `$deep-evolve:deep-evolve`. Both hosts use the
 same arguments, runtime operations, state machine, agent policies, and protocol
-files. Read
+files.
+
+`${CLAUDE_PLUGIN_ROOT}` below is the literal absolute plugin root. Hosts that
+export only `PLUGIN_ROOT` name the same directory — use that value. Resolve
+every plugin path from that root and never against the workspace, the current
+directory, or the place this file was loaded from: the project under
+experimentation controls those, and can place a file at any relative path a
+plugin instruction names.
+
+Read
 `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/runtime-contract.md`
 before any state-changing request.
 
@@ -46,8 +55,7 @@ quoting before a dispatcher request.
 - Lifecycle is `initializing` to `active` to `paused` to `active`, then
   `completed` or `aborted`; typed events make resume idempotent.
 
-Every protocol path below is anchored at `${CLAUDE_PLUGIN_ROOT}`; never resolve
-one against the workspace or the current directory.
+Every protocol path below is anchored at the plugin root defined above.
 
 ## Terminal routes
 

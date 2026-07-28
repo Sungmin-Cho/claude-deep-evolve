@@ -88,13 +88,32 @@ const PLUGIN_DOCS = pluginDocBasenames();
 // Scope note: the invariant covers paths the plugin tells you to *open or run*.
 const PLUGIN_DIRS = 'skills|agents|scripts|hooks|templates|protocols';
 // One spelling only. `CLAUDE_PLUGIN_ROOT` is the name this repo's hook bootstrap
-// and `runtime-paths.cjs` already resolve; a second placeholder token would give
-// a reader two things to keep in sync and the guard two things to trust.
+// reads first; a second placeholder token would give a reader two things to keep
+// in sync and the guard two things to trust.
 const ANCHOR = String.raw`\$\{CLAUDE_PLUGIN_ROOT\}`;
+
+// SEPARATOR NORMALISATION — one place, applied the moment a token is recognised.
+//
+// `node hooks\scripts\deep-evolve-runtime.cjs` is the same instruction as the
+// slash form and just as shadowable, but every rule below compares against
+// slash-shaped keys. Teaching each rule about backslashes is the losing move:
+// `scripts\lib/x.js` mixes both and slips through whichever rule learned only
+// one. So the token is normalised once, at recognition, and every consumer —
+// deny-by-default, FORMS, bare-basename, containment, the resolver and the
+// malicious-workspace fixture — sees the same representation.
+//
+// The *same* function normalises the PLUGIN_FILES keys. Normalising only the
+// lookup side is a real bug, not a theoretical one: on Windows `path.relative`
+// yields backslash keys, so a slash-shaped lookup misses every one of them.
+function normalizeSeparators(value) {
+  return typeof value === 'string' ? value.replace(/\\/g, '/') : value;
+}
+
 const ANCHORED_TOKEN = new RegExp(`^(?:${ANCHOR})/`);
-const PATH_BODY = String.raw`[A-Za-z0-9._/${'{}'}|$-]+`;
-const REL = String.raw`\.{1,2}/`;
-const ANY_ROOT = String.raw`(?:(?:${ANCHOR})/|${REL}|(?:${PLUGIN_DIRS})/)`;
+const SEP = String.raw`[\\/]`;
+const PATH_BODY = String.raw`[A-Za-z0-9._/\\${'{}'}|$-]+`;
+const REL = String.raw`\.{1,2}${SEP}`;
+const ANY_ROOT = String.raw`(?:(?:${ANCHOR})${SEP}|${REL}|(?:${PLUGIN_DIRS})${SEP})`;
 // `.cjs` is this plugin's runtime extension — the dispatcher, every runtime
 // module and every evaluator template. Omitting it would leave the single most
 // frequently named executable class unchecked.
@@ -115,7 +134,7 @@ const FORMS = [
   // 5. executable path token anywhere. The trailing boundary matters: without it
   // `.js` matches the prefix of `.json` and the guard reports a file that does
   // not exist.
-  ['executable-token', new RegExp(String.raw`(?<![A-Za-z0-9._/{}<>$-])((?:${ANCHOR})/|${REL}|(?:${PLUGIN_DIRS})/)([A-Za-z0-9._/-]*\.(?:${EXEC_EXT})(?![A-Za-z0-9]))`, 'g')],
+  ['executable-token', new RegExp(String.raw`(?<![A-Za-z0-9._/\\{}<>$-])((?:${ANCHOR})${SEP}|${REL}|(?:${PLUGIN_DIRS})${SEP})([A-Za-z0-9._/\\-]*\.(?:${EXEC_EXT})(?![A-Za-z0-9]))`, 'g')],
 ];
 
 // DENY BY DEFAULT.
@@ -136,7 +155,11 @@ const FORMS = [
 // next to the skills. A document that names a test file is therefore naming a
 // path that exists inside an installed plugin, and an unanchored one resolves
 // against the target workspace like any other.
-const PLUGIN_FILES = (() => {
+// `toKey` is injectable so the Windows separator behaviour can be emulated on a
+// POSIX runner: `path.relative` returns backslash-joined keys there. The
+// emulation test patches only this side, which is exactly the asymmetry that
+// makes a one-sided normalisation look correct locally and fail on Windows.
+function buildPluginFiles({ toKey = (p) => path.relative(ROOT, p) } = {}) {
   const rel = new Set();
   const skip = new Set(['node_modules', '.git', '.claude', '.deep-evolve', '.deep-review',
     '.deep-docs', '.serena', '.v3-venv', '.pytest_cache', '.github', 'docs']);
@@ -145,12 +168,13 @@ const PLUGIN_FILES = (() => {
       if (skip.has(e.name)) continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
-      else rel.add(path.relative(ROOT, p));
+      else rel.add(normalizeSeparators(toKey(p)));
     }
   };
   walk(ROOT);
   return rel;
-})();
+}
+const PLUGIN_FILES = buildPluginFiles();
 
 // A token whose first segment is a plugin directory is a plugin path even when
 // it does not resolve — `protocols/init.md` read from the entry skill is both
@@ -168,15 +192,20 @@ const ROOT_METADATA = new Set(['package.json', 'plugin.json', 'AGENTS.md', 'CLAU
   'README.md', 'README.ko.md', 'CHANGELOG.md', 'CHANGELOG.ko.md', 'CONTRIBUTING.md',
   'SECURITY.md', 'SKILL.md', 'hooks.json', 'hooks.claude.json', 'pyproject.toml']);
 
-// Path-shaped tokens: multi-segment paths, plus dotted single segments.
-const PATH_TOKEN = /[A-Za-z0-9_.@${}<>-]+(?:\/[A-Za-z0-9_.@{}|*-]+)+|[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,6}\b/g;
+// Path-shaped tokens: multi-segment paths, plus dotted single segments. Either
+// separator is a separator — see normalizeSeparators for why this is recognised
+// here rather than taught to each rule downstream.
+const PATH_TOKEN = /[A-Za-z0-9_.@${}<>-]+(?:[\\/][A-Za-z0-9_.@{}|*-]+)+|[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,6}\b/g;
 
-function resolvesInPlugin(token, sourceFile) {
-  const clean = token.replace(/^\.\//, '');
-  if (PLUGIN_FILES.has(clean)) return true;
+// Both sides of every comparison go through normalizeSeparators: the token here,
+// the key set in buildPluginFiles.
+function resolvesInPlugin(token, sourceFile, files = PLUGIN_FILES) {
+  const clean = normalizeSeparators(token).replace(/^\.\//, '');
+  if (files.has(clean)) return true;
   try {
-    const fromSource = path.relative(ROOT, path.resolve(path.dirname(sourceFile), token));
-    if (PLUGIN_FILES.has(fromSource)) return true;
+    const fromSource = normalizeSeparators(
+      path.relative(ROOT, path.resolve(path.dirname(sourceFile), clean)));
+    if (files.has(fromSource)) return true;
   } catch { /* unresolvable token — prose */ }
   return false;
 }
@@ -193,13 +222,16 @@ function* scopedTokens(line) {
     // `<skills/…/x.json 첨부>` extracts with a leading `<`, resolves to nothing,
     // and the token escapes the guard silently — which is how this class of
     // finding stayed invisible in deep-work for a full review round.
-    const token = m[0].startsWith('<') ? m[0].slice(1) : m[0];
+    // THE normalisation point. Everything downstream compares slash-shaped
+    // tokens, so no other rule needs to know that `\` exists.
+    const raw = m[0].startsWith('<') ? m[0].slice(1) : m[0];
+    const token = normalizeSeparators(raw);
     if (ALLOWLIST.has(token)) continue;
     if (!token.includes('/') && ROOT_METADATA.has(token)) continue;
     const before = line.slice(Math.max(0, m.index - 30), m.index);
     // Already inside an anchored path. The trailing form covers shell splicing
     // — node "'"${CLAUDE_PLUGIN_ROOT}"'/hooks/x.cjs" is anchored, just quoted.
-    if (/\$\{CLAUDE_PLUGIN_ROOT\}["'\s]*\/?$/.test(before)) continue;
+    if (/\$\{CLAUDE_PLUGIN_ROOT\}["'\s]*[\\/]?$/.test(before)) continue;
     // Markdown link target `](x.md)` — rendered navigation between docs, not an
     // instruction handed to a file tool. Runtime reads use the Read forms above.
     if (/\]\($/.test(before)) continue;
@@ -229,8 +261,16 @@ function denyByDefaultHits(line, sourceFile, body) {
   }
   const out = [];
   for (const token of scopedTokens(line)) {
-    if (ANCHORED_TOKEN.test(token)) continue;          // clause B checks these
     if (programmatic.has(token)) continue;             // anchored by the helper
+    if (ANCHORED_TOKEN.test(token)) {
+      // Clause B for every anchored token, not only the ones a FORM happens to
+      // match. Containment used to run inside the five FORMS, so an anchored
+      // path that escaped the root while wearing no recognised verb — a bare
+      // `${CLAUDE_PLUGIN_ROOT}/../evil.json` in prose — was checked by nothing.
+      if (escapesRoot(token)) out.push({ form: 'anchored-token', token, why: 'escapes plugin root' });
+      else if (escapesViaSymlink(token)) out.push({ form: 'anchored-token', token, why: 'escapes via symlink' });
+      continue;
+    }
     if (resolvesInPlugin(token, sourceFile)) {
       out.push({ form: 'resolves-in-plugin', token, why: 'unanchored' });
     } else if (PLUGIN_DIR_PREFIX.test(token)) {
@@ -285,8 +325,24 @@ function expansionState(line, index) {
 }
 
 // Only a line that is actually a command can suffer this; prose containing an
-// apostrophe is not a shell word.
+// apostrophe is not a shell word. This name list is a *fallback* for a bare
+// command line — it is not the primary test, because enumerating commands is the
+// same losing game as enumerating instruction syntaxes: `cp`, `mv`, `install`,
+// `rsync` and any project wrapper all quote paths and none of them are here.
 const SHELL_COMMAND = /\b(?:echo|printf|cat|node|bash|sh|zsh|jq|awk|sed|curl|export)\b/;
+
+// The primary test instead. In these documents a command is written inside an
+// inline-code span; prose is written outside one. So a `${CLAUDE_PLUGIN_ROOT}`
+// that sits inside backticks is in a command context whatever the verb, and an
+// apostrophe in "the plugin's root" is outside one and cannot open a quote.
+// Yields [start, end) offsets of each inline-code span on the line.
+function inlineCodeSpans(line) {
+  const spans = [];
+  const re = /(`+)([^`]|[^`][\s\S]*?)\1/g;
+  let m;
+  while ((m = re.exec(line))) spans.push([m.index + m[1].length, m.index + m[0].length - m[1].length]);
+  return spans;
+}
 
 // `${...}` only interpolates in a JS *template literal*. In a quoted string it
 // is inert, and a specifier that does not start with ./ ../ or / is a bare
@@ -311,10 +367,18 @@ function nonExpandingAnchors(line) {
   const out = [];
   const flag = (why) => out.push({ form: 'non-expanding-anchor', token: '${CLAUDE_PLUGIN_ROOT}', why });
 
-  // 1. shell — single quotes and quoted heredocs leave it literal
+  // 1. shell — single quotes and quoted heredocs leave it literal.
+  // Two ways to qualify as a command context, so no command name list decides
+  // it: inside an inline-code span (quote state is judged within that span), or
+  // a bare line naming one of the fallback commands.
+  const spans = inlineCodeSpans(line);
   let i = line.indexOf('${CLAUDE_PLUGIN_ROOT}');
   while (i !== -1) {
-    if (SHELL_COMMAND.test(line) && expansionState(line, i) === 'single') {
+    const span = spans.find(([s, e]) => i >= s && i < e);
+    const literal = span
+      ? expansionState(line.slice(span[0], span[1]), i - span[0]) === 'single'
+      : SHELL_COMMAND.test(line) && expansionState(line, i) === 'single';
+    if (literal) {
       flag('single-quoted shell — literal, so the path resolves against the workspace');
     }
     i = line.indexOf('${CLAUDE_PLUGIN_ROOT}', i + 1);
@@ -351,7 +415,7 @@ const ROOT_SENTINEL = path.sep === '/' ? '/plugin-root' : 'C:\\plugin-root';
 // the result to stay inside it. Tokens carrying template placeholders cannot be
 // resolved literally, so they are checked lexically for `..` instead.
 function escapesRoot(token) {
-  const body = token.replace(new RegExp(`^(?:${ANCHOR})/`), '');
+  const body = normalizeSeparators(token).replace(new RegExp(`^(?:${ANCHOR})/`), '');
   if (/[{}|$]/.test(body)) return body.split('/').includes('..');
   const resolved = path.resolve(ROOT_SENTINEL, body);
   return resolved !== ROOT_SENTINEL && !resolved.startsWith(ROOT_SENTINEL + path.sep);
@@ -359,13 +423,17 @@ function escapesRoot(token) {
 
 // Symlink escape: an anchored, lexically-contained path can still point out of
 // the root if a component is a symlink. Only checkable for targets that exist.
-function escapesViaSymlink(token) {
-  const body = token.replace(new RegExp(`^(?:${ANCHOR})/`), '');
+// `root` is injectable so this axis can be exercised on its own: the repository
+// contains no escaping symlink (correctly), so without a fixture root the
+// function is generated and never asserted, which is precisely how it survived
+// mutation.
+function escapesViaSymlink(token, root = ROOT) {
+  const body = normalizeSeparators(token).replace(new RegExp(`^(?:${ANCHOR})/`), '');
   if (/[{}|$]/.test(body)) return false;
-  const target = path.join(ROOT, body);
+  const target = path.join(root, body);
   if (!fs.existsSync(target)) return false;
   const real = fs.realpathSync(target);
-  const realRoot = fs.realpathSync(ROOT);
+  const realRoot = fs.realpathSync(root);
   return real !== realRoot && !real.startsWith(realRoot + path.sep);
 }
 
@@ -395,7 +463,9 @@ function shadowableTokens(line, sourceFile = path.join(ROOT, 'AGENTS.md'), body 
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(line))) {
-      const token = m[2] === undefined ? m[1] : m[1] + m[2];
+      // Same normalisation point as scopedTokens — FORMS now recognise either
+      // separator, so the captured token is normalised before any comparison.
+      const token = normalizeSeparators(m[2] === undefined ? m[1] : m[1] + m[2]);
       if (programmaticAll.has(token)) continue;
       if (!ANCHORED_TOKEN.test(token)) out.push({ form, token, why: 'unanchored' });
       else if (escapesRoot(token)) out.push({ form, token, why: 'escapes plugin root' });
@@ -895,4 +965,156 @@ test('every referenced skill path resolves', () => {
   }
   assert.deepEqual(broken, [], `unresolvable or out-of-root reference:\n  ${broken.join('\n  ')}`);
   assert.ok(resolved > 0, 'sweep matched no references at all — the patterns have rotted');
+});
+
+// ---------------------------------------------------------------------------
+// Per-axis cases. Each block exists because a mutation of the axis it covers
+// survived the suite: the behaviour was generated but never asserted. A test
+// that only runs the whole scanner over a clean repository cannot tell a live
+// rule from a dead one.
+// ---------------------------------------------------------------------------
+
+test('separator: a backslash path is the same instruction as the slash form', () => {
+  // The scanner reported zero failures for this line before normalisation,
+  // while rejecting the identical slash form.
+  const back = 'node hooks\\scripts\\deep-evolve-runtime.cjs --request req.json';
+  const fwd = 'node hooks/scripts/deep-evolve-runtime.cjs --request req.json';
+  for (const line of [back, fwd]) {
+    assert.ok(shadowableTokens(line).length > 0, `must flag: ${line}`);
+  }
+  // Mixed separators are the reason normalisation lives at recognition rather
+  // than inside each rule: a rule taught only about `\` still misses this.
+  assert.ok(shadowableTokens('node skills\\deep-evolve/SKILL.md').length > 0,
+    'mixed separators must flag');
+  // Normalisation must not turn an anchored path into a violation.
+  assert.deepEqual(
+    shadowableTokens('node "${CLAUDE_PLUGIN_ROOT}\\hooks\\scripts\\deep-evolve-runtime.cjs"'), [],
+    'an anchored backslash path is still anchored');
+
+  // Deny-by-default must see the backslash form too. These carry no verb and no
+  // interpreter, so no FORM matches and the tokeniser is the only thing that
+  // can. Both basenames are in ROOT_METADATA, so a slash-blind tokeniser
+  // extracts just the exempt tail (`plugin.json`, `SKILL.md`) and reports
+  // nothing — which is exactly how a separator-only mutation survived until
+  // this case existed.
+  for (const line of ['The Claude manifest is `.claude-plugin\\plugin.json`.',
+    'The public entry is `skills\\deep-evolve\\SKILL.md`.']) {
+    assert.ok(shadowableTokens(line).length > 0, `deny-by-default must flag: ${line}`);
+  }
+});
+
+test('separator: prose containing backslashes is not promoted to a path', () => {
+  // Negatives. Each is paired with a positive on the next line, so an
+  // over-broad PATH_TOKEN fails the negative and a dead one fails the control.
+  const prose = [
+    'Escape a literal backslash as \\\\ when writing the pattern.',
+    'Columns are separated by \\t and rows by \\n.',
+    'Match with the expression [A-Za-z]+\\d+ before comparing identities.',
+    'Windows absolute paths stay literal: node "C:\\Users\\dev\\Plugin\\hooks\\x.cjs"',
+  ];
+  for (const line of prose) {
+    assert.deepEqual(shadowableTokens(line), [], `prose must not be flagged: ${line}`);
+  }
+  // Non-vacuity: the scanner is awake on lines of the same shape.
+  assert.ok(shadowableTokens('Run node hooks\\scripts\\deep-evolve-runtime.cjs now.').length > 0,
+    'fixture is vacuous — a real backslash plugin path must still be flagged');
+  assert.ok(shadowableTokens('Match [A-Za-z]+ inside agents/evolve-seed.md first.').length > 0,
+    'fixture is vacuous — a real path beside a regex must still be flagged');
+});
+
+test('containment applies to every anchored token, not only the five FORMS', () => {
+  // No read verb, no interpreter, no recognised form — containment used to be
+  // reachable only from inside a FORM, so this line was checked by nothing.
+  const hits = shadowableTokens('The registry lives at `${CLAUDE_PLUGIN_ROOT}/../workspace/evil.json`.');
+  assert.equal(hits.length, 1, 'a bare anchored escaping token must be flagged');
+  assert.equal(hits[0].why, 'escapes plugin root');
+  // The in-root counterpart stays clean, so the rule is containment and not a
+  // blanket rejection of `..`.
+  assert.deepEqual(
+    shadowableTokens('The policy lives at `${CLAUDE_PLUGIN_ROOT}/skills/../agents/evolve-seed.md`.'), [],
+    'in-root traversal outside a FORM must be accepted');
+});
+
+test('expansion: a literal anchor is caught whatever the command is called', () => {
+  // The command allowlist had no cp/mv/install/rsync and no project wrapper, so
+  // each of these passed while the identical `echo` line failed.
+  for (const cmd of ['cp', 'mv', 'install', 'rsync', 'deep-evolve-wrap']) {
+    const line = `Run \`${cmd} '\${CLAUDE_PLUGIN_ROOT}/agents/evolve-seed.md' /tmp/x\` first.`;
+    const hits = nonExpandingAnchors(line);
+    assert.equal(hits.length, 1, `must flag literal anchor under ${cmd}: ${line}`);
+    assert.match(hits[0].why, /single-quoted shell/);
+  }
+  // Prose apostrophes must not open a quote state. This is what the command
+  // allowlist was protecting against, and why the replacement is the inline-code
+  // span rather than no gate at all.
+  for (const line of [
+    "The plugin's root is `${CLAUDE_PLUGIN_ROOT}` and it isn't derived from cwd.",
+    "Don't resolve `${CLAUDE_PLUGIN_ROOT}/agents/evolve-seed.md` against the workspace.",
+  ]) {
+    assert.deepEqual(nonExpandingAnchors(line), [], `prose must not be flagged: ${line}`);
+  }
+  // An expanding position inside the same span shape stays clean.
+  assert.deepEqual(
+    nonExpandingAnchors('Run `cp "${CLAUDE_PLUGIN_ROOT}/agents/evolve-seed.md" /tmp/x` first.'), [],
+    'a double-quoted anchor expands and must be accepted');
+});
+
+test('symlink escape is asserted, not merely generated', () => {
+  // The repository correctly contains no escaping symlink, so this axis had no
+  // fixture and its mutation survived. The root is injected instead.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'de-axis-root-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'de-axis-outside-'));
+  try {
+    fs.mkdirSync(path.join(root, 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(outside, 'evil.md'), 'SHADOW\n');
+    fs.writeFileSync(path.join(root, 'agents', 'ok.md'), 'fine\n');
+    fs.symlinkSync(path.join(outside, 'evil.md'), path.join(root, 'agents', 'evil.md'));
+
+    assert.equal(escapesViaSymlink('${CLAUDE_PLUGIN_ROOT}/agents/evil.md', root), true,
+      'a symlink leaving the root must be reported');
+    assert.equal(escapesViaSymlink('${CLAUDE_PLUGIN_ROOT}/agents/ok.md', root), false,
+      'an in-root file must not be reported');
+    assert.equal(escapesViaSymlink('${CLAUDE_PLUGIN_ROOT}/agents/missing.md', root), false,
+      'a target that does not exist is not checkable and must not be reported');
+    // Backslash form reaches the same verdict — the axis consumes normalised
+    // tokens like every other.
+    assert.equal(escapesViaSymlink('${CLAUDE_PLUGIN_ROOT}/agents\\evil.md', root), true,
+      'separator form must not change the verdict');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('lexical containment is asserted independently of the scanner', () => {
+  assert.equal(escapesRoot('${CLAUDE_PLUGIN_ROOT}/../evil.md'), true);
+  assert.equal(escapesRoot('${CLAUDE_PLUGIN_ROOT}/agents/../agents/evolve-seed.md'), false);
+  assert.equal(escapesRoot('${CLAUDE_PLUGIN_ROOT}\\..\\evil.md'), true,
+    'backslash traversal escapes just as lexically as the slash form');
+  // Template placeholders cannot be resolved literally, so the check is lexical.
+  assert.equal(escapesRoot('${CLAUDE_PLUGIN_ROOT}/skills/{a|b}/../../evil.md'), true);
+  assert.equal(escapesRoot('${CLAUDE_PLUGIN_ROOT}/skills/{a|b}/SKILL.md'), false);
+});
+
+test('normalisation is applied to both sides of every comparison (Windows emulation)', () => {
+  // On Windows `path.relative` returns backslash-joined keys. Patching only the
+  // key side reproduces that, and a guard that normalises only the lookup side
+  // silently stops resolving anything — the security rules keep firing, but
+  // `npm test` goes red on the very test that was added to close the backslash
+  // bypass. Both sides must pass through the same function.
+  const winKeys = buildPluginFiles({
+    toKey: (p) => path.relative(ROOT, p).split(path.sep).join('\\'),
+  });
+  assert.ok(winKeys.has('agents/evolve-seed.md'),
+    'key generation must normalise, not merely store what the platform produced');
+  assert.equal(resolvesInPlugin('agents/evolve-seed.md', path.join(ROOT, 'AGENTS.md'), winKeys), true,
+    'a slash-shaped lookup must resolve against Windows-shaped keys');
+  assert.equal(resolvesInPlugin('agents\\evolve-seed.md', path.join(ROOT, 'AGENTS.md'), winKeys), true,
+    'a backslash-shaped lookup must resolve too');
+
+  // Non-vacuity: the same lookup against a deliberately un-normalised key set
+  // fails, which is the regression this test exists to catch.
+  const rawKeys = new Set([...winKeys].map((k) => k.split('/').join('\\')));
+  assert.equal(resolvesInPlugin('agents/evolve-seed.md', path.join(ROOT, 'AGENTS.md'), rawKeys), false,
+    'fixture is vacuous — one-sided normalisation must actually break the lookup');
 });
