@@ -1191,33 +1191,26 @@ test('lexical containment is asserted independently of the scanner', () => {
 test('normalisation is applied to both sides of every comparison (Windows emulation)', () => {
   // On Windows `path.relative` returns backslash-joined keys. Patching only the
   // key side reproduces that, and a guard that normalises only the lookup side
-  // silently stops resolving anything — the security rules keep firing, but
-  // `npm test` goes red on the very test that was added to close the backslash
-  // bypass. Both sides must pass through the same function.
+  // compares two different spellings and misses every key. Both sides must pass
+  // through the same function.
   const winKeys = buildPluginFiles({
-    toKey: (p) => path.relative(ROOT, p).split(path.sep).join('\\'),
+    toKey: (f) => path.relative(ROOT, f).split(path.sep).join('\\'),
   });
   assert.ok(winKeys.has('agents/evolve-seed.md'),
     'key generation must normalise, not merely store what the platform produced');
-  assert.equal(resolvesInPlugin('agents/evolve-seed.md', path.join(ROOT, 'AGENTS.md'), winKeys), true,
-    'a slash-shaped lookup must resolve against Windows-shaped keys');
-  // Nested source, for the same reason the run assertion below uses one: from a
-  // root-level document `dirname` is ROOT, so the source-relative branch
-  // reproduces the direct branch and rescues an un-normalised token side. Only a
-  // nested source makes this assertion depend on the token normalisation it
-  // claims to pin.
+
+  // Nested source on purpose: from a root-level document `dirname` is ROOT, so the
+  // source-relative branch reproduces the direct branch and would rescue an
+  // un-normalised token, hiding what this assertion claims to pin.
   const nestedSource = path.join(ROOT, 'skills', 'deep-evolve-workflow', 'protocols', 'coordinator.md');
+  assert.equal(resolvesInPlugin('agents/evolve-seed.md', nestedSource, winKeys), true,
+    'a slash-shaped lookup must resolve against Windows-shaped keys');
   assert.equal(resolvesInPlugin('agents\\evolve-seed.md', nestedSource, winKeys), true,
     'a backslash-shaped lookup must resolve too');
 
-  // Non-vacuity: the same lookup against a deliberately un-normalised key set
-  // fails, which is the regression this test exists to catch.
-  // The `fromSource` half, exercised through the production call site with a win32
-  // `relative`. A `./`-relative token whose direct lookup misses must still resolve
-  // via the source-relative branch, which it can only do if that branch normalises
-  // its own result first. Nothing else can see this: on POSIX `relative()` already
-  // returns slashes, so removing the normalisation is a no-op. The pair is derived
-  // from the shipped set so it cannot rot when files move.
+  // The `fromSource` half, driven through the production call site with a win32
+  // `relative`. Nothing else can see it: on POSIX `relative()` already returns
+  // slashes, so removing that normalisation is a no-op here.
   {
     const nestedTarget = [...winKeys].find((k) => k.includes('/'));
     const dir = nestedTarget.slice(0, nestedTarget.lastIndexOf('/'));
@@ -1230,9 +1223,13 @@ test('normalisation is applied to both sides of every comparison (Windows emulat
     );
   }
 
+  // Non-vacuity, with a backslash token on purpose. A slash token makes this pair
+  // decorative — the un-normalised key set misses either way. The backslash
+  // spelling discriminates: without token normalisation it matches those keys and
+  // this assertion fails.
   const rawKeys = new Set([...winKeys].map((k) => k.split('/').join('\\')));
-  assert.equal(resolvesInPlugin('agents/evolve-seed.md', path.join(ROOT, 'AGENTS.md'), rawKeys), false,
-    'fixture is vacuous — one-sided normalisation must actually break the lookup');
+  assert.equal(resolvesInPlugin('agents\\evolve-seed.md', nestedSource, rawKeys), false,
+    'un-normalised keys must not be reachable by an un-normalised token');
 });
 
 test('a separator run is seen by the fixture layer, not only the classifier', () => {
