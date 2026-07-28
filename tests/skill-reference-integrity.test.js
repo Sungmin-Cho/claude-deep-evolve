@@ -938,13 +938,34 @@ test('every referenced skill path resolves', () => {
   const patterns = [
     // Trailing boundary, same reason as the guard: without it `.js` matches the
     // prefix of `.json` and the resolver reports files that never existed.
-    [/\$\{CLAUDE_PLUGIN_ROOT\}\/([A-Za-z0-9._/-]+\.(?:md|cjs|mjs|js|sh|json|yaml)(?![A-Za-z0-9]))/g, false],
-    [/`(\.\.\/[A-Za-z0-9._/-]+\.md)(?:#[a-z0-9-]+)?`/g, true],
+    [/\$\{CLAUDE_PLUGIN_ROOT\}[\\/]([A-Za-z0-9._\\/-]+\.(?:md|cjs|mjs|js|sh|json|yaml)(?![A-Za-z0-9]))/g, false],
+    [/`(\.\.[\\/][A-Za-z0-9._\\/-]+\.md)(?:#[a-z0-9-]+)?`/g, true],
     // Markdown link destinations are renderer-resolved and must exist relative
     // to the source file — with or without a `./` prefix.
-    [/\]\(((?:\.\.?\/)?[A-Za-z0-9._/-]+\.md)\)/g, true],
-    [/Read\("(\.\.\/[A-Za-z0-9._/-]+\.md)(?:#[a-z0-9-]+)?"\)/g, true],
+    [/\]\(((?:\.\.?[\\/])?[A-Za-z0-9._\\/-]+\.md)\)/g, true],
+    [/Read\("(\.\.[\\/][A-Za-z0-9._\\/-]+\.md)(?:#[a-z0-9-]+)?"\)/g, true],
   ];
+
+  // Either separator in every pattern. This resolver reads the raw body on
+  // purpose, so `normalizeSeparators` never reaches it and each pattern has to
+  // accept `\` itself. Slash-only left the backslash spelling of an out-of-root
+  // reference visible to the classifier but INVISIBLE here — the layer that
+  // actually checks containment — and a failure count hides that, because the
+  // classifier keeps the total non-zero. One sample per pattern, both spellings,
+  // so a revert fails on the axis rather than on whatever is in the tree.
+  const samples = [
+    ['${CLAUDE_PLUGIN_ROOT}/../workspace/evil.json',
+      '${CLAUDE_PLUGIN_ROOT}\\..\\workspace\\evil.json'],
+    ['`../shared/x.md`', '`..\\shared\\x.md`'],
+    ['[l](../shared/x.md)', '[l](..\\shared\\x.md)'],
+    ['Read("../shared/x.md")', 'Read("..\\shared\\x.md")'],
+  ];
+  patterns.forEach(([re], i) => {
+    for (const spelling of samples[i]) {
+      re.lastIndex = 0;
+      assert.ok(re.exec(spelling), `pattern ${i} must see both spellings: ${spelling}`);
+    }
+  });
   const broken = [];
   let resolved = 0;
   const realRoot = fs.realpathSync(ROOT);
@@ -954,9 +975,13 @@ test('every referenced skill path resolves', () => {
       re.lastIndex = 0;
       let m;
       while ((m = re.exec(body))) {
+        // Normalising the capture is load-bearing but NOT pinned: removing it
+        // breaks no test, because no shipped document uses the backslash
+        // spelling yet. The failure would first appear as a false `missing` on
+        // a file that exists. Recorded, not claimed.
         const target = isRelative
-          ? path.resolve(path.dirname(file), m[1])
-          : path.join(ROOT, m[1]);
+          ? path.resolve(path.dirname(file), normalizeSeparators(m[1]))
+          : path.join(ROOT, normalizeSeparators(m[1]));
         if (!fs.existsSync(target)) {
           broken.push(`${path.relative(ROOT, file)} -> ${m[1]} (missing)`);
           continue;
