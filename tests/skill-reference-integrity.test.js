@@ -210,12 +210,17 @@ const PATH_TOKEN = /[A-Za-z0-9_.@${}<>-]+(?:[\\/]+[A-Za-z0-9_.@{}|*-]+)+|[A-Za-z
 
 // Both sides of every comparison go through normalizeSeparators: the token here,
 // the key set in buildPluginFiles.
-function resolvesInPlugin(token, sourceFile, files = PLUGIN_FILES) {
+// `rel` is injectable alongside `files` because the `fromSource` normalisation is
+// otherwise unpinnable: on POSIX `path.relative` already returns slashes, so
+// removing the normalisation is a no-op and no mutation can see it. Only a win32
+// `relative` exercises it, and it must be injected into the production call site —
+// a copy of the logic in a test pins the test's arithmetic, not the guard's.
+function resolvesInPlugin(token, sourceFile, files = PLUGIN_FILES, rel = path.relative) {
   const clean = normalizeSeparators(token).replace(/^\.\//, '');
   if (files.has(clean)) return true;
   try {
     const fromSource = normalizeSeparators(
-      path.relative(ROOT, path.resolve(path.dirname(sourceFile), clean)));
+      rel(ROOT, path.resolve(path.dirname(sourceFile), clean)));
     if (files.has(fromSource)) return true;
   } catch { /* unresolvable token — prose */ }
   return false;
@@ -1207,6 +1212,24 @@ test('normalisation is applied to both sides of every comparison (Windows emulat
 
   // Non-vacuity: the same lookup against a deliberately un-normalised key set
   // fails, which is the regression this test exists to catch.
+  // The `fromSource` half, exercised through the production call site with a win32
+  // `relative`. A `./`-relative token whose direct lookup misses must still resolve
+  // via the source-relative branch, which it can only do if that branch normalises
+  // its own result first. Nothing else can see this: on POSIX `relative()` already
+  // returns slashes, so removing the normalisation is a no-op. The pair is derived
+  // from the shipped set so it cannot rot when files move.
+  {
+    const nestedTarget = [...winKeys].find((k) => k.includes('/'));
+    const dir = nestedTarget.slice(0, nestedTarget.lastIndexOf('/'));
+    const base = nestedTarget.slice(nestedTarget.lastIndexOf('/') + 1);
+    const winRel = (from, to) => path.relative(from, to).split('/').join('\\');
+    assert.equal(
+      resolvesInPlugin(`./${base}`, path.join(ROOT, dir, 'sibling.md'), winKeys, winRel),
+      true,
+      'the source-relative branch must normalise its own result before looking it up',
+    );
+  }
+
   const rawKeys = new Set([...winKeys].map((k) => k.split('/').join('\\')));
   assert.equal(resolvesInPlugin('agents/evolve-seed.md', path.join(ROOT, 'AGENTS.md'), rawKeys), false,
     'fixture is vacuous — one-sided normalisation must actually break the lookup');
