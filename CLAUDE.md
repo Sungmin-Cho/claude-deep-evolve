@@ -1,56 +1,10 @@
+@AGENTS.md
+
 # deep-evolve — Claude Project Guide
 
-deep-evolve is a goal-driven autonomous experimentation plugin. The repository
-contains shared Claude Code/Codex skills, checked-in agent policies, manifests,
-zero-dependency Node runtime, hooks, evaluator templates, and tests.
-
-Read the current version with
-`node -p "require('./package.json').version"`. Release history belongs in
-[`CHANGELOG.md`](CHANGELOG.md) and [`CHANGELOG.ko.md`](CHANGELOG.ko.md).
-
-> 📄 Documentation in this repo follows `docs/DOCS_RULE.md` (local maintainer guide).
-
-## Runtime surfaces
-
-- Public skill: `skills/deep-evolve/SKILL.md`
-- Shared workflow: `skills/deep-evolve-workflow/`
-- Agent policies: `agents/evolve-coordinator.md`, `agents/evolve-seed.md`
-- Claude manifest/hook: `.claude-plugin/plugin.json`, `hooks/hooks.claude.json`
-- Codex manifest/hook: `.codex-plugin/plugin.json`, `hooks/hooks.json`
-- Dispatcher/modules: `hooks/scripts/deep-evolve-runtime.cjs`, `hooks/scripts/runtime/`
-- Evaluator templates: `templates/*.cjs`
-- Target-project state: `.deep-evolve/`
-
-Claude uses named `deep-evolve:evolve-coordinator` and
-`deep-evolve:evolve-seed`. Codex generic subagents first read the matching agent
-policy and then verify their exact worktree. Both follow
-`skills/deep-evolve-workflow/protocols/runtime-contract.md`.
-
-## Core contracts
-
-- Supported runtime is zero-dependency Node 22 CommonJS on Ubuntu, macOS, and
-  native Windows; do not fetch code or add an MCP server.
-- Canonical state/coordination/artifacts use registered `runtime-op:` requests.
-- CLI evaluation uses only `prepare.cjs` plus validated config; protocol mode
-  uses its fixed configured tool sequence.
-- Paths are literal and authenticated. Runtime Git uses discrete argv with
-  `shell: false`; host source/Git actions use structured fields.
-- rc 0 is success, rc 1 a typed business rejection, rc 2 an operator/schema/
-  integrity failure. Malformed output is fail-closed.
-- Missing Codex interaction capability returns to the root task before mutation;
-  this is the sole host behavior difference.
-- Preserve unrelated/user bytes and never weaken safety tests for migration.
-
-## Documentation and release boundaries
-
-README files describe evergreen usage and remain structurally bilingual.
-Release narration belongs only in the changelogs. Synchronize the Claude
-manifest, Codex manifest, package metadata, workflow skill frontmatter, and
-runtime version; run the local rulebook validator before release. deep-suite
-owns post-merge marketplace pins.
-
-## Verification
-
-Run `npm test` and `npm pack --dry-run`. For the cross-host instruction contract, run Node's test runner
-over `tests/protocol-runtime-contract.test.js`, `tests/runtime-dispatch.test.js`,
-`tests/plugin-contract.test.js`, and `tests/active-harness-entrypoints.test.js`.
+Claude Code loads the shared guide above. Claude-only note: the two agent
+policies are installed as the named subagents `deep-evolve:evolve-coordinator`
+and `deep-evolve:evolve-seed`, and the Claude hook manifest is
+`${CLAUDE_PLUGIN_ROOT}/hooks/hooks.claude.json` (Codex uses
+`${CLAUDE_PLUGIN_ROOT}/hooks/hooks.json`). Both hosts run the same policies,
+protocols, and runtime operations.

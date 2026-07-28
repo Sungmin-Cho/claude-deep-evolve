@@ -8,7 +8,11 @@ const root = path.resolve(__dirname, '..');
 const readJson = (relative) => JSON.parse(fs.readFileSync(path.join(root, relative), 'utf8'));
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
-const RELEASE_VERSION = '3.6.1';
+const RELEASE_VERSION = '3.6.2';
+const RELEASE_DATE = '2026-07-28';
+// A release block carries exactly one `###` group (pinned by headingDepths
+// below); this names which one, so a bump touches only these three constants.
+const RELEASE_SECTION = 'Security';
 
 // Both host surfaces pin the identical env-bootstrap guard command (E2 fix).
 // Double-quoted so the embedded single quotes stay literal.
@@ -48,7 +52,7 @@ function currentRelease(source) {
   return source.slice(start, next === -1 ? source.length : next);
 }
 
-test('3.6.1 is synchronized across all five supported release sources', () => {
+test(`${RELEASE_VERSION} is synchronized across all five supported release sources`, () => {
   const versions = {
     claude: readJson('.claude-plugin/plugin.json').version,
     codex: readJson('.codex-plugin/plugin.json').version,
@@ -143,15 +147,18 @@ test('evergreen bilingual READMEs document the same supported cross-host surface
   assert.match(korean, /MCP 서버를 번들하지 않습니다/i);
 });
 
-test('3.6.1 changelogs are concise, bilingual, and user-observable', () => {
+test(`${RELEASE_VERSION} changelogs are concise, bilingual, and user-observable`, () => {
   const english = currentRelease(read('CHANGELOG.md'));
   const korean = currentRelease(read('CHANGELOG.ko.md'));
-  assert.match(english, /^## \[3\.6\.1\] — 2026-07-27$/m);
-  assert.match(korean, /^## \[3\.6\.1\] — 2026-07-27$/m);
+  const header = new RegExp(
+    `^## \\[${RELEASE_VERSION.replaceAll('.', '\\.')}\\] — ${RELEASE_DATE}$`, 'm');
+  const section = new RegExp(`^### ${RELEASE_SECTION}$`, 'm');
+  assert.match(english, header);
+  assert.match(korean, header);
   assert.deepEqual(headingDepths(english), headingDepths(korean));
   assert.deepEqual(headingDepths(english), [2, 3]);
-  assert.match(english, /^### Fixed$/m);
-  assert.match(korean, /^### Fixed$/m);
+  assert.match(english, section);
+  assert.match(korean, section);
   for (const release of [english, korean]) {
     assert.doesNotMatch(release,
       /(?:\.cjs|\.js|\.json|\.md|\.sh|\.py|deep-review|REQUEST_CHANGES|APPROVE|\bcommit\b|\bPR\b|\btests?\b|\b[0-9a-f]{40}\b)/i);
@@ -167,9 +174,18 @@ test('maintainer and security guides describe only the supported Node runtime', 
   const contributing = read('CONTRIBUTING.md');
   const security = read('SECURITY.md');
 
+  // AGENTS.md is the single source and must be self-contained: Codex does not
+  // support `@` imports, so anything it needs has to be in the file itself.
+  // CLAUDE.md imports it on line 1 and adds only Claude-specific notes, so the
+  // shared statements are asserted once, against AGENTS.md.
+  assert.equal(claude.split('\n')[0].trim(), '@AGENTS.md',
+    'CLAUDE.md must import the shared guide on its first line');
+  assert.doesNotMatch(agents, /^\s*@[A-Za-z]/m,
+    'AGENTS.md must be self-contained — Codex does not resolve @ imports');
+  assert.match(agents, /docs\/DOCS_RULE\.md/);
+  assert.match(agents, /Node 22/);
+  // The runtime claim is per-file: neither guide may reintroduce a second runtime.
   for (const guide of [agents, claude]) {
-    assert.match(guide, /docs\/DOCS_RULE\.md/);
-    assert.match(guide, /Node 22/);
     assert.doesNotMatch(guide, /\b(?:Bash|Python|pytest)\b/);
   }
   assert.match(contributing, /Node 22/);
