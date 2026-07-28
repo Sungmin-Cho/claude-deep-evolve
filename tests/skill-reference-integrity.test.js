@@ -532,11 +532,24 @@ function shadowableTokens(line, sourceFile = path.join(ROOT, 'AGENTS.md'), body 
 test('the always-loaded agent guides are in the scan set', () => {
   // Asserting membership means the coverage claim is checked by the suite
   // rather than by a commit message.
-  const scanned = markdownFiles().map((f) => path.relative(ROOT, f));
+  // Root-level entries in ALWAYS_LOADED have no separator, so a Windows
+  // emulation over them alone cannot fail — it would be a decorative
+  // assertion. The derivation is pinned against a real nested document
+  // instead, which is where the spelling actually diverges. `relative` is a
+  // seam, not a switch: it defaults to the host's and turns nothing off.
+  const scanKeys = (rel = path.relative) =>
+    markdownFiles().map((f) => normalizeSeparators(rel(ROOT, f)));
+  const scanned = scanKeys();
   for (const doc of ALWAYS_LOADED) {
     assert.ok(fs.existsSync(path.join(ROOT, doc)), `${doc} must exist to be scanned`);
     assert.ok(scanned.includes(doc), `${doc} must be in the shadow-guard scan set`);
   }
+  const nested = scanned.find((k) => k.includes('/'));
+  assert.ok(nested,
+    'the scan set must hold a nested document, or the next assertion proves nothing');
+  assert.ok(scanKeys(path.win32.relative).includes(nested),
+    `the Windows spelling of ${nested} must be the same key as the host's — `
+    + 'otherwise every membership check against a slash literal misses there');
 });
 
 test('no read or exec instruction can be shadowed from the target workspace', () => {
