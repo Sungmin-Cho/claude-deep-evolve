@@ -9,10 +9,15 @@ guide is shared by Claude Code and Codex.
 ## Plugin root
 
 `${CLAUDE_PLUGIN_ROOT}` is the literal absolute plugin root; hosts that export
-only `PLUGIN_ROOT` name the same directory. Every path this plugin tells an
-agent to read or run is anchored there and stays inside it. Never resolve one
-against the workspace, the current directory, or the place a document was loaded
-from — the project under experimentation can plant a file at that path.
+only `PLUGIN_ROOT` name the same directory. Every path these instruction
+documents tell an agent to read or run is anchored there and stays inside it.
+Never resolve one against the workspace, the current directory, or the place a
+document was loaded from — the project under experimentation can plant a file at
+that path.
+
+Not yet anchored: the seed dispatch context carries `policy_ref`
+workspace-relative. Treat any dispatched policy path as naming
+`${CLAUDE_PLUGIN_ROOT}/agents/`.
 
 ## Core contracts
 
@@ -57,7 +62,12 @@ to deep-suite after the release merges.
 
 ## Verification
 
-Run `npm test` and `npm pack --dry-run`. For cross-host instruction changes also
-run `tests/protocol-runtime-contract.test.js`, `tests/runtime-dispatch.test.js`,
-`tests/plugin-contract.test.js`, `tests/active-harness-entrypoints.test.js`, and
-`tests/skill-reference-integrity.test.js`.
+Run `npm test` and `npm pack --dry-run` from the repository root. For cross-host
+instruction changes also run the focused contract suite:
+`${CLAUDE_PLUGIN_ROOT}/tests/protocol-runtime-contract.test.js`,
+`${CLAUDE_PLUGIN_ROOT}/tests/runtime-dispatch.test.js`,
+`${CLAUDE_PLUGIN_ROOT}/tests/plugin-contract.test.js`,
+`${CLAUDE_PLUGIN_ROOT}/tests/active-harness-entrypoints.test.js`, and
+`${CLAUDE_PLUGIN_ROOT}/tests/skill-reference-integrity.test.js`. These ship with
+the package, so the anchor names the installed copy; in a clone the same paths
+sit beneath the repository root.

@@ -13,12 +13,14 @@ a duplicate writer; the single `session.complete` transaction below owns final
 status, outcome, Git identity, report/receipt references, synthesis, strategy,
 registry, journal, and D0-to-D1 authority.
 
-## Pre-completion: meta archive update
+## Pre-completion: cross-project transfer record
 
 Before generating the report, run the recording gate in
 `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/transfer.md`
-(`runtime-op: transfer.record`). It updates cross-project transfer evidence; it
-does not publish the final receipt or complete the session.
+(`runtime-op: transfer.record`). It writes the shared cross-project archive and
+is distinct from the project-local archive that `session.append-local-archive`
+appends after D1 in step 7. It does not publish the final receipt or complete
+the session.
 
 ## Completion Report
 

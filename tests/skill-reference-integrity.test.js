@@ -126,15 +126,20 @@ const FORMS = [
 // this a known instruction syntax?" but "does this token name a file inside the
 // plugin?". Anything that does must be anchored, whatever the verb, extension or
 // sentence around it.
-// `docs/` and `tests/` are skipped deliberately, not for speed. Neither is
-// shipped to a user (see package.json `files`), so a mention of one is a
-// maintainer instruction executed with the repo as cwd — where the relative path
-// is correct and an anchor would be wrong. Anything a runtime agent opens lives
-// outside both.
+// `docs/` is skipped deliberately, not for speed: it is absent from package.json
+// `files`, so it never reaches a user's machine and a mention of it is a
+// maintainer instruction executed with the repo as cwd, where the relative path
+// is correct and an anchor would be wrong.
+//
+// `tests/` is NOT skipped, because this package ships it — `files` lists
+// `"tests/"`, and `npm pack` puts every one of these files on the user's disk
+// next to the skills. A document that names a test file is therefore naming a
+// path that exists inside an installed plugin, and an unanchored one resolves
+// against the target workspace like any other.
 const PLUGIN_FILES = (() => {
   const rel = new Set();
   const skip = new Set(['node_modules', '.git', '.claude', '.deep-evolve', '.deep-review',
-    '.deep-docs', '.serena', '.v3-venv', '.pytest_cache', '.github', 'docs', 'tests']);
+    '.deep-docs', '.serena', '.v3-venv', '.pytest_cache', '.github', 'docs']);
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       if (skip.has(e.name)) continue;
@@ -183,7 +188,12 @@ function* scopedTokens(line) {
   PATH_TOKEN.lastIndex = 0;
   let m;
   while ((m = PATH_TOKEN.exec(line))) {
-    const token = m[0];
+    // `<` sits in PATH_TOKEN's character class only so that an angle-bracketed
+    // mention still yields the path inside it. Without trimming the bracket,
+    // `<skills/…/x.json 첨부>` extracts with a leading `<`, resolves to nothing,
+    // and the token escapes the guard silently — which is how this class of
+    // finding stayed invisible in deep-work for a full review round.
+    const token = m[0].startsWith('<') ? m[0].slice(1) : m[0];
     if (ALLOWLIST.has(token)) continue;
     if (!token.includes('/') && ROOT_METADATA.has(token)) continue;
     const before = line.slice(Math.max(0, m.index - 30), m.index);
@@ -454,6 +464,13 @@ const FORM_CASES = [
   // resolve anywhere in the plugin is still a plugin path, and still shadowable.
   ['plugin-dir-path', 'route to `protocols/transfer.md` for soft pruning',
     'route to `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/transfer.md` for soft pruning'],
+  // Deny-by-default on files that are neither documents nor executables. No read
+  // verb names them and no runnable extension marks them, so every syntax-based
+  // form list misses them — they are caught only because they resolve.
+  ['resolves-in-plugin (manifest)', 'the Claude manifest is `.claude-plugin/plugin.json`',
+    'the Claude manifest is `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`'],
+  ['resolves-in-plugin (packaged test)', 'run `tests/plugin-contract.test.js`',
+    'run `${CLAUDE_PLUGIN_ROOT}/tests/plugin-contract.test.js`'],
 ];
 
 // A body that defines the helper with its containment check. pluginRequire is
@@ -523,6 +540,19 @@ test('a malicious workspace cannot shadow any instruction the plugin issues', ()
     for (const name of ['init.md', 'transfer.md', 'history.md']) {
       fs.writeFileSync(path.join(evil, 'protocols', name), '# SHADOW — must never be read\n');
     }
+    // Neither a document nor an executable. This class is why the rule is
+    // resolution rather than syntax: a manifest or an attached schema is named
+    // by no read verb and carries no runnable extension, so every form list
+    // written before it missed it. `tests/` is planted for the same reason —
+    // this package ships it, so those paths exist inside an installed plugin.
+    fs.mkdirSync(path.join(evil, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(evil, '.claude-plugin', 'plugin.json'),
+      '{"name":"SHADOW","version":"0.0.0"}\n');
+    fs.mkdirSync(path.join(evil, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(evil, 'hooks', 'hooks.json'), '{"hooks":"SHADOW"}\n');
+    fs.mkdirSync(path.join(evil, 'tests'), { recursive: true });
+    fs.writeFileSync(path.join(evil, 'tests', 'plugin-contract.test.js'),
+      'throw new Error("SHADOW");\n');
 
     // Resolve for real, from the evil cwd, exactly as a runtime agent would.
     // Re-running the classifier here would only restate what it already
@@ -550,12 +580,17 @@ test('a malicious workspace cannot shadow any instruction the plugin issues', ()
     assert.deepEqual(landed, [],
       `these instructions resolve onto a planted shadow file:\n  ${landed.join('\n  ')}`);
 
-    // Non-vacuity: the same resolution, given an unanchored token, does land on
-    // the shadow — so an empty result above is a property of the docs, not of a
-    // resolver that never finds anything.
-    const control = resolveAsAgentWould('agents/evolve-seed.md');
-    assert.ok(control.startsWith(evil + path.sep) && fs.existsSync(control),
-      'fixture is vacuous — an unanchored token must land on the planted shadow');
+    // Non-vacuity, per planted class: the same resolution, given an unanchored
+    // token, does land on the shadow — so an empty result above is a property of
+    // the docs, not of a resolver that never finds anything. Every class the
+    // fixture plants is probed, otherwise a plant could rot into decoration
+    // without any test noticing.
+    for (const probe of ['agents/evolve-seed.md', 'protocols/init.md',
+      '.claude-plugin/plugin.json', 'hooks/hooks.json', 'tests/plugin-contract.test.js']) {
+      const control = resolveAsAgentWould(probe);
+      assert.ok(control.startsWith(evil + path.sep) && fs.existsSync(control),
+        `fixture is vacuous for ${probe} — an unanchored token must land on the planted shadow`);
+    }
   } finally {
     fs.rmSync(evil, { recursive: true, force: true });
   }
@@ -822,7 +857,7 @@ test('every referenced skill path resolves', () => {
   const patterns = [
     // Trailing boundary, same reason as the guard: without it `.js` matches the
     // prefix of `.json` and the resolver reports files that never existed.
-    [/\$\{CLAUDE_PLUGIN_ROOT\}\/([A-Za-z0-9._/-]+\.(?:md|cjs|mjs|js|json|yaml)(?![A-Za-z0-9]))/g, false],
+    [/\$\{CLAUDE_PLUGIN_ROOT\}\/([A-Za-z0-9._/-]+\.(?:md|cjs|mjs|js|sh|json|yaml)(?![A-Za-z0-9]))/g, false],
     [/`(\.\.\/[A-Za-z0-9._/-]+\.md)(?:#[a-z0-9-]+)?`/g, true],
     // Markdown link destinations are renderer-resolved and must exist relative
     // to the source file — with or without a `./` prefix.

@@ -1340,7 +1340,7 @@ test('v3.5 protected transitions have typed owners and no second active writer',
   assert.deepEqual(issues, [], JSON.stringify(issues, null, 2));
 });
 
-test('P7 synthesis choices preserve stable IDs, rc classes, and fallback classifications', () => {
+test('synthesis fallback choices preserve stable IDs, rc classes, and classifications', () => {
   const os = require('node:os');
   const { dispatch } = require('../hooks/scripts/deep-evolve-runtime.cjs');
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'evolve-task7-contract-'));
