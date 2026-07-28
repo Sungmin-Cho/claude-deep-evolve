@@ -105,8 +105,13 @@ const ANCHOR = String.raw`\$\{CLAUDE_PLUGIN_ROOT\}`;
 // The *same* function normalises the PLUGIN_FILES keys. Normalising only the
 // lookup side is a real bug, not a theoretical one: on Windows `path.relative`
 // yields backslash keys, so a slash-shaped lookup misses every one of them.
+// A *run* of separators collapses to one. `hooks\\scripts\\x.cjs` and
+// `hooks//scripts//x.cjs` name the same file as the single-separator form, and
+// every filesystem treats them that way — but a set keyed on single slashes does
+// not, so without collapsing, `resolvesInPlugin` misses and the rules that
+// depend on it go quiet while the path stays perfectly reachable.
 function normalizeSeparators(value) {
-  return typeof value === 'string' ? value.replace(/\\/g, '/') : value;
+  return typeof value === 'string' ? value.replace(/[\\/]+/g, '/') : value;
 }
 
 const ANCHORED_TOKEN = new RegExp(`^(?:${ANCHOR})/`);
@@ -195,7 +200,13 @@ const ROOT_METADATA = new Set(['package.json', 'plugin.json', 'AGENTS.md', 'CLAU
 // Path-shaped tokens: multi-segment paths, plus dotted single segments. Either
 // separator is a separator — see normalizeSeparators for why this is recognised
 // here rather than taught to each rule downstream.
-const PATH_TOKEN = /[A-Za-z0-9_.@${}<>-]+(?:[\\/][A-Za-z0-9_.@{}|*-]+)+|[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,6}\b/g;
+// The `+` on the separator class is load-bearing. Without it a separator run
+// breaks the segment repetition, the whole-path alternative fails, and the
+// tokeniser falls back to the bare-basename alternative — which resolves to
+// nothing, so deny-by-default and the malicious-workspace fixture both go
+// silent. FORMS kept firing throughout, because its PATH_BODY is a flat class
+// that spans a run, and that split is what made the hole look closed.
+const PATH_TOKEN = /[A-Za-z0-9_.@${}<>-]+(?:[\\/]+[A-Za-z0-9_.@{}|*-]+)+|[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,6}\b/g;
 
 // Both sides of every comparison go through normalizeSeparators: the token here,
 // the key set in buildPluginFiles.
@@ -1109,7 +1120,13 @@ test('normalisation is applied to both sides of every comparison (Windows emulat
     'key generation must normalise, not merely store what the platform produced');
   assert.equal(resolvesInPlugin('agents/evolve-seed.md', path.join(ROOT, 'AGENTS.md'), winKeys), true,
     'a slash-shaped lookup must resolve against Windows-shaped keys');
-  assert.equal(resolvesInPlugin('agents\\evolve-seed.md', path.join(ROOT, 'AGENTS.md'), winKeys), true,
+  // Nested source, for the same reason the run assertion below uses one: from a
+  // root-level document `dirname` is ROOT, so the source-relative branch
+  // reproduces the direct branch and rescues an un-normalised token side. Only a
+  // nested source makes this assertion depend on the token normalisation it
+  // claims to pin.
+  const nestedSource = path.join(ROOT, 'skills', 'deep-evolve-workflow', 'protocols', 'coordinator.md');
+  assert.equal(resolvesInPlugin('agents\\evolve-seed.md', nestedSource, winKeys), true,
     'a backslash-shaped lookup must resolve too');
 
   // Non-vacuity: the same lookup against a deliberately un-normalised key set
@@ -1117,4 +1134,75 @@ test('normalisation is applied to both sides of every comparison (Windows emulat
   const rawKeys = new Set([...winKeys].map((k) => k.split('/').join('\\')));
   assert.equal(resolvesInPlugin('agents/evolve-seed.md', path.join(ROOT, 'AGENTS.md'), rawKeys), false,
     'fixture is vacuous — one-sided normalisation must actually break the lookup');
+});
+
+test('a separator run is seen by the fixture layer, not only the classifier', () => {
+  // The defect this pins was invisible to a failure count. With `hooks\\scripts\\…`
+  // the classifier still reported a violation — FORMS' PATH_BODY is a flat class
+  // that spans a run — while the tokeniser fell back to the bare basename, so
+  // deny-by-default and the malicious-workspace fixture saw nothing. One layer
+  // covering for another looks like "caught" until the covering layer is
+  // bypassed, and the fixture is the only layer that proves a planted file is
+  // actually reached. So both layers are asserted here by name.
+  const evil = fs.mkdtempSync(path.join(os.tmpdir(), 'de-run-evil-'));
+  try {
+    fs.mkdirSync(path.join(evil, 'hooks', 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(evil, 'hooks', 'scripts', 'deep-evolve-runtime.cjs'),
+      'process.stdout.write("SHADOW");\n');
+
+    const landsOnShadow = (line) => {
+      for (const token of scopedTokens(line)) {
+        if (/^\$\{CLAUDE_PLUGIN_ROOT\}\//.test(token)) continue;
+        const target = path.resolve(evil, token.replace(/^\.\//, ''));
+        if (target.startsWith(evil + path.sep) && fs.existsSync(target)) return true;
+      }
+      return false;
+    };
+
+    // Every separator spelling of the same instruction. The run forms are the
+    // regression; the single forms are the control that already worked.
+    for (const line of [
+      'node hooks/scripts/deep-evolve-runtime.cjs',
+      'node hooks\\scripts\\deep-evolve-runtime.cjs',
+      'node hooks\\\\scripts\\\\deep-evolve-runtime.cjs',
+      'node hooks//scripts//deep-evolve-runtime.cjs',
+      'node hooks\\/scripts/\\deep-evolve-runtime.cjs',
+    ]) {
+      assert.ok(shadowableTokens(line).length > 0,
+        `classifier layer must flag: ${line}`);
+      assert.ok(landsOnShadow(line),
+        `fixture layer must resolve onto the planted shadow: ${line}`);
+    }
+
+    // The resolver is the layer that separator-run collapsing actually
+    // protects, and the two assertions above cannot see it: `path.resolve`
+    // happens to fold `//` for the fixture, and FORMS' flat class spans a run
+    // for the classifier. A Set keyed on single slashes folds nothing, so
+    // without collapsing this is where the run form goes quiet.
+    // The source file must be a nested one. From a root-level document the
+    // source-relative branch resolves the token with `path.resolve`, which folds
+    // runs for free and hides whether the repo-relative lookup works at all —
+    // that masking is why the first version of this assertion passed against a
+    // guard with no run collapsing.
+    const nested = path.join(ROOT, 'skills', 'deep-evolve-workflow', 'protocols', 'coordinator.md');
+    for (const token of ['hooks//scripts//deep-evolve-runtime.cjs',
+      'hooks\\\\scripts\\\\deep-evolve-runtime.cjs',
+      'hooks\\/scripts/\\deep-evolve-runtime.cjs']) {
+      assert.equal(resolvesInPlugin(token, nested), true,
+        `resolver must fold the separator run: ${token}`);
+    }
+    // And deny-by-default must reach a run form on its own. `.json` matches no
+    // FORM, so this line is caught by resolution or by nothing.
+    assert.ok(shadowableTokens('The Claude manifest is `.claude-plugin\\\\plugin.json`.').length > 0,
+      'deny-by-default must flag a separator run with no recognised form');
+
+    // Non-vacuity: the fixture layer really can come back false, so the
+    // assertions above are not passing on a resolver that says yes to anything.
+    assert.equal(landsOnShadow('node hooks/scripts/not-planted.cjs'), false,
+      'fixture is vacuous — an unplanted path must not report a landing');
+    assert.equal(landsOnShadow('node "${CLAUDE_PLUGIN_ROOT}//hooks//scripts//deep-evolve-runtime.cjs"'),
+      false, 'an anchored run form must not land in the workspace');
+  } finally {
+    fs.rmSync(evil, { recursive: true, force: true });
+  }
 });
