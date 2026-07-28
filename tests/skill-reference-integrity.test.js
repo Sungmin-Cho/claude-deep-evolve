@@ -341,7 +341,17 @@ function expansionState(line, index) {
   let state = 'normal';
   for (let k = 0; k < index; k += 1) {
     const c = line[k];
-    if (line[k - 1] === '\\') continue;
+    // POSIX sh does not treat a backslash as an escape inside single quotes:
+    // `'C:\\tmp\\'` is the literal `C:\\tmp\\` and the quote closes. Honouring it
+    // there flips the parity, so a Windows path ending in a backslash before an
+    // anchor reported `normal` and the non-expanding anchor went unflagged.
+    //
+    // Consume the escaped character rather than looking back at the previous one.
+    // Looking back also fails on `"C:\\tmp\\\\"`: the second backslash of the pair
+    // is itself treated as escaped, so the closing quote looks escaped too and
+    // the double-quote state never ends — a following single-quoted anchor never
+    // reaches `single`. Both spellings are forms this branch legitimised.
+    if (state !== 'single' && c === '\\') { k += 1; continue; }
     if (state === 'normal') {
       if (c === "'") state = 'single';
       else if (c === '"') state = 'double';
@@ -718,6 +728,15 @@ test('an anchor the shell will not expand counts as unanchored', () => {
     ['const { m } = require(`${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deep-evolve-runtime.cjs`);', /template literal/],
     ['const x = require("${CLAUDE_PLUGIN_ROOT}/hooks/scripts/runtime/session-store.cjs");', /bare package name/],
     ["import x from '${CLAUDE_PLUGIN_ROOT}/hooks/scripts/runtime/session-store.cjs';", /bare package name/],
+    // Both escape spellings, because each defeats a different implementation.
+    // Looking back at the previous character reads the first as `normal` (the
+    // trailing backslash of `'C:\\tmp\\'` looks like an escape, though POSIX sh
+    // does not escape inside single quotes) and the second as `double` (the pair's
+    // second backslash makes the closing quote look escaped, so the state never
+    // ends). Consuming the escaped character reads both as `single`, which is what
+    // bash does — it returns each anchor as its own literal.
+    [`node 'C:\\tmp\\' '\${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deep-evolve-runtime.cjs'`, /single-quoted shell/],
+    [`node "C:\\tmp\\\\" '\${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deep-evolve-runtime.cjs'`, /single-quoted shell/],
   ];
   for (const [line, reason] of mustFlag) {
     const hits = nonExpandingAnchors(line);
