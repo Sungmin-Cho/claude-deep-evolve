@@ -5,6 +5,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.2] — 2026-07-28
+
+### Security
+
+- Agent policies and protocol files are now loaded through an explicit plugin-root path, so a project under experimentation can no longer substitute its own coordinator or seed policy by placing a file at the same relative location inside its worktree.
+- The packaged runtime dispatcher is invoked through the same explicit plugin-root path, closing the equivalent code-execution route.
+- The plugin root is taken from the host environment and is never inferred from the workspace, the working directory, or where a document was loaded from.
+
 ## [3.6.1] — 2026-07-27
 
 ### Fixed
