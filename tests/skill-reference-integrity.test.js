@@ -387,6 +387,35 @@ function inlineCodeSpans(line) {
   return spans;
 }
 
+// An inline span was only half the structure. Commands are mostly written in
+// FENCED blocks, and a line inside one carries no backticks of its own — so the
+// span test finds nothing there and the code fell back to the verb list it was
+// meant to replace. Measured before fixing: a fenced
+// `cp '${CLAUDE_PLUGIN_ROOT}/<a shipped script>' /tmp/staged.js` was flagged by
+// no layer at all, here and in two sibling repos.
+//
+// The fence's info string is markdown's own declaration of what the block holds,
+// so reading it is asking the document rather than guessing. The list below is of
+// languages whose quoting rules are NOT shell's, and it is deliberately the
+// fail-closed direction: an unlabelled or unfamiliar fence counts as a command
+// block, so an unknown language over-flags — which blocks a documentation edit
+// instead of hiding a missed detection.
+const NON_SHELL_FENCE = /^(?:json5?|jsonc|ya?ml|toml|ini|md|markdown|te?xt|diff|patch|[mc]?[jt]sx?|python|py|dot|mermaid|http)$/i;
+
+function fencedCommandLines(body) {
+  const inside = new Set();
+  let openInfo = null;
+  body.split('\n').forEach((line, i) => {
+    const m = /^[ \t]*(`{3,}|~{3,})[ \t]*([A-Za-z0-9_+-]*)/.exec(line);
+    if (m) {
+      openInfo = openInfo === null ? m[2].toLowerCase() : null;
+      return;
+    }
+    if (openInfo !== null && !NON_SHELL_FENCE.test(openInfo)) inside.add(i);
+  });
+  return inside;
+}
+
 // `${...}` only interpolates in a JS *template literal*. In a quoted string it
 // is inert, and a specifier that does not start with ./ ../ or / is a bare
 // package specifier — so `require("${CLAUDE_PLUGIN_ROOT}/hooks/x.cjs")` sends
@@ -406,7 +435,7 @@ const JSON_YAML_VALUE = /"[A-Za-z_][A-Za-z0-9_]*"\s*:\s*"[^"]*\$\{CLAUDE_PLUGIN_
 
 // The expansion axis, generalised by language. Each context answers one
 // question: given where this anchor sits, does anything expand it?
-function nonExpandingAnchors(line) {
+function nonExpandingAnchors(line, inFence = false) {
   const out = [];
   const flag = (why) => out.push({ form: 'non-expanding-anchor', token: '${CLAUDE_PLUGIN_ROOT}', why });
 
@@ -418,10 +447,16 @@ function nonExpandingAnchors(line) {
   let i = line.indexOf('${CLAUDE_PLUGIN_ROOT}');
   while (i !== -1) {
     const span = spans.find(([s, e]) => i >= s && i < e);
-    const literal = span
-      ? expansionState(line.slice(span[0], span[1]), i - span[0]) === 'single'
-      : SHELL_COMMAND.test(line) && expansionState(line, i) === 'single';
-    if (literal) {
+    // Three command contexts, and the answer is their disjunction rather than a
+    // first-match. A span narrows the view to the backticks, which loses any
+    // quote the span sits *inside* — single-quoted on the line, unquoted within
+    // the span — and evaluating only the span called that safe. Either reading
+    // finding it literal is enough.
+    const literalInSpan = !!span
+      && expansionState(line.slice(span[0], span[1]), i - span[0]) === 'single';
+    const literalOnLine = (inFence || SHELL_COMMAND.test(line))
+      && expansionState(line, i) === 'single';
+    if (literalInSpan || literalOnLine) {
       flag('single-quoted shell — literal, so the path resolves against the workspace');
     }
     i = line.indexOf('${CLAUDE_PLUGIN_ROOT}', i + 1);
@@ -494,7 +529,7 @@ test('every skill and agent markdown file has balanced code fences', () => {
 });
 
 // Returns violations on a line: {form, token, why}. Empty when the line is clean.
-function shadowableTokens(line, sourceFile = path.join(ROOT, 'AGENTS.md'), body = '') {
+function shadowableTokens(line, sourceFile = path.join(ROOT, 'AGENTS.md'), body = '', inFence = false) {
   const out = [];
   const programmaticAll = new Set();
   if (body && definesPluginRequire(body)) {
@@ -517,7 +552,7 @@ function shadowableTokens(line, sourceFile = path.join(ROOT, 'AGENTS.md'), body 
   }
   out.push(...bareBasenameHits(line));
   out.push(...denyByDefaultHits(line, sourceFile, body));
-  out.push(...nonExpandingAnchors(line));
+  out.push(...nonExpandingAnchors(line, inFence));
   // One token can match several forms; report each token once per line so the
   // failure message names distinct defects rather than repeating one.
   const seen = new Set();
@@ -556,8 +591,9 @@ test('no read or exec instruction can be shadowed from the target workspace', ()
   const violations = [];
   for (const file of markdownFiles()) {
     const body = fs.readFileSync(file, 'utf8');
+    const fenced = fencedCommandLines(body);
     body.split('\n').forEach((line, i) => {
-      for (const v of shadowableTokens(line, file, body)) {
+      for (const v of shadowableTokens(line, file, body, fenced.has(i))) {
         violations.push(`${path.relative(ROOT, file)}:${i + 1}  [${v.form}] ${v.token} — ${v.why}`);
       }
     });
@@ -688,11 +724,9 @@ test('a malicious workspace cannot shadow any instruction the plugin issues', ()
     // would report writing about a file as if it were an instruction to run one.
     // The bare-basename shape is caught by its own rule instead.
     for (const rel of PLUGIN_FILES) {
-      for (const at of [rel]) {
-        const dest = path.join(evil, at);
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
-        if (!fs.existsSync(dest)) fs.writeFileSync(dest, '// SHADOW — must never be read\n');
-      }
+      const dest = path.join(evil, rel);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      if (!fs.existsSync(dest)) fs.writeFileSync(dest, '// SHADOW — must never be read\n');
     }
 
     // Resolve for real, from the evil cwd, exactly as a runtime agent would.
@@ -735,6 +769,42 @@ test('a malicious workspace cannot shadow any instruction the plugin issues', ()
   } finally {
     fs.rmSync(evil, { recursive: true, force: true });
   }
+});
+
+test('a fenced code block is a command context, whatever the verb', () => {
+  // The gap this pins was live in three repos at once and invisible to every
+  // layer: `inlineCodeSpans` finds only INLINE spans, a line inside a ```bash
+  // block has no backticks of its own, and the fallback was the very verb list
+  // the span rule was introduced to replace. Commands are mostly written in
+  // fenced blocks, so that fallback covered the minority case.
+  const ANCHOR = '${CLAUDE_PLUGIN_ROOT}';
+  const cmd = `cp '${ANCHOR}/x.js' /tmp/staged.js`;   // no backticks, unlisted verb
+
+  assert.equal(nonExpandingAnchors(cmd, false).length, 0,
+    'outside a fence this line is prose to the verb list — that is the gap, stated');
+  assert.ok(nonExpandingAnchors(cmd, true).length > 0,
+    'inside a fence the same line is a command and the anchor is literal');
+
+  // The fence classifier itself, so `inFence` is derived and not just declared.
+  const body = [
+    'prose', '```bash', cmd, '```', 'prose',
+    '```json', `{"p": "${ANCHOR}/x.js"}`, '```',
+    '```', cmd, '```',
+  ].join('\n');
+  const fenced = fencedCommandLines(body);
+  assert.ok(fenced.has(2), 'a line in a ```bash block is a command line');
+  assert.ok(!fenced.has(0) && !fenced.has(4), 'prose outside any fence is not');
+  assert.ok(!fenced.has(6),
+    'a ```json block is not a shell context — its quoting rules are not shell\'s');
+  assert.ok(fenced.has(9),
+    'an unlabelled fence counts as a command block: unknown must over-flag, not under-flag');
+  assert.ok(![1, 3, 5, 7, 8, 10].some((n) => fenced.has(n)),
+    'the fence markers themselves are not content lines');
+
+  // Double quotes DO expand, so the same line must stay clean inside a fence —
+  // otherwise this rule would flag every correct command in the documentation.
+  assert.equal(nonExpandingAnchors(`cp "${ANCHOR}/x.js" /tmp/staged.js`, true).length, 0,
+    'a double-quoted anchor expands; a fence must not turn that into a violation');
 });
 
 test('an anchor the shell will not expand counts as unanchored', () => {
@@ -1237,9 +1307,15 @@ test('normalisation is applied to both sides of every comparison (Windows emulat
   }
 
   // Non-vacuity, with a backslash token on purpose. A slash token makes this pair
-  // decorative — the un-normalised key set misses either way. The backslash
-  // spelling discriminates: without token normalisation it matches those keys and
-  // this assertion fails.
+  // decorative — the un-normalised key set misses either way, so it passes however
+  // the token was handled (measured: with the slash spelling, removing the token
+  // normalisation fails nothing). The backslash spelling discriminates.
+  //
+  // It is *dominated* in the current arrangement: the backslash lookup above fails
+  // first on the same mutation, so this line does not execute and adds no detection
+  // today. It is kept as a backstop, because the assertion that dominates it is an
+  // enumeration of spellings — and enumerations get trimmed. Neutralise the spelling
+  // above and remove the token normalisation, and this is what fails.
   const rawKeys = new Set([...winKeys].map((k) => k.split('/').join('\\')));
   assert.equal(resolvesInPlugin('agents\\evolve-seed.md', nestedSource, rawKeys), false,
     'un-normalised keys must not be reachable by an un-normalised token');
