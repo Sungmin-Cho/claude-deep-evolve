@@ -13,7 +13,7 @@ inside one authenticated worktree.
 
 - Claude dispatches `deep-evolve:evolve-seed` with literal project, session,
   seed, block, branch, budget, and worktree context.
-- Codex dispatches a generic subagent. Its first action is `Read agents/evolve-seed.md`; its second action verifies the exact worktree against
+- Codex dispatches a generic subagent. Its first action is `Read ${CLAUDE_PLUGIN_ROOT}/agents/evolve-seed.md`; its second action verifies the exact worktree against
   the supplied literal worktree path before any mutation.
 - The seed binds every operation to that literal worktree path and branch.
 - The seed must not mutate another seed branch and must not change another seed branch.

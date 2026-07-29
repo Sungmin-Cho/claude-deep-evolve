@@ -1,15 +1,17 @@
 ---
 name: deep-evolve-workflow
-version: "3.6.1"
+version: "3.6.2"
 description: |
-  Host-neutral workflow policy for bounded measured code-improvement experiments.
-  The public entry is /deep-evolve in Claude Code and $deep-evolve:deep-evolve in Codex.
+  Host-neutral policy for bounded measured code-improvement experiments.
+  Entry: /deep-evolve (Claude Code), $deep-evolve:deep-evolve (Codex).
 ---
 
 # Deep Evolve: Autonomous Experimentation Protocol
 
 Improve a project through bounded experiments while preserving one fixed score
-authority per evaluation epoch. Read `protocols/runtime-contract.md` first.
+authority per evaluation epoch. Read
+`${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/runtime-contract.md`
+first.
 
 ## Workflow
 
@@ -18,19 +20,24 @@ outer strategy evolution → optional cross-seed synthesis → immutable complet
 
 ## Routing table
 
+Every protocol below lives under
+`${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/`. Paths are
+written in full because an unanchored one resolves against the target
+workspace, which the seeds are actively modifying.
+
 | Trigger | Protocol | Responsibility |
 |---|---|---|
-| new/initializing | `protocols/init.md` | analysis, atomic state, evaluator, baseline, seeds |
-| active multi-seed | `protocols/coordinator.md` | scheduler, kill, block/epoch transactions |
-| assigned/single seed | `protocols/inner-loop.md` | one-idea experiments, typed terminals |
-| paused/epoch boundary | `protocols/outer-loop.md` | Q, entropy, strategy/program/evaluator evolution |
-| resume | `protocols/resume.md` | migration, alignment, orphan, strict rebuild |
-| termination | `protocols/synthesis.md` | audit, baseline, integration, P7 fallback |
-| finalization | `protocols/completion.md` | D0 publication, D1 completion, archive/cleanup |
-| history/status | `protocols/history.md` | read-only list/detail/lineage/export |
-| stepping stone | `protocols/archive.md` | backtrack, save, restore, fork |
-| shared knowledge | `protocols/transfer.md` | lookup, record, feedback, soft prune |
-| categories/insights | `protocols/taxonomy.md` | ten tokens, migration, local insights |
+| new/initializing | `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/init.md` | analysis, atomic state, evaluator, baseline, seeds |
+| active multi-seed | `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/coordinator.md` | scheduler, kill, block/epoch transactions |
+| assigned/single seed | `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/inner-loop.md` | one-idea experiments, typed terminals |
+| paused/epoch boundary | `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/outer-loop.md` | Q, entropy, strategy/program/evaluator evolution |
+| resume | `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/resume.md` | migration, alignment, orphan, strict rebuild |
+| termination | `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/synthesis.md` | audit, baseline, integration, fallback ladder |
+| finalization | `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/completion.md` | D0 publication, D1 completion, archive/cleanup |
+| history/status | `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/history.md` | read-only list/detail/lineage/export |
+| stepping stone | `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/archive.md` | backtrack, save, restore, fork |
+| shared knowledge | `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/transfer.md` | lookup, record, feedback, soft prune |
+| categories/insights | `${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/taxonomy.md` | ten tokens, migration, local insights |
 
 ## State and ownership invariants
 
@@ -48,8 +55,9 @@ outer strategy evolution → optional cross-seed synthesis → immutable complet
 
 ## Stable interaction inventory
 
-The options and adapters live only in `protocols/runtime-contract.md`. Active
-callers use these exact references:
+The options and adapters live only in
+`${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/runtime-contract.md`.
+Active callers use these exact references:
 
 - `interaction-id: active-session-action`, `interaction-id: analysis-confirmation`
 - `interaction-id: archive-cleanup`, `interaction-id: archive-prune`

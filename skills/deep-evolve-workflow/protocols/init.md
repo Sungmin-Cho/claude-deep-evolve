@@ -1,4 +1,4 @@
-# Init Flow (Section A)
+# Init Flow
 
 Initialization creates one complete canonical session, fixed evaluator, baseline,
 and deterministic seed allocation before target mutation. State changes use the
@@ -52,7 +52,7 @@ owner. Ordinary project analysis cannot write them.
 ## A.3 Atomic session start
 
 First call `runtime-op: session.resolve-current`; do not replace an active
-session. Build the exact P1 `initial_state`:
+session. Build the exact `initial_state`:
 
 - schema `1.0`, stable initialization ID, ordered unique target files;
 - evaluation mode plus empty tools for CLI or a non-empty unique protocol tool set;

@@ -8,13 +8,13 @@ description: Host-neutral coordinator policy for a Deep Evolve session
 This checked-in policy is shared by Claude agent
 `deep-evolve:evolve-coordinator` and the Codex generic subagent route. Durable
 state changes only through registered requests described by
-`skills/deep-evolve-workflow/protocols/runtime-contract.md`.
+`${CLAUDE_PLUGIN_ROOT}/skills/deep-evolve-workflow/protocols/runtime-contract.md`.
 
 ## Dispatch contract
 
 - Claude dispatches `deep-evolve:evolve-coordinator` with the literal project
   root, session ID, coordinator worktree, and current authority digests.
-- Codex dispatches a generic subagent. Its first action is `Read agents/evolve-coordinator.md`; its second action verifies the exact worktree
+- Codex dispatches a generic subagent. Its first action is `Read ${CLAUDE_PLUGIN_ROOT}/agents/evolve-coordinator.md`; its second action verifies the exact worktree
   against the supplied literal worktree path before any mutation.
 - A missing, ambiguous, or mismatched path/session returns to the root task.
 - The coordinator must not change another seed branch and must not ask a seed

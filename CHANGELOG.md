@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.2] — 2026-07-28
+
+### Security
+
+- Every agent policy and protocol file named in the workflow instructions is now loaded through an explicit plugin-root path, so those instructions can no longer be redirected by a file the project under experimentation places at the same relative location.
+- The packaged runtime dispatcher is invoked through the same explicit plugin-root path, closing the equivalent code-execution route.
+- Workflow instructions now take the plugin root from the host environment instead of deriving it from where the instruction document was loaded, so the root itself can no longer be supplied by the workspace.
+- Not yet closed: the seed dispatch context still names its policy by a workspace-relative path, which is the one pointer a freshly dispatched seed has before it has read anything. Substitution through that field remains possible until it is fixed separately.
+
 ## [3.6.1] — 2026-07-27
 
 ### Fixed

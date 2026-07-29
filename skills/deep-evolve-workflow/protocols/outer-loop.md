@@ -5,7 +5,8 @@ Tier 3—the fixed evaluator. It starts from one coordinator-owned completed epo
 boundary and is idempotent by typed event plus authority digest.
 
 Every `runtime-op:` call invokes the packaged Node dispatcher at
-`hooks/scripts/deep-evolve-runtime.cjs` through the host-neutral runtime contract.
+`${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deep-evolve-runtime.cjs` through the
+host-neutral runtime contract.
 
 ## Resume safety and checkpoint map
 

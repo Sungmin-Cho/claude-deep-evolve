@@ -5,7 +5,8 @@ fixed contract, and accepts only measured improvement or policy-proven
 score-equivalent simplification. It runs in one authenticated seed worktree.
 
 Every `runtime-op:` call invokes the packaged Node dispatcher at
-`hooks/scripts/deep-evolve-runtime.cjs` through the host-neutral runtime contract.
+`${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deep-evolve-runtime.cjs` through the
+host-neutral runtime contract.
 
 ## Section B: resume flow
 
