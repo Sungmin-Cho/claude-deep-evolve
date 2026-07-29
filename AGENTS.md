@@ -4,7 +4,10 @@ deep-evolve runs goal-driven measured improvement loops: bounded experiments
 against one fixed fitness metric, with strategy evolution between epochs. This
 guide is shared by Claude Code and Codex.
 
-> 📄 Documentation in this repo follows `docs/DOCS_RULE.md` (local maintainer guide).
+> 📄 Doc maintenance follows `docs/DOCS_RULE.md` — a maintainer rulebook that is
+> gitignored and ships with nothing. It exists only in a maintainer's own checkout;
+> never try to open it at runtime, because the only place that path can resolve in an
+> installed plugin is the project being analysed.
 
 ## Plugin root
 
