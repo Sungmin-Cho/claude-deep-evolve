@@ -826,6 +826,49 @@ function parseCodexRouter(rawStderr, targetPath, threadId, rawStderrSha256) {
   };
 }
 
+// Claude Code echoes the hook's command VERBATIM inside its tool-result error text
+// (`PreToolUse:Write hook error: [<command>]: <output>`), so the pinned lifecycle has to
+// know that command. It used to restate it as
+// `node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/protect-readonly.cjs`, and that copy went
+// stale the moment `aeed03e` replaced the template-expansion guard command with the env
+// bootstrap: the hook changed, the restatement did not, and this smoke has been red on
+// `main` ever since with `invalid_host_stream`.
+//
+// A restatement of a value that lives somewhere else can only ever be right or wrong; it
+// can never be more right than its source. So read the source. `hooks/hooks.claude.json`
+// is the file Claude Code loads, and its PreToolUse entry is what fires on `Write` —
+// verified byte-identical to the echoed command in the captured CI stream.
+function claudeWriteHookCommand() {
+  const file = path.join(__dirname, '..', 'hooks', 'hooks.claude.json');
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw fail(`cannot read the Claude hook manifest at ${file}: ${error.message}`,
+      'invalid_host_stream');
+  }
+  const entries = plainObject(parsed) && plainObject(parsed.hooks)
+    && Array.isArray(parsed.hooks.PreToolUse) ? parsed.hooks.PreToolUse : [];
+  // Select by what the matcher COVERS, not by position — an entry added above this one
+  // would otherwise silently become the pin.
+  const matching = entries.filter((entry) => plainObject(entry)
+    && typeof entry.matcher === 'string'
+    && entry.matcher.split('|').includes('Write'));
+  if (matching.length !== 1) {
+    throw fail(`hooks.claude.json must declare exactly one PreToolUse matcher covering `
+      + `Write, found ${matching.length}`, 'invalid_host_stream');
+  }
+  const commands = Array.isArray(matching[0].hooks)
+    ? matching[0].hooks.filter(plainObject).map((hook) => hook.command)
+      .filter((command) => typeof command === 'string' && command !== '')
+    : [];
+  if (commands.length !== 1) {
+    throw fail(`the PreToolUse Write hook must declare exactly one command, found `
+      + `${commands.length}`, 'invalid_host_stream');
+  }
+  return commands[0];
+}
+
 function exactClaudeWriteInput(value, targetPath) {
   return plainObject(value)
     && Object.keys(value).length === 2
@@ -876,8 +919,8 @@ function parseClaudeLifecycle(records, targetPath, rawStreamSha256) {
     || hookResponse.stdout !== '' || hookResponse.stderr !== hookOutput
     || hookResponse.exit_code !== 2 || hookResponse.outcome !== 'error') invalid();
 
-  const toolResultText = `PreToolUse:Write hook error: [node \${CLAUDE_PLUGIN_ROOT}`
-    + `/hooks/scripts/protect-readonly.cjs]: ${hookOutput}`;
+  const toolResultText = `PreToolUse:Write hook error: [${claudeWriteHookCommand()}]`
+    + `: ${hookOutput}`;
   const userMessage = userResult.message;
   const userContent = plainObject(userMessage) && Array.isArray(userMessage.content)
     ? userMessage.content : [];

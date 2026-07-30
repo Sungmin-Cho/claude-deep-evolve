@@ -568,8 +568,18 @@ function pinnedClaudeLifecycle({ isolatedRoot }) {
   const toolId = 'toolu_loopback_1';
   const toolInput = { file_path: targetPath, content: 'after' };
   const hookOutput = `${PINNED_CODEX_GUARD_DENIAL}\n`;
-  const toolResult = `PreToolUse:Write hook error: [node \${CLAUDE_PLUGIN_ROOT}`
-    + `/hooks/scripts/protect-readonly.cjs]: ${hookOutput}`;
+  // Read the command Claude Code actually runs, for the same reason the normalizer does:
+  // Claude echoes it verbatim into the tool-result error text, and a second copy of it
+  // here would go stale exactly as the first one did. A fixture written to the
+  // implementation's assumption produces a green test over a broken contract.
+  const claudeHooks = JSON.parse(read('hooks/hooks.claude.json'));
+  const writeEntry = claudeHooks.hooks.PreToolUse
+    .filter((entry) => String(entry.matcher).split('|').includes('Write'));
+  assert.equal(writeEntry.length, 1,
+    'exactly one PreToolUse matcher must cover Write, or this fixture pins the wrong hook');
+  assert.equal(writeEntry[0].hooks.length, 1, 'the Write hook must declare one command');
+  const toolResult = `PreToolUse:Write hook error: `
+    + `[${writeEntry[0].hooks[0].command}]: ${hookOutput}`;
   const records = [
     {
       type: 'system', subtype: 'init', cwd: isolatedRoot, session_id: sessionId,
