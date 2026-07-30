@@ -12,7 +12,7 @@ guide is shared by Claude Code and Codex.
 ## Plugin root
 
 `${CLAUDE_PLUGIN_ROOT}` is the literal absolute plugin root; hosts that export
-only `PLUGIN_ROOT` name the same directory. Every path these instruction
+only `${PLUGIN_ROOT}` name the same directory. Every path these instruction
 documents tell an agent to read or run is anchored there and stays inside it.
 Never resolve one against the workspace, the current directory, or the place a
 document was loaded from — the project under experimentation can plant a file at
