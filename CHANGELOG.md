@@ -62,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `.codex-plugin/plugin.json` — Codex-native plugin manifest pointing at the same skill and hook surfaces as the Claude Code manifest, keeping the existing `claude-deep-*` repository identity.
+- `.codex-plugin/plugin.json` — Codex-native plugin manifest pointing at the same skill and hook surfaces as the Claude Code manifest, keeping the existing `deep-*` repository identity.
 - `AGENTS.md` — Codex project guide covering runtime surfaces and verification commands.
 
 ### Changed

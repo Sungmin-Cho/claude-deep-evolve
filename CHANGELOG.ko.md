@@ -62,7 +62,7 @@
 
 ### 추가
 
-- `.codex-plugin/plugin.json` — Claude Code manifest와 동일한 skill/hook 표면을 가리키는 Codex 네이티브 플러그인 manifest. 기존 `claude-deep-*` repository identity 유지.
+- `.codex-plugin/plugin.json` — Claude Code manifest와 동일한 skill/hook 표면을 가리키는 Codex 네이티브 플러그인 manifest. 기존 `deep-*` repository identity 유지.
 - `AGENTS.md` — runtime surface와 검증 명령을 다루는 Codex 프로젝트 가이드.
 
 ### 변경

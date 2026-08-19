@@ -10,8 +10,8 @@
 // `<name>.expected.json` pair under `tests/fixtures/golden/`. The loader
 // fails loud if one side is missing (catches accidental half-commits).
 //
-// Spec: claude-deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-tests-handoff.md §2 #3
-// Pattern reference: claude-deep-work tests/phase-guard-golden.test.js
+// Spec: deep-suite/docs/superpowers/plans/2026-05-12-m5.5-remaining-tests-handoff.md §2 #3
+// Pattern reference: deep-work tests/phase-guard-golden.test.js
 // (PR #29). Same loader shape, adapted for the shared Node hook's
 // `.deep-evolve/<session_id>/` state convention instead of deep-work's
 // `.claude/deep-work.<sid>.md` frontmatter.

@@ -14,7 +14,7 @@
  *   - envelope.artifact_kind === 'handoff'
  *   - envelope.schema.name === 'handoff'
  *   - envelope.schema.version === '1.0'
- * Payload required fields (cf. claude-deep-suite/schemas/handoff.schema.json):
+ * Payload required fields (cf. deep-suite/schemas/handoff.schema.json):
  *   schema_version, handoff_kind, from, to, summary, next_action_brief
  *
  * Cross-plugin chain (closes via envelope.parent_run_id):
@@ -62,7 +62,7 @@ const HANDOFF_REQUIRED = [
   'next_action_brief',
 ];
 
-// R1 review C2: handoff_kind enum from claude-deep-suite/schemas/handoff.schema.json.
+// R1 review C2: handoff_kind enum from deep-suite/schemas/handoff.schema.json.
 // Previously not enforced — a typo (`evolve-to-deepwork` missing hyphen) would
 // write successfully and pollute dashboard telemetry.
 const VALID_HANDOFF_KINDS = new Set([

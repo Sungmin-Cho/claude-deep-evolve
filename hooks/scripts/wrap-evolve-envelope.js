@@ -3,7 +3,7 @@
 
 /**
  * wrap-evolve-envelope.js — CLI to wrap a deep-evolve payload (evolve-receipt
- * or evolve-insights) in the M3 cross-plugin envelope (cf. claude-deep-suite/
+ * or evolve-insights) in the M3 cross-plugin envelope (cf. deep-suite/
  * docs/envelope-migration.md §1).
  *
  * Designed to be called from markdown agent prompts (skills/deep-evolve-workflow/

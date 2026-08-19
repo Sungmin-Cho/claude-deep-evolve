@@ -10,8 +10,8 @@ materializes the `.deep-evolve/<session_id>/` namespace inside a tmpdir
 (when `state` is present), spawns the shared Node hook via the
 `runProtectReadonly` helper, and asserts each expected field.
 
-Pattern reference: claude-deep-work
-[`tests/fixtures/golden/`](https://github.com/Sungmin-Cho/claude-deep-work/tree/main/tests/fixtures/golden)
+Pattern reference: deep-work
+[`tests/fixtures/golden/`](https://github.com/Sungmin-Cho/deep-work/tree/main/tests/fixtures/golden)
 (PR #29). Adapted for deep-evolve's protect-readonly contract.
 
 ## `.input.json` schema

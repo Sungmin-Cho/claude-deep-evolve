@@ -4,10 +4,10 @@
  * handoff-roundtrip.test.js — M5.5 #8 (deep-evolve half) + M5.7.B test target.
  *
  * Verifies emit-handoff.js + emit-compaction-state.js produce envelope-wrapped
- * artifacts that satisfy the claude-deep-dashboard suite-collector's
- * `unwrapStrict` contract (cf. claude-deep-dashboard/lib/suite-collector.js).
+ * artifacts that satisfy the deep-dashboard suite-collector's
+ * `unwrapStrict` contract (cf. deep-dashboard/lib/suite-collector.js).
  *
- * Symmetric counterpart to claude-deep-work/tests/handoff-roundtrip.test.js —
+ * Symmetric counterpart to deep-work/tests/handoff-roundtrip.test.js —
  * exercises the reverse-handoff scenario (`handoff_kind: "evolve-to-deep-work"`)
  * with `envelope.parent_run_id` chaining to an upstream forward handoff so
  * the dashboard's `suite.handoff.roundtrip_success_rate` reads 1.0.
@@ -54,7 +54,7 @@ const EMIT_COMPACTION = path.resolve(__dirname, '..', 'hooks', 'scripts', 'emit-
 const VALIDATE_CLI = path.resolve(__dirname, '..', 'scripts', 'validate-envelope-emit.js');
 
 // Dashboard's PAYLOAD_REQUIRED_FIELDS — must match
-// claude-deep-dashboard/lib/suite-constants.js exactly.
+// deep-dashboard/lib/suite-constants.js exactly.
 const DASHBOARD_HANDOFF_REQUIRED = [
   'schema_version', 'handoff_kind', 'from', 'to', 'summary', 'next_action_brief',
 ];
@@ -89,7 +89,7 @@ function runValidate(file) {
 }
 
 /**
- * Mirror of claude-deep-dashboard/lib/suite-collector.js `unwrapStrict`. Kept
+ * Mirror of deep-dashboard/lib/suite-collector.js `unwrapStrict`. Kept
  * zero-dep so deep-evolve doesn't import dashboard code.
  *
  * R1 review C3 (Opus): the real dashboard checks `schema.name === expectedKind`

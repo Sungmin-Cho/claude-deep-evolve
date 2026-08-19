@@ -2,7 +2,7 @@
 
 /**
  * envelope.js — Shared utilities for the M3 cross-plugin envelope
- * (cf. claude-deep-suite/docs/envelope-migration.md §1).
+ * (cf. deep-suite/docs/envelope-migration.md §1).
  *
  * Zero-dep, CommonJS, runs from any cwd. All paths that reference plugin
  * assets (e.g. plugin.json) resolve relative to this module's __dirname,
@@ -23,7 +23,7 @@
  * unwrapEnvelope() enforces all three (handoff §4 round-4 "envelope identity
  * guards"). 'handoff' and 'compaction-state' added in v3.3.0 for M5.7 reverse
  * cross-plugin handoff (evolve-to-deep-work) + dashboard compaction telemetry;
- * cf. claude-deep-suite/schemas/handoff.schema.json +
+ * cf. deep-suite/schemas/handoff.schema.json +
  * schemas/compaction-state.schema.json.
  */
 

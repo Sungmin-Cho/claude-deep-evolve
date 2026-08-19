@@ -5,7 +5,7 @@
   "author": {
     "name": "sungmin"
   },
-  "repository": "https://github.com/Sungmin-Cho/claude-deep-evolve",
+  "repository": "https://github.com/Sungmin-Cho/deep-evolve",
   "license": "MIT",
   "hooks": "./hooks/hooks.claude.json",
   "keywords": [
