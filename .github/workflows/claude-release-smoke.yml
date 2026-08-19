@@ -37,7 +37,7 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $canonical = 'Sungmin-Cho/claude-deep-evolve'
+          $canonical = 'Sungmin-Cho/deep-evolve'
           $head = (git rev-parse HEAD).Trim()
           if ($env:RUN_ATTEMPT -ne '1') {
             throw 'same-head reruns are not authoritative'

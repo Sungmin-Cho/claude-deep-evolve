@@ -4,13 +4,13 @@
 
 Security fixes are delivered through the latest release of deep-evolve. Check your
 installed version with `node -p "require('./package.json').version"` and update via
-the [Deep Suite marketplace](https://github.com/Sungmin-Cho/claude-deep-suite) before
+the [Deep Suite marketplace](https://github.com/Sungmin-Cho/deep-suite) before
 reporting.
 
 ## Reporting a vulnerability
 
 Please report security issues **privately** via
-[GitHub Security Advisories](https://github.com/Sungmin-Cho/claude-deep-evolve/security/advisories/new)
+[GitHub Security Advisories](https://github.com/Sungmin-Cho/deep-evolve/security/advisories/new)
 rather than opening a public issue.
 
 We aim to acknowledge reports within a few days and will coordinate a fix and a
@@ -34,7 +34,7 @@ mind:
   keeps the evaluation authority immutable without shell interpolation. Runtime Git and
   evaluator processes use structured argv with shell execution disabled. Review the
   hook manifests before enabling, and see the suite's
-  [`guides/hook-patterns.md`](https://github.com/Sungmin-Cho/claude-deep-suite/blob/main/guides/hook-patterns.md)
+  [`guides/hook-patterns.md`](https://github.com/Sungmin-Cho/deep-suite/blob/main/guides/hook-patterns.md)
   for recommended denylist patterns.
 
 When reporting, please indicate which runtime (Claude Code or Codex) is affected.

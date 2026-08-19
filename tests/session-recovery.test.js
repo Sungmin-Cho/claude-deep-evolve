@@ -20,7 +20,7 @@
 // `resolve_current` has already succeeded; it does not test the
 // dangling-state error paths. This file is the integration counterpart.
 //
-// Spec: claude-deep-suite/docs/superpowers/plans/
+// Spec: deep-suite/docs/superpowers/plans/
 // 2026-05-12-m5.5-remaining-tests-handoff.md §2 #5 (deep-evolve row).
 
 const { describe, it, beforeEach, afterEach } = require('node:test');

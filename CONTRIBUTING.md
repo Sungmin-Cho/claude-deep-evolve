@@ -1,14 +1,14 @@
 # Contributing to deep-evolve
 
 Thanks for your interest in improving **deep-evolve** — the autonomous-experimentation
-plugin of the [Deep Suite](https://github.com/Sungmin-Cho/claude-deep-suite) for Claude
+plugin of the [Deep Suite](https://github.com/Sungmin-Cho/deep-suite) for Claude
 Code and Codex.
 
 ## Getting started
 
 ```bash
-git clone https://github.com/Sungmin-Cho/claude-deep-evolve.git
-cd claude-deep-evolve
+git clone https://github.com/Sungmin-Cho/deep-evolve.git
+cd deep-evolve
 ```
 
 Supported development uses Node 22 on Ubuntu, macOS, or native Windows.

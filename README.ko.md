@@ -4,15 +4,15 @@
 
 > Claude Code · Codex용 자율 실험 플러그인 — 목표를 지정하면 deep-evolve가 측정 기반 실험 루프를 통해 프로젝트를 체계적으로 개선합니다.
 
-![version](https://img.shields.io/github/package-json/v/Sungmin-Cho/claude-deep-evolve?label=version)
-![license](https://img.shields.io/github/license/Sungmin-Cho/claude-deep-evolve)
-[![part of deep-suite](https://img.shields.io/badge/part%20of-deep--suite-5b8def)](https://github.com/Sungmin-Cho/claude-deep-suite)
+![version](https://img.shields.io/github/package-json/v/Sungmin-Cho/deep-evolve?label=version)
+![license](https://img.shields.io/github/license/Sungmin-Cho/deep-evolve)
+[![part of deep-suite](https://img.shields.io/badge/part%20of-deep--suite-5b8def)](https://github.com/Sungmin-Cho/deep-suite)
 
 deep-evolve는 AI 에이전트에게 코드베이스와 fitness 메트릭을 주고 자율적으로 실험하게 합니다 — 코드를 수정하고, 결과를 평가하고, 개선은 유지하고, 회귀는 폐기하며 — 목표가 달성되거나 수익이 감소할 때까지 반복합니다. 프로젝트에 맞춘 평가 harness를 생성하고, 전용 브랜치에서 crash-safe한 journal 기반 실험 루프를 실행하며, 실험 **전략** 자체를 시간에 따라 진화시킬 수 있습니다.
 
 ## deep-suite에서의 역할
 
-deep-evolve는 [claude-deep-suite](https://github.com/Sungmin-Cho/claude-deep-suite)의 자율 실험 담당 플러그인입니다. 표준 [Harness Engineering](https://martinfowler.com/articles/harness-engineering.html) 피드포워드/피드백 루프 **밖에서** 동작합니다: 일반 개발 과정의 안내·감지 대신, 어떤 가이드나 센서도 제안하지 않을 개선점을 자동화된 실험으로 발견하며 자체적인 실험 → 평가 → 유지/폐기 사이클을 따릅니다. deep-review의 recurring findings를 소비해 실험 방향을 잡고, deep-dashboard와 deep-work가 소비하는 receipt/insights를 emit합니다.
+deep-evolve는 [deep-suite](https://github.com/Sungmin-Cho/deep-suite)의 자율 실험 담당 플러그인입니다. 표준 [Harness Engineering](https://martinfowler.com/articles/harness-engineering.html) 피드포워드/피드백 루프 **밖에서** 동작합니다: 일반 개발 과정의 안내·감지 대신, 어떤 가이드나 센서도 제안하지 않을 개선점을 자동화된 실험으로 발견하며 자체적인 실험 → 평가 → 유지/폐기 사이클을 따릅니다. deep-review의 recurring findings를 소비해 실험 방향을 잡고, deep-dashboard와 deep-work가 소비하는 receipt/insights를 emit합니다.
 
 ## 영감
 
@@ -24,7 +24,7 @@ deep-evolve는 Andrej Karpathy의 [autoresearch](https://github.com/karpathy/aut
 
 ```bash
 # Claude Code
-/plugin marketplace add Sungmin-Cho/claude-deep-suite
+/plugin marketplace add Sungmin-Cho/deep-suite
 /plugin install deep-evolve@claude-deep-suite
 
 # Codex
@@ -34,8 +34,8 @@ codex plugin install deep-evolve
 ### 단독 설치
 
 ```bash
-/plugin marketplace add Sungmin-Cho/claude-deep-evolve
-/plugin install deep-evolve@Sungmin-Cho-claude-deep-evolve
+/plugin marketplace add Sungmin-Cho/deep-evolve
+/plugin install deep-evolve@Sungmin-Cho-deep-evolve
 ```
 
 저장소에는 Claude Code manifest(`.claude-plugin/plugin.json`)와 Codex 네이티브 manifest(`.codex-plugin/plugin.json`)가 함께 포함됩니다. Codex 프로젝트 가이드는 [`AGENTS.md`](AGENTS.md)를 참조하세요. Claude Code에서는 [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)가 필요합니다.
@@ -158,7 +158,7 @@ deep-evolve는 대상 코드만 개선하는 것이 아니라, 개선하는 프�
 ## 링크
 
 - [변경 이력](CHANGELOG.ko.md) ([English](CHANGELOG.md)) — 릴리스 이력
-- [Deep Suite 마켓플레이스](https://github.com/Sungmin-Cho/claude-deep-suite)
+- [Deep Suite 마켓플레이스](https://github.com/Sungmin-Cho/deep-suite)
 - [기여 가이드](CONTRIBUTING.md) · [보안 정책](SECURITY.md)
 
 ## 라이선스

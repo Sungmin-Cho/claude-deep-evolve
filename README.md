@@ -4,15 +4,15 @@
 
 > Autonomous experimentation plugin for Claude Code and Codex — specify a goal, and deep-evolve systematically improves your project through measured experiment loops.
 
-![version](https://img.shields.io/github/package-json/v/Sungmin-Cho/claude-deep-evolve?label=version)
-![license](https://img.shields.io/github/license/Sungmin-Cho/claude-deep-evolve)
-[![part of deep-suite](https://img.shields.io/badge/part%20of-deep--suite-5b8def)](https://github.com/Sungmin-Cho/claude-deep-suite)
+![version](https://img.shields.io/github/package-json/v/Sungmin-Cho/deep-evolve?label=version)
+![license](https://img.shields.io/github/license/Sungmin-Cho/deep-evolve)
+[![part of deep-suite](https://img.shields.io/badge/part%20of-deep--suite-5b8def)](https://github.com/Sungmin-Cho/deep-suite)
 
 deep-evolve gives an AI agent a codebase and a fitness metric, then lets it experiment autonomously — modifying code, evaluating results, keeping improvements, and discarding regressions — until the goal is met or returns diminish. It generates an evaluation harness tailored to your project, runs a crash-safe journal-based experiment loop on a dedicated branch, and can evolve the experiment **strategy** itself over time.
 
 ## Role in deep-suite
 
-deep-evolve is the autonomous-experimentation member of the [claude-deep-suite](https://github.com/Sungmin-Cho/claude-deep-suite). It operates **outside** the standard [Harness Engineering](https://martinfowler.com/articles/harness-engineering.html) feedforward/feedback loop: rather than guiding and sensing during normal development, it uses automated experimentation to discover improvements no guide or sensor would suggest, following its own experiment → evaluate → keep/discard cycle. It consumes deep-review's recurring findings to steer experiments and emits receipts/insights consumed by deep-dashboard and deep-work.
+deep-evolve is the autonomous-experimentation member of the [deep-suite](https://github.com/Sungmin-Cho/deep-suite). It operates **outside** the standard [Harness Engineering](https://martinfowler.com/articles/harness-engineering.html) feedforward/feedback loop: rather than guiding and sensing during normal development, it uses automated experimentation to discover improvements no guide or sensor would suggest, following its own experiment → evaluate → keep/discard cycle. It consumes deep-review's recurring findings to steer experiments and emits receipts/insights consumed by deep-dashboard and deep-work.
 
 ## Inspiration
 
@@ -24,7 +24,7 @@ deep-evolve is inspired by [autoresearch](https://github.com/karpathy/autoresear
 
 ```bash
 # Claude Code
-/plugin marketplace add Sungmin-Cho/claude-deep-suite
+/plugin marketplace add Sungmin-Cho/deep-suite
 /plugin install deep-evolve@claude-deep-suite
 
 # Codex
@@ -34,8 +34,8 @@ codex plugin install deep-evolve
 ### Standalone
 
 ```bash
-/plugin marketplace add Sungmin-Cho/claude-deep-evolve
-/plugin install deep-evolve@Sungmin-Cho-claude-deep-evolve
+/plugin marketplace add Sungmin-Cho/deep-evolve
+/plugin install deep-evolve@Sungmin-Cho-deep-evolve
 ```
 
 The repository ships both a Claude Code manifest (`.claude-plugin/plugin.json`) and a Codex-native manifest (`.codex-plugin/plugin.json`); see [`AGENTS.md`](AGENTS.md) for the Codex project guide. Claude Code requires the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code).
@@ -158,7 +158,7 @@ Protocol mode evaluates projects that cannot be assessed via CLI (game engines, 
 ## Links
 
 - [Changelog](CHANGELOG.md) ([한국어](CHANGELOG.ko.md)) — release history
-- [Deep Suite marketplace](https://github.com/Sungmin-Cho/claude-deep-suite)
+- [Deep Suite marketplace](https://github.com/Sungmin-Cho/deep-suite)
 - [Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md)
 
 ## License
