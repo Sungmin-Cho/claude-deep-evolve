@@ -1,6 +1,6 @@
 ---
 name: deep-evolve-workflow
-version: "3.6.2"
+version: "3.6.3"
 description: |
   Host-neutral policy for bounded measured code-improvement experiments.
   Entry: /deep-evolve (Claude Code), $deep-evolve:deep-evolve (Codex).

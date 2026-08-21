@@ -73,29 +73,49 @@ function scrubHostEnv(extra = {}) {
  * @param {object} opts
  * @param {string} opts.cwd          — tmpRoot containing .deep-evolve/<sid>/
  * @param {object} [opts.env]        — extra env vars (merged after scrub)
- * @param {string} [opts.toolName]   — official Claude envelope tool_name
+ * @param {string} [opts.toolName]   — envelope tool name (Claude or Grok)
  * @param {any}    [opts.toolInput]  — payload JSON-stringified onto stdin
+ * @param {string} [opts.envelope]   — `claude` (default) or `grok`
  * @param {string} [opts.script]     — defaults to protect-readonly.cjs
  * @param {number} [opts.timeout]    — defaults to 8000ms
  * @returns {{status:number,stdout:string,stderr:string,signal:string|null,error:Error|undefined}}
  */
+function buildHostEvent(cwd, toolName, toolInput, envelope) {
+  if (envelope === 'grok') {
+    return {
+      sessionId: 'golden-fixture',
+      cwd,
+      workspaceRoot: cwd,
+      hookEventName: 'pre_tool_use',
+      permissionMode: 'default',
+      toolName,
+      toolInput,
+    };
+  }
+  if (envelope !== 'claude') {
+    throw new Error(`unsupported golden envelope ${JSON.stringify(envelope)}`);
+  }
+  return {
+    session_id: 'golden-fixture',
+    cwd,
+    hook_event_name: 'PreToolUse',
+    tool_name: toolName,
+    tool_input: toolInput,
+  };
+}
+
 function runProtectReadonly({
   cwd,
   env: extraEnv = {},
   toolName,
   toolInput,
+  envelope = 'claude',
   script = DEFAULT_HOOK,
   timeout = 8000,
 } = {}) {
   const env = scrubHostEnv(extraEnv);
   const event = toolName
-    ? {
-        session_id: 'golden-fixture',
-        cwd,
-        hook_event_name: 'PreToolUse',
-        tool_name: toolName,
-        tool_input: toolInput,
-      }
+    ? buildHostEvent(cwd, toolName, toolInput, envelope)
     : toolInput;
   const input = typeof event === 'undefined' ? '' : JSON.stringify(event);
   return spawnSync(process.execPath, [script], {

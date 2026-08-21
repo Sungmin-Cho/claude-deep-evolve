@@ -1,0 +1,14 @@
+{
+  "description": "active experiment + Grok search_replace on an unrelated file → allow",
+  "envelope": "grok",
+  "state": {
+    "session_id": "s-active",
+    "status": "active"
+  },
+  "tool_name": "search_replace",
+  "tool_input": {
+    "file_path": "{{PROJECT_ROOT}}/src/feature.py",
+    "old_string": "a",
+    "new_string": "b"
+  }
+}

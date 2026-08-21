@@ -47,6 +47,18 @@ function claudeEvent(toolName, toolInput, cwd) {
   };
 }
 
+function grokEvent(toolName, toolInput, cwd) {
+  return {
+    sessionId: `grok-${String(toolName).toLowerCase()}`,
+    cwd,
+    workspaceRoot: cwd,
+    hookEventName: 'pre_tool_use',
+    permissionMode: 'default',
+    toolName,
+    toolInput,
+  };
+}
+
 function makeProject({ status = 'active', crlf = false, unsupported = false } = {}) {
   const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'evolve hook ')));
   const sessionId = 'session-current';
@@ -1366,4 +1378,229 @@ test('real Claude no-state executable envelope allows unrelated work silently', 
   } finally {
     fs.rmSync(projectRoot, { recursive: true, force: true });
   }
+});
+
+test('Grok camelCase envelopes allow unrelated work and protect the same active-session paths', () => {
+  const noStateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'evolve hook grok no state ')));
+  try {
+    const unrelated = path.join(noStateRoot, 'src', 'unrelated.js');
+    assert.deepEqual(
+      evaluateHook(grokEvent('search_replace', {
+        file_path: unrelated, old_string: 'a', new_string: 'b',
+      }, noStateRoot), {}, noStateRoot),
+      { exitCode: 0, output: '' },
+    );
+    assert.deepEqual(
+      evaluateHook(grokEvent('read_file', { target_file: unrelated }, noStateRoot), {}, noStateRoot),
+      { exitCode: 0, output: '' },
+    );
+    assert.deepEqual(
+      evaluateHook(grokEvent('write', { file_path: unrelated, contents: 'x' }, noStateRoot), {}, noStateRoot),
+      { exitCode: 0, output: '' },
+    );
+    assert.deepEqual(
+      evaluateHook(grokEvent('run_terminal_command', { command: 'npm test' }, noStateRoot), {}, noStateRoot),
+      { exitCode: 0, output: '' },
+    );
+  } finally {
+    fs.rmSync(noStateRoot, { recursive: true, force: true });
+  }
+
+  withProject({}, ({ projectRoot, sessionRoot }) => {
+    const unrelated = path.join(projectRoot, 'src', 'feature.js');
+    parseBlock(evaluateHook(grokEvent(
+      'search_replace',
+      { file_path: path.join(sessionRoot, 'program.md'), old_string: 'a', new_string: 'b' },
+      projectRoot,
+    ), {}, projectRoot));
+    parseBlock(evaluateHook(grokEvent(
+      'write',
+      { file_path: path.join(sessionRoot, 'prepare.cjs'), contents: 'compromised' },
+      projectRoot,
+    ), {}, projectRoot));
+    parseBlock(evaluateHook(grokEvent(
+      'search_replace',
+      { file_path: path.join(sessionRoot, 'strategy.yaml'), old_string: 'a', new_string: 'b' },
+      projectRoot,
+    ), {}, projectRoot));
+    const sealedRead = parseBlock(evaluateHook(grokEvent(
+      'read_file',
+      { target_file: path.join(sessionRoot, 'prepare.cjs') },
+      projectRoot,
+    ), { DEEP_EVOLVE_SEAL_PREPARE: '1' }, projectRoot));
+    assert.match(sealedRead.reason, /seal_prepare_read/);
+    const sealedShell = parseBlock(evaluateHook(grokEvent(
+      'run_terminal_command',
+      { command: `cat "${path.join(sessionRoot, 'prepare.cjs')}"` },
+      projectRoot,
+    ), { DEEP_EVOLVE_SEAL_PREPARE: '1' }, projectRoot));
+    assert.match(sealedShell.reason, /seal_prepare_read/);
+
+    assert.deepEqual(
+      evaluateHook(grokEvent('search_replace', {
+        file_path: unrelated, old_string: 'a', new_string: 'b',
+      }, projectRoot), {}, projectRoot),
+      { exitCode: 0, output: '' },
+    );
+    assert.deepEqual(
+      evaluateHook(grokEvent('run_terminal_command', { command: 'echo hello' }, projectRoot), {}, projectRoot),
+      { exitCode: 0, output: '' },
+    );
+  });
+});
+
+test('Grok tool names on official envelope keys parse instead of failing closed', () => {
+  const noStateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'evolve hook grok official keys ')));
+  try {
+    assert.deepEqual(evaluateHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'search_replace',
+      tool_input: { file_path: path.join(noStateRoot, 'tmp', 'foo.md') },
+    }, {}, noStateRoot), { exitCode: 0, output: '' });
+  } finally {
+    fs.rmSync(noStateRoot, { recursive: true, force: true });
+  }
+
+  withProject({}, ({ projectRoot, sessionRoot }) => {
+    const decision = parseBlock(evaluateHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'search_replace',
+      tool_input: { file_path: path.join(sessionRoot, 'program.md') },
+    }, {}, projectRoot));
+    assert.match(decision.reason, /active sessions protect/);
+  });
+});
+
+test('official envelope keys still win over Grok camelCase aliases', () => withProject({}, ({ projectRoot, sessionRoot }) => {
+  const protectedPath = path.join(sessionRoot, 'program.md');
+  const unrelated = path.join(projectRoot, 'src', 'unrelated.js');
+  const env = { CLAUDE_TOOL_USE_TOOL_NAME: 'Read', CLAUDE_TOOL_NAME: 'Read' };
+
+  const malformedOwned = parseBlock(evaluateHook({
+    tool_name: null,
+    tool_input: { file_path: unrelated },
+    toolName: 'search_replace',
+    toolInput: { file_path: unrelated, old_string: 'a', new_string: 'b' },
+  }, env, projectRoot));
+  assert.match(malformedOwned.reason, /malformed_input/);
+
+  const officialWins = parseBlock(evaluateHook({
+    ...claudeEvent('Edit', { file_path: protectedPath }, projectRoot),
+    toolName: 'search_replace',
+    toolInput: { file_path: unrelated, old_string: 'a', new_string: 'b' },
+  }, {}, projectRoot));
+  assert.match(officialWins.reason, /active sessions protect/);
+}));
+
+test('Grok file tools accept target_file and path after file_path, and owned empty file_path does not fall through', () => {
+  const noStateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'evolve hook grok path aliases ')));
+  try {
+    const unrelated = path.join(noStateRoot, 'src', 'unrelated.js');
+    assert.deepEqual(
+      evaluateHook(grokEvent('read_file', { path: unrelated }, noStateRoot), {}, noStateRoot),
+      { exitCode: 0, output: '' },
+    );
+    assert.match(parseBlock(evaluateHook(grokEvent('read_file', {
+      file_path: '',
+      target_file: unrelated,
+    }, noStateRoot), {}, noStateRoot)).reason, /malformed_input/);
+    assert.match(parseBlock(evaluateHook(grokEvent('search_replace', {
+      old_string: 'a', new_string: 'b',
+    }, noStateRoot), {}, noStateRoot)).reason, /malformed_input/);
+    assert.match(parseBlock(evaluateHook(grokEvent('unknown_tool', {
+      file_path: unrelated,
+    }, noStateRoot), {}, noStateRoot)).reason, /malformed_input/);
+    assert.match(parseBlock(evaluateHook(claudeEvent('Read', {
+      target_file: unrelated,
+    }, noStateRoot), {}, noStateRoot)).reason, /malformed_input/);
+  } finally {
+    fs.rmSync(noStateRoot, { recursive: true, force: true });
+  }
+});
+
+test('Grok extra path aliases cannot hide a protected target behind a decoy file_path', () => withProject({}, ({ projectRoot, sessionRoot }) => {
+  const unrelated = path.join(projectRoot, 'src', 'unrelated.js');
+  const prepare = path.join(sessionRoot, 'prepare.cjs');
+  const program = path.join(sessionRoot, 'program.md');
+
+  const sealedRead = parseBlock(evaluateHook(grokEvent('read_file', {
+    file_path: unrelated,
+    target_file: prepare,
+  }, projectRoot), { DEEP_EVOLVE_SEAL_PREPARE: '1' }, projectRoot));
+  assert.match(sealedRead.reason, /seal_prepare_read/);
+
+  const protectedWrite = parseBlock(evaluateHook(grokEvent('search_replace', {
+    file_path: unrelated,
+    path: program,
+    old_string: 'a',
+    new_string: 'b',
+  }, projectRoot), {}, projectRoot));
+  assert.match(protectedWrite.reason, /active sessions protect/);
+
+  assert.deepEqual(
+    evaluateHook(grokEvent('read_file', {
+      file_path: unrelated,
+      target_file: unrelated,
+      path: unrelated,
+    }, projectRoot), {}, projectRoot),
+    { exitCode: 0, output: '' },
+  );
+}));
+
+test('Grok truncated tool input fails closed even for unrelated commands', () => {
+  const noStateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'evolve hook grok truncated ')));
+  try {
+    const unrelated = path.join(noStateRoot, 'src', 'unrelated.js');
+    assert.match(parseBlock(evaluateHook({
+      ...grokEvent('run_terminal_command', { command: 'echo hello' }, noStateRoot),
+      toolInputTruncated: true,
+    }, {}, noStateRoot)).reason, /malformed_input/);
+    assert.deepEqual(
+      evaluateHook({
+        ...grokEvent('search_replace', {
+          file_path: unrelated, old_string: 'a', new_string: 'b',
+        }, noStateRoot),
+        toolInputTruncated: false,
+      }, {}, noStateRoot),
+      { exitCode: 0, output: '' },
+    );
+  } finally {
+    fs.rmSync(noStateRoot, { recursive: true, force: true });
+  }
+});
+
+test('executable Grok camelCase stdin matches library decisions', () => {
+  const noStateRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'evolve hook grok executable ')));
+  try {
+    const allow = spawnSync(process.execPath, [hookPath], {
+      input: JSON.stringify(grokEvent(
+        'search_replace',
+        { file_path: path.join(noStateRoot, 'src', 'unrelated.js'), old_string: 'a', new_string: 'b' },
+        noStateRoot,
+      )),
+      cwd: noStateRoot,
+      encoding: 'utf8',
+    });
+    assert.equal(allow.status, 0, allow.stderr);
+    assert.equal(allow.stdout, '');
+    assert.equal(allow.stderr, '');
+  } finally {
+    fs.rmSync(noStateRoot, { recursive: true, force: true });
+  }
+
+  withProject({}, ({ projectRoot, sessionRoot }) => {
+    const child = spawnSync(process.execPath, [hookPath], {
+      input: JSON.stringify(grokEvent(
+        'write',
+        { file_path: path.join(sessionRoot, 'program.md'), contents: 'changed' },
+        projectRoot,
+      )),
+      cwd: projectRoot,
+      encoding: 'utf8',
+    });
+    assert.equal(child.status, 2, child.stderr);
+    assert.equal(child.stdout, '');
+    assert.match(child.stderr, /active sessions protect/);
+    assert.doesNotMatch(child.stderr, /\n\s*at\s|stack/i);
+  });
 });

@@ -1,0 +1,10 @@
+{
+  "description": "Grok camelCase search_replace of an unrelated file with no session → allow",
+  "envelope": "grok",
+  "tool_name": "search_replace",
+  "tool_input": {
+    "file_path": "{{PROJECT_ROOT}}/src/feature.py",
+    "old_string": "a",
+    "new_string": "b"
+  }
+}

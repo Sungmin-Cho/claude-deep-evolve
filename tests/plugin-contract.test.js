@@ -8,11 +8,11 @@ const root = path.resolve(__dirname, '..');
 const readJson = (relative) => JSON.parse(fs.readFileSync(path.join(root, relative), 'utf8'));
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
-const RELEASE_VERSION = '3.6.2';
-const RELEASE_DATE = '2026-07-28';
+const RELEASE_VERSION = '3.6.3';
+const RELEASE_DATE = '2026-08-21';
 // A release block carries exactly one `###` group (pinned by headingDepths
 // below); this names which one, so a bump touches only these three constants.
-const RELEASE_SECTION = 'Security';
+const RELEASE_SECTION = 'Fixed';
 
 // Both host surfaces pin the identical env-bootstrap guard command (E2 fix).
 // Double-quoted so the embedded single quotes stay literal.

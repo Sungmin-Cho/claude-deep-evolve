@@ -1,0 +1,12 @@
+{
+  "description": "active experiment + Grok read_file target_file of an unrelated file → allow",
+  "envelope": "grok",
+  "state": {
+    "session_id": "s-active",
+    "status": "active"
+  },
+  "tool_name": "read_file",
+  "tool_input": {
+    "target_file": "{{PROJECT_ROOT}}/src/feature.py"
+  }
+}
