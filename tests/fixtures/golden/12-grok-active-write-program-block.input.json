@@ -1,0 +1,13 @@
+{
+  "description": "active experiment + Grok write on program.md → block",
+  "envelope": "grok",
+  "state": {
+    "session_id": "s-active",
+    "status": "active"
+  },
+  "tool_name": "write",
+  "tool_input": {
+    "file_path": "{{SESSION_ROOT}}/program.md",
+    "contents": "compromised"
+  }
+}

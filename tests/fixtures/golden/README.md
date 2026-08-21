@@ -26,7 +26,8 @@ Pattern reference: deep-work
                                       // / prepare-protocol.md / program.md / strategy.yaml
                                       // / worktrees/seed_1/program.md
   },
-  "tool_name": "Edit",                // official Claude stdin tool_name
+  "envelope": "claude",               // optional — `claude` (default) or `grok`
+  "tool_name": "Edit",                // Claude tool_name or Grok toolName
   "tool_input": {                     // nested into the full stdin envelope
     "file_path": "{{SESSION_ROOT}}/prepare.py"
   },
@@ -80,3 +81,9 @@ Block fixtures assert exit 2, empty stdout, and a sanitized reason on stderr.
 | 06 | active-edit-unrelated-allow | Active run + Edit on unrelated file → allow |
 | 07 | meta-mode-prepare-update-allow | `DEEP_EVOLVE_META_MODE=prepare_update` bypass |
 | 08 | seal-prepare-bash-cat-block | `DEEP_EVOLVE_SEAL_PREPARE=1` + Bash `cat prepare.py` |
+| 09 | grok-no-session-search-replace-unrelated-allow | Grok camelCase `search_replace` of an unrelated file with no session → allow |
+| 10 | grok-active-search-replace-unrelated-allow | Active run + Grok `search_replace` on an unrelated file → allow |
+| 11 | grok-active-search-replace-prepare-block | Active run + Grok `search_replace` on prepare.py → block |
+| 12 | grok-active-write-program-block | Active run + Grok `write` on program.md → block |
+| 13 | grok-read-file-target-file-unrelated-allow | Active run + Grok `read_file` `target_file` of an unrelated file → allow |
+| 14 | grok-seal-run-terminal-cat-prepare-block | Seal + Grok `run_terminal_command` `cat prepare.py` → block |

@@ -5,6 +5,13 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.3] — 2026-08-21
+
+### Fixed
+
+- The readonly guard now accepts Grok's documented PreToolUse envelope, so a well-formed Grok file or shell event is classified instead of being denied as malformed. Unrelated work is allowed when no session is active; protected evaluator, program, and strategy paths stay blocked during an active session. Official Claude or Codex keys still take precedence when they are present, and truly malformed input remains denied.
+- Path aliases on a Grok file event are all inspected so a decoy path cannot hide a protected target, and a truncated Grok tool payload is denied.
+
 ## [3.6.2] — 2026-07-28
 
 ### Security

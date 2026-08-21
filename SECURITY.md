@@ -19,8 +19,8 @@ disclosure timeline with you.
 ## Scope
 
 deep-evolve runs **autonomous experiment loops** inside the Claude Code / Codex plugin
-runtime. By design it executes project commands on your behalf, so keep the following in
-mind:
+runtime. Grok Build TUI loads the Claude hook surface. By design it executes project
+commands on your behalf, so keep the following in mind:
 
 - **Evaluation harness execution** — the native evaluator, fixed tool protocol, and
   the project's own build, verification, and lint commands run repeatedly to score each experiment.
@@ -30,11 +30,11 @@ mind:
   in virtual-parallel mode, separate seed worktrees); main stays clean and rollback is
   `git reset --hard`. Run experiments in an isolated checkout or sandbox when in doubt,
   and review the completion report before merging.
-- **Node readonly guard** — `protect-readonly.cjs` validates structured host events and
-  keeps the evaluation authority immutable without shell interpolation. Runtime Git and
+- **Node readonly guard** — `protect-readonly.cjs` validates structured host events from
+  Claude, Codex, and Grok and keeps the evaluation authority immutable without shell interpolation. Runtime Git and
   evaluator processes use structured argv with shell execution disabled. Review the
   hook manifests before enabling, and see the suite's
   [`guides/hook-patterns.md`](https://github.com/Sungmin-Cho/deep-suite/blob/main/guides/hook-patterns.md)
   for recommended denylist patterns.
 
-When reporting, please indicate which runtime (Claude Code or Codex) is affected.
+When reporting, please indicate which runtime (Claude Code, Codex, or Grok) is affected.

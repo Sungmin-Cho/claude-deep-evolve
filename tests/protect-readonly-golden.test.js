@@ -167,6 +167,7 @@ describe('protect-readonly golden fixtures (M5.5 #3)', () => {
           env: fixture.input.env || {},
           toolName: fixture.input.tool_name,
           toolInput,
+          envelope: fixture.input.envelope || 'claude',
         });
 
         const expected = fixture.expected;

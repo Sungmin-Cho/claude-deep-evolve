@@ -17,6 +17,20 @@ const {
 } = require('./runtime/session-codec.cjs');
 
 const CLAUDE_TOOLS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'Bash']);
+// Grok loads the Claude matcher surface and aliases those names onto its
+// tools (Bash→run_terminal_command, Read→read_file, Edit/Write/MultiEdit→
+// search_replace; the matcher also keeps the original Claude name). Stdin is
+// camelCase with Grok tool names. Official Claude keys still win when present
+// so a mixed envelope cannot stitch a bypass. Path aliases are all collected:
+// a decoy file_path cannot hide a protected target_file or path. Truncated
+// Grok toolInput is fail-closed.
+const GROK_TOOLS = Object.freeze({
+  read_file: { kind: 'read' },
+  search_replace: { kind: 'write' },
+  write: { kind: 'write' },
+  run_terminal_command: { kind: 'shell' },
+});
+const GROK_PATH_KEYS = Object.freeze(['file_path', 'target_file', 'path']);
 const RECOGNIZED_INACTIVE = new Set(['initializing', 'paused', 'completed', 'aborted']);
 // Legacy pre-strict-codec sessions serialized session.yaml as free-form YAML
 // that parseStateDocument cannot read (UNSUPPORTED_YAML) or that fails the
@@ -928,68 +942,123 @@ function loadSessionContext(cwd) {
   return { kind: 'active', projectRoot, stateRoot, sessionRoot, session };
 }
 
+function malformed(message) {
+  return Object.assign(new Error(message), { code: 'malformed_input' });
+}
+
+function grokFilePaths(input) {
+  const paths = [];
+  for (const key of GROK_PATH_KEYS) {
+    if (!Object.hasOwn(input, key)) continue;
+    const value = input[key];
+    if (typeof value !== 'string' || value.length === 0) {
+      throw malformed('Grok file tool input requires a path');
+    }
+    if (!paths.includes(value)) paths.push(value);
+  }
+  if (paths.length === 0) throw malformed('Grok file tool input requires a path');
+  return paths;
+}
+
+function parseClaudeTool(toolName, input) {
+  if (toolName === 'Bash') {
+    if (typeof input.command !== 'string') {
+      throw malformed('Bash input requires command');
+    }
+    return {
+      host: 'claude', kind: 'shell', toolName,
+      command: input.command, paths: [],
+      platform: inferCommandPlatform(input.command),
+    };
+  }
+  if (typeof input.file_path !== 'string' || input.file_path.length === 0) {
+    throw malformed('Claude file tool input requires file_path');
+  }
+  return {
+    host: 'claude',
+    kind: toolName === 'Read' ? 'read' : 'write',
+    toolName,
+    command: '',
+    paths: [input.file_path],
+    platform: process.platform,
+  };
+}
+
+function parseGrokTool(toolName, input) {
+  const spec = GROK_TOOLS[toolName];
+  if (spec.kind === 'shell') {
+    if (typeof input.command !== 'string') {
+      throw malformed('Grok shell input requires command');
+    }
+    return {
+      host: 'grok', kind: 'shell', toolName,
+      command: input.command, paths: [],
+      platform: inferCommandPlatform(input.command),
+    };
+  }
+  return {
+    host: 'grok',
+    kind: spec.kind,
+    toolName,
+    command: '',
+    paths: grokFilePaths(input),
+    platform: process.platform,
+  };
+}
+
+function parseHostEnvelope(toolName, input) {
+  if (typeof toolName !== 'string') {
+    throw malformed('host event requires a string tool_name');
+  }
+  if (!plainObject(input)) {
+    throw malformed('host event requires tool_input');
+  }
+  if (CLAUDE_TOOLS.has(toolName)) return parseClaudeTool(toolName, input);
+  if (Object.hasOwn(GROK_TOOLS, toolName)) return parseGrokTool(toolName, input);
+  if (toolName !== 'apply_patch' || typeof input.command !== 'string') {
+    throw malformed('unsupported host PreToolUse shape');
+  }
+  return {
+    host: 'codex',
+    kind: 'patch',
+    toolName: 'apply_patch',
+    command: input.command,
+    paths: extractPatchPaths(input.command),
+    platform: process.platform,
+  };
+}
+
 function parseInvocation(event, env) {
-  if (!plainObject(event)) throw Object.assign(new Error('event must be an object'), { code: 'malformed_input' });
+  if (!plainObject(event)) throw malformed('event must be an object');
+  if (event.toolInputTruncated === true) {
+    throw malformed('Grok tool input was truncated');
+  }
   const ownsOfficialTool = Object.hasOwn(event, 'tool_name');
   const ownsOfficialInput = Object.hasOwn(event, 'tool_input');
   if (ownsOfficialTool || ownsOfficialInput) {
-    if (typeof event.tool_name !== 'string') {
-      throw Object.assign(new Error('host event requires a string tool_name'), { code: 'malformed_input' });
-    }
-    const officialTool = event.tool_name;
-    if (!plainObject(event.tool_input)) {
-      throw Object.assign(new Error('host event requires tool_input'), { code: 'malformed_input' });
-    }
-    if (CLAUDE_TOOLS.has(officialTool)) {
-      if (officialTool === 'Bash') {
-        if (typeof event.tool_input.command !== 'string') {
-          throw Object.assign(new Error('Bash input requires command'), { code: 'malformed_input' });
-        }
-        return {
-          host: 'claude', kind: 'shell', toolName: officialTool,
-          command: event.tool_input.command, paths: [],
-          platform: inferCommandPlatform(event.tool_input.command),
-        };
-      }
-      if (typeof event.tool_input.file_path !== 'string' || event.tool_input.file_path.length === 0) {
-        throw Object.assign(new Error('Claude file tool input requires file_path'), { code: 'malformed_input' });
-      }
-      return {
-        host: 'claude',
-        kind: officialTool === 'Read' ? 'read' : 'write',
-        toolName: officialTool,
-        command: '',
-        paths: [event.tool_input.file_path],
-        platform: process.platform,
-      };
-    }
-    if (officialTool !== 'apply_patch' || typeof event.tool_input.command !== 'string') {
-      throw Object.assign(new Error('unsupported host PreToolUse shape'), { code: 'malformed_input' });
-    }
-    return {
-      host: 'codex',
-      kind: 'patch',
-      toolName: 'apply_patch',
-      command: event.tool_input.command,
-      paths: extractPatchPaths(event.tool_input.command),
-      platform: process.platform,
-    };
+    return parseHostEnvelope(event.tool_name, event.tool_input);
+  }
+
+  const ownsGrokTool = Object.hasOwn(event, 'toolName');
+  const ownsGrokInput = Object.hasOwn(event, 'toolInput');
+  if (ownsGrokTool || ownsGrokInput) {
+    return parseHostEnvelope(event.toolName, event.toolInput);
   }
 
   // Compatibility with the pre-envelope Claude wrapper. Official events above
   // always win, so an inherited selector cannot misclassify Codex stdin.
   const claudeTool = env.CLAUDE_TOOL_USE_TOOL_NAME || env.CLAUDE_TOOL_NAME;
   if (claudeTool) {
-    if (!CLAUDE_TOOLS.has(claudeTool)) throw Object.assign(new Error('unsupported Claude tool'), { code: 'malformed_input' });
+    if (!CLAUDE_TOOLS.has(claudeTool)) throw malformed('unsupported Claude tool');
     if (claudeTool === 'Bash') {
-      if (typeof event.command !== 'string') throw Object.assign(new Error('Claude Bash input requires command'), { code: 'malformed_input' });
+      if (typeof event.command !== 'string') throw malformed('Claude Bash input requires command');
       return {
         host: 'claude', kind: 'shell', toolName: claudeTool, command: event.command,
         paths: [], platform: inferCommandPlatform(event.command),
       };
     }
     if (typeof event.file_path !== 'string' || event.file_path.length === 0) {
-      throw Object.assign(new Error('Claude file tool input requires file_path'), { code: 'malformed_input' });
+      throw malformed('Claude file tool input requires file_path');
     }
     return {
       host: 'claude',
@@ -1000,7 +1069,7 @@ function parseInvocation(event, env) {
       platform: process.platform,
     };
   }
-  throw Object.assign(new Error('unsupported PreToolUse shape'), { code: 'malformed_input' });
+  throw malformed('unsupported PreToolUse shape');
 }
 
 function inferCommandPlatform(command) {
@@ -1107,8 +1176,11 @@ function evaluateActive(request, env, context) {
   const sealed = env.DEEP_EVOLVE_SEAL_PREPARE === '1';
 
   if (request.kind === 'read') {
-    const kind = protectedKind(request.paths[0], context);
-    return sealed && kind === 'prepare' ? block(REASONS.sealed) : allow();
+    for (const candidate of request.paths) {
+      const kind = protectedKind(candidate, context);
+      if (sealed && kind === 'prepare') return block(REASONS.sealed);
+    }
+    return allow();
   }
 
   if (request.kind === 'write' || request.kind === 'patch') {

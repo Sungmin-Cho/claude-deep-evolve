@@ -5,6 +5,13 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)를 따르며,
 [유의적 버전](https://semver.org/spec/v2.0.0.html)을 준수합니다.
 
+## [3.6.3] — 2026-08-21
+
+### Fixed
+
+- readonly 가드가 Grok의 문서화된 PreToolUse 봉투를 받아, 올바른 Grok 파일·셸 이벤트를 잘못된 입력으로 거부하지 않고 분류합니다. 활성 세션이 없으면 무관한 작업은 허용되며, 활성 세션에서는 보호된 evaluator·program·strategy 경로에 대한 무단 변경을 계속 차단합니다. 공식 Claude 또는 Codex 키가 함께 있으면 그 키가 우선하며, 진짜 잘못된 입력은 기존처럼 거부합니다.
+- Grok 파일 이벤트의 경로 별칭을 모두 검사하여 미끼 경로로 보호 대상을 숨기지 못하게 하고, 잘린 Grok 도구 payload는 거부합니다.
+
 ## [3.6.2] — 2026-07-28
 
 ### Security
